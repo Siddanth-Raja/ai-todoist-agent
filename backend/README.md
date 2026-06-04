@@ -72,7 +72,7 @@ Google Cloud setup:
 6. Add this authorized redirect URI:
 
 ```text
-http://localhost:8080/
+http://localhost
 ```
 
 7. Copy the client ID and client secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
@@ -80,14 +80,15 @@ http://localhost:8080/
 Then run the local OAuth setup script:
 
 ```bash
-python scripts/google_oauth_setup.py
+python scripts/google_oauth_setup.py --manual --redirect-uri http://localhost
 ```
 
 The script:
 
 - prints the consent URL
 - opens it in your browser if possible
-- receives the callback at `http://localhost:8080/`
+- uses the exact redirect URI you pass with `--redirect-uri`
+- receives the callback locally when not using `--manual`
 - exchanges the authorization code for tokens
 - prints granted scopes
 - prints the refresh token
@@ -95,7 +96,24 @@ The script:
 
 Put the printed refresh token into `GOOGLE_REFRESH_TOKEN`.
 
-If the local callback cannot start, the script prints the consent URL and lets you paste an authorization code manually.
+If you prefer the local callback flow, configure the matching redirect URI in Google Cloud and run one of:
+
+```bash
+python scripts/google_oauth_setup.py --redirect-uri http://localhost
+python scripts/google_oauth_setup.py --redirect-uri http://localhost:8080/
+```
+
+Manual mode with `http://localhost` is the recommended workaround for redirect mismatch issues:
+
+```bash
+python scripts/google_oauth_setup.py --manual --redirect-uri http://localhost
+```
+
+The script also supports the old OOB URI, but Google may reject it for newer OAuth clients:
+
+```bash
+python scripts/google_oauth_setup.py --manual --redirect-uri urn:ietf:wg:oauth:2.0:oob
+```
 
 Important OAuth parameters used by the script:
 

@@ -19,7 +19,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/calendar.events",
 ]
-REDIRECT_URI = "http://localhost:8080/"
+DEFAULT_REDIRECT_URI = "http://localhost"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 
@@ -59,16 +59,18 @@ def main() -> None:
         print("The client secret is required for token exchange, but this script will not print it.")
         raise SystemExit(1)
 
-    auth_url = _build_auth_url(settings.google_client_id)
+    redirect_uri = args.redirect_uri
+    auth_url = _build_auth_url(settings.google_client_id, redirect_uri)
     print("Google Calendar OAuth Setup")
     print("---------------------------")
     print("Requested scopes:")
     for scope in SCOPES:
         print(f"  - {scope}")
+    print(f"\nRedirect URI: {redirect_uri}")
     print("\nConsent URL:")
     print(auth_url)
 
-    code = None if args.manual else _receive_code(auth_url)
+    code = None if args.manual else _receive_code(auth_url, redirect_uri)
     if not code:
         try:
             code = input("\nPaste authorization code here: ").strip()
@@ -84,6 +86,7 @@ def main() -> None:
         code=code,
         client_id=settings.google_client_id,
         client_secret=settings.google_client_secret,
+        redirect_uri=redirect_uri,
     )
     granted_scopes = token_response.get("scope", "").split()
     refresh_token = token_response.get("refresh_token")
@@ -111,11 +114,11 @@ def main() -> None:
         print("\nAll required Calendar scopes were granted.")
 
 
-def _build_auth_url(client_id: str) -> str:
+def _build_auth_url(client_id: str, redirect_uri: str) -> str:
     query = urlencode(
         {
             "client_id": client_id,
-            "redirect_uri": REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": " ".join(SCOPES),
             "access_type": "offline",
@@ -135,15 +138,35 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not start the local callback server; print the URL and prompt for a pasted code.",
     )
+    parser.add_argument(
+        "--redirect-uri",
+        default=DEFAULT_REDIRECT_URI,
+        choices=[
+            "http://localhost",
+            "http://localhost:8080/",
+            "urn:ietf:wg:oauth:2.0:oob",
+        ],
+        help=(
+            "OAuth redirect URI to use. Default: http://localhost. "
+            "Make sure this exact URI is configured on the Google OAuth client."
+        ),
+    )
     return parser.parse_args()
 
 
-def _receive_code(auth_url: str) -> str | None:
+def _receive_code(auth_url: str, redirect_uri: str) -> str | None:
+    parsed_redirect = urlparse(redirect_uri)
+    if parsed_redirect.scheme != "http" or parsed_redirect.hostname != "localhost":
+        print(f"\nCannot start a local callback server for redirect URI: {redirect_uri}")
+        print("Use --manual and paste the authorization code.")
+        return None
+
+    port = parsed_redirect.port or 80
     callback_received = Event()
     try:
-        server = HTTPServer(("localhost", 8080), OAuthCallbackHandler)
+        server = HTTPServer(("localhost", port), OAuthCallbackHandler)
     except OSError as exc:
-        print(f"\nCould not start local callback server on {REDIRECT_URI}: {exc}")
+        print(f"\nCould not start local callback server on {redirect_uri}: {exc}")
         print("Open the consent URL manually and paste the code if Google shows one.")
         return None
 
@@ -153,7 +176,7 @@ def _receive_code(auth_url: str) -> str | None:
 
     opened = webbrowser.open(auth_url)
     if opened:
-        print("\nOpened browser. Waiting for Google callback on http://localhost:8080/ ...")
+        print(f"\nOpened browser. Waiting for Google callback on {redirect_uri} ...")
     else:
         print("\nCould not open browser automatically. Open the URL above manually.")
 
@@ -174,6 +197,7 @@ def _exchange_code(
     code: str,
     client_id: str,
     client_secret: str,
+    redirect_uri: str,
 ) -> dict:
     response = requests.post(
         TOKEN_URL,
@@ -181,7 +205,7 @@ def _exchange_code(
             "code": code,
             "client_id": client_id,
             "client_secret": client_secret,
-            "redirect_uri": REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
         },
         timeout=30,

@@ -108,7 +108,7 @@ def check_google_auth(settings: Settings) -> dict[str, Any]:
         access_role = target_calendar.get("accessRole")
         diagnostics["calendar_write_scope_present"] = True
         diagnostics["write_permission_status"] = (
-            "calendar_writable" if access_role in {"owner", "writer"} else f"calendar_access_role_{access_role}"
+            "ok" if access_role in {"owner", "writer"} else f"calendar_access_role_{access_role}"
         )
     except RefreshError as exc:
         diagnostics["errors"].append(_format_refresh_error(exc, source="calendar_write_scope"))

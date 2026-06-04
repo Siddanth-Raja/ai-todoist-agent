@@ -55,31 +55,55 @@ OPENAI_MODEL=gpt-5.4-mini
 
 ## 5. Get Google OAuth Credentials and Refresh Token
 
-The backend uses `google-api-python-client` with a refresh token. For planning-only reads, authorize the read-only Calendar scope:
+The backend uses `google-api-python-client` with a refresh token. The local setup script requests the exact Calendar scopes this app needs:
 
 ```text
 https://www.googleapis.com/auth/calendar.readonly
-```
-
-For automatic simple calendar event creation, reauthorize with:
-
-```text
 https://www.googleapis.com/auth/calendar.events
 ```
 
-If you need both read and write behavior, include both scopes when generating the refresh token.
-
-One practical setup path:
+Google Cloud setup:
 
 1. Open Google Cloud Console.
 2. Create or select a project.
 3. Enable the Google Calendar API.
 4. Configure the OAuth consent screen.
-5. Create an OAuth client ID. A Desktop app client is fine for local development.
-6. Copy the client ID and client secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
-7. Use OAuth 2.0 Playground or a local OAuth helper script to authorize the Calendar scope you need.
-8. Exchange the authorization code for tokens.
-9. Copy the refresh token into `GOOGLE_REFRESH_TOKEN`.
+5. Create an OAuth client ID. Use a Web application client.
+6. Add this authorized redirect URI:
+
+```text
+http://localhost:8080/
+```
+
+7. Copy the client ID and client secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+
+Then run the local OAuth setup script:
+
+```bash
+python scripts/google_oauth_setup.py
+```
+
+The script:
+
+- prints the consent URL
+- opens it in your browser if possible
+- receives the callback at `http://localhost:8080/`
+- exchanges the authorization code for tokens
+- prints granted scopes
+- prints the refresh token
+- warns if `calendar.events` is missing
+
+Put the printed refresh token into `GOOGLE_REFRESH_TOKEN`.
+
+If the local callback cannot start, the script prints the consent URL and lets you paste an authorization code manually.
+
+Important OAuth parameters used by the script:
+
+```text
+access_type=offline
+prompt=consent
+include_granted_scopes=false
+```
 
 If your OAuth app is in testing mode, make sure your Google account is listed as a test user.
 
@@ -89,7 +113,14 @@ To diagnose Google auth without printing secrets:
 python scripts/debug_google_auth.py
 ```
 
-If read works but event creation fails with `invalid_scope`, generate a new refresh token with the same client ID and secret while authorizing `https://www.googleapis.com/auth/calendar.events`.
+After a successful setup, the diagnostics should include:
+
+```text
+Calendar write scope present: yes
+Write permission status: ok
+```
+
+If read works but event creation fails with `invalid_scope`, generate a new refresh token with `python scripts/google_oauth_setup.py`.
 
 ## 6. Run the Server
 

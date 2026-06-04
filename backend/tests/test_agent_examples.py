@@ -10,6 +10,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import app.agent as agent  # noqa: E402
 from app.agent import _decision_schema, _sanitize_decision, handle_chat  # noqa: E402
 from app.calendar_tools import CalendarReadResult, CalendarWriteResult  # noqa: E402
 from app.todoist_tools import TodoistReadResult, TodoistWriteResult  # noqa: E402
@@ -80,6 +81,8 @@ EVENTS = [
 
 class AgentExampleTests(unittest.TestCase):
     def setUp(self):
+        agent.PENDING_ACTION = None
+        self.addCleanup(self._clear_pending_action)
         self.now = datetime(2026, 6, 4, 14, 0, tzinfo=ZoneInfo("America/Chicago"))
         self.base_patches = [
             patch("app.agent.get_settings", return_value=FakeSettings()),
@@ -89,6 +92,9 @@ class AgentExampleTests(unittest.TestCase):
         for item in self.base_patches:
             item.start()
             self.addCleanup(item.stop)
+
+    def _clear_pending_action(self):
+        agent.PENDING_ACTION = None
 
     def test_plan_now(self):
         with patch("app.agent._get_llm_decision", return_value=(
@@ -104,6 +110,7 @@ class AgentExampleTests(unittest.TestCase):
         self.assertEqual(response["intent"], "plan")
         self.assertEqual(response["actions_taken"], [])
         self.assertFalse(response["needs_confirmation"])
+        self.assertIsNone(response["pending_action"])
         self.assertIn("Start with", response["answer"])
         self.assertIn("recommended_tasks", response)
 
@@ -184,8 +191,104 @@ class AgentExampleTests(unittest.TestCase):
         self.assertIn("Added calendar event", response["answer"])
 
     def test_schema_allowed_actions_are_documented(self):
-        action_enum = _decision_schema()["properties"]["action_type"]["enum"]
+        schema = _decision_schema()
+        action_enum = schema["properties"]["action_type"]["enum"]
         self.assertEqual(action_enum, ["none", "create_todoist_task", "create_calendar_event"])
+        self.assertIn("pending_action", schema["required"])
+        self.assertEqual(
+            schema["properties"]["pending_action"]["properties"]["type"]["enum"],
+            ["resolve_calendar_conflict"],
+        )
+
+    def test_calendar_conflict_needs_confirmation(self):
+        pending_action = {
+            "type": "resolve_calendar_conflict",
+            "details": {
+                "conflict": "Gym overlaps with Brandon meeting",
+                "options": ["move gym", "keep calendar unchanged"],
+            },
+        }
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="That conflicts with gym. Would you like me to move gym or keep the calendar unchanged?",
+                intent="schedule_event",
+                needs_confirmation=True,
+                confirmation_prompt="Move gym or keep the calendar unchanged?",
+                pending_action=pending_action,
+            ),
+            None,
+        )):
+            response = handle_chat("Meeting with Brandon at 6", self.now)
+
+        self.assertTrue(response["needs_confirmation"])
+        self.assertEqual(response["confirmation_prompt"], "Move gym or keep the calendar unchanged?")
+        self.assertEqual(response["pending_action"], pending_action)
+        self.assertEqual(agent.PENDING_ACTION, pending_action)
+        self.assertEqual(response["actions_taken"], [])
+
+    def test_reschedule_suggestion_needs_confirmation(self):
+        pending_action = {
+            "type": "resolve_calendar_conflict",
+            "details": {
+                "suggested_change": "reschedule gym to 7pm",
+                "affected_event": "Gym",
+            },
+        }
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="I can reschedule gym to 7pm if you want.",
+                intent="replan",
+                needs_confirmation=True,
+                confirmation_prompt="Should I reschedule gym to 7pm?",
+                pending_action=pending_action,
+            ),
+            None,
+        )):
+            response = handle_chat("I missed gym, what should I do?", self.now)
+
+        self.assertTrue(response["needs_confirmation"])
+        self.assertEqual(response["pending_action"]["type"], "resolve_calendar_conflict")
+        self.assertEqual(response["confirmation_prompt"], "Should I reschedule gym to 7pm?")
+
+    def test_informational_response_does_not_need_confirmation(self):
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="You have enough time for a 30-minute task before the next block.",
+                intent="question",
+                needs_confirmation=False,
+            ),
+            None,
+        )):
+            response = handle_chat("Do I have time to work before my next event?", self.now)
+
+        self.assertFalse(response["needs_confirmation"])
+        self.assertIsNone(response["confirmation_prompt"])
+        self.assertIsNone(response["pending_action"])
+
+    def test_next_response_can_resolve_pending_action(self):
+        pending_action = {
+            "type": "resolve_calendar_conflict",
+            "details": {"options": ["move gym", "keep calendar unchanged"]},
+        }
+        agent.PENDING_ACTION = pending_action
+
+        def fake_decision(settings, context):
+            self.assertEqual(context["pending_action"], pending_action)
+            return (
+                self._decision(
+                    answer="Got it. I will treat moving gym as the selected resolution.",
+                    intent="replan",
+                    needs_confirmation=False,
+                ),
+                None,
+            )
+
+        with patch("app.agent._get_llm_decision", side_effect=fake_decision):
+            response = handle_chat("move gym", self.now)
+
+        self.assertFalse(response["needs_confirmation"])
+        self.assertIsNone(response["pending_action"])
+        self.assertIsNone(agent.PENDING_ACTION)
 
     def test_legacy_create_task_action_is_rejected(self):
         decision = _sanitize_decision(
@@ -241,6 +344,9 @@ class AgentExampleTests(unittest.TestCase):
         action_type="none",
         task=None,
         calendar_event=None,
+        needs_confirmation=False,
+        confirmation_prompt=None,
+        pending_action=None,
     ):
         return {
             "answer": answer,
@@ -258,8 +364,9 @@ class AgentExampleTests(unittest.TestCase):
                 "start": None,
                 "end": None,
             },
-            "needs_confirmation": False,
-            "confirmation_prompt": None,
+            "needs_confirmation": needs_confirmation,
+            "confirmation_prompt": confirmation_prompt,
+            "pending_action": pending_action,
         }
 
 

@@ -25,6 +25,7 @@ class ChatResponse(BaseModel):
     actions_taken: list[dict[str, Any]]
     needs_confirmation: bool
     confirmation_prompt: str | None
+    pending_action: dict[str, Any] | None
     free_block: dict[str, Any] | None
     recommended_tasks: list[dict[str, Any]]
     calendar_events: list[dict[str, Any]]

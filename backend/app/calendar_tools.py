@@ -11,11 +11,18 @@ from .config import Settings
 
 
 CALENDAR_READONLY_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+CALENDAR_EVENT_SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 
 
 @dataclass
 class CalendarReadResult:
     events: list[dict[str, Any]]
+    error: str | None = None
+
+
+@dataclass
+class CalendarWriteResult:
+    event: dict[str, Any] | None = None
     error: str | None = None
 
 
@@ -38,7 +45,7 @@ def list_todays_events(
     end_of_day = start_of_day + timedelta(days=1)
 
     try:
-        service = _build_calendar_service(settings)
+        service = _build_calendar_service(settings, scopes=CALENDAR_READONLY_SCOPES)
         response = (
             service.events()
             .list(
@@ -70,14 +77,89 @@ def list_todays_events(
     return CalendarReadResult(events=events)
 
 
-def _build_calendar_service(settings: Settings):
+def create_calendar_event(
+    settings: Settings,
+    title: str,
+    start: datetime,
+    end: datetime,
+    existing_events: list[dict[str, Any]],
+) -> CalendarWriteResult:
+    """Create a simple calendar event if it does not conflict with busy events."""
+    missing_fields = settings.missing_google_calendar_fields
+    if missing_fields:
+        joined = ", ".join(missing_fields)
+        return CalendarWriteResult(
+            error=f"{joined} missing. Add Google OAuth credentials to backend/.env to create Calendar events.",
+        )
+
+    if end <= start:
+        return CalendarWriteResult(error="Calendar event end time must be after start time.")
+
+    conflict = find_busy_conflict(start=start, end=end, events=existing_events)
+    if conflict:
+        return CalendarWriteResult(
+            error=f"Calendar event conflicts with existing event: {conflict.get('title')}.",
+        )
+
+    body = {
+        "summary": title,
+        "start": {
+            "dateTime": start.isoformat(),
+            "timeZone": settings.timezone,
+        },
+        "end": {
+            "dateTime": end.isoformat(),
+            "timeZone": settings.timezone,
+        },
+    }
+
+    try:
+        service = _build_calendar_service(settings, scopes=CALENDAR_EVENT_SCOPES)
+        event = (
+            service.events()
+            .insert(calendarId=settings.google_calendar_id, body=body)
+            .execute()
+        )
+    except HttpError as exc:
+        status_code = getattr(exc, "status_code", None) or getattr(
+            getattr(exc, "resp", None), "status", "unknown"
+        )
+        return CalendarWriteResult(
+            error=f"Could not create Google Calendar event. Google returned HTTP {status_code}.",
+        )
+    except Exception as exc:  # noqa: BLE001 - provider setup failures should surface clearly.
+        return CalendarWriteResult(
+            error=f"Could not create Google Calendar event: {exc.__class__.__name__}.",
+        )
+
+    return CalendarWriteResult(event=_normalize_event(event, settings.local_tz))
+
+
+def find_busy_conflict(
+    start: datetime,
+    end: datetime,
+    events: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    for event in events:
+        if not event.get("busy"):
+            continue
+
+        event_start = datetime.fromisoformat(event["start"])
+        event_end = datetime.fromisoformat(event["end"])
+        if start < event_end and end > event_start:
+            return event
+
+    return None
+
+
+def _build_calendar_service(settings: Settings, scopes: list[str]):
     credentials = Credentials(
         token=None,
         refresh_token=settings.google_refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=settings.google_client_id,
         client_secret=settings.google_client_secret,
-        scopes=CALENDAR_READONLY_SCOPES,
+        scopes=scopes,
     )
     credentials.refresh(GoogleAuthRequest())
     return build("calendar", "v3", credentials=credentials, cache_discovery=False)

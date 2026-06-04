@@ -21,6 +21,10 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
+    intent: str
+    actions_taken: list[dict[str, Any]]
+    needs_confirmation: bool
+    confirmation_prompt: str | None
     free_block: dict[str, Any] | None
     recommended_tasks: list[dict[str, Any]]
     calendar_events: list[dict[str, Any]]

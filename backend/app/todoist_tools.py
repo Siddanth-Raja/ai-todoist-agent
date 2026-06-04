@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import uuid
 from typing import Any
 
 import requests
@@ -14,6 +15,12 @@ PAGE_LIMIT = 100
 @dataclass
 class TodoistReadResult:
     tasks: list[dict[str, Any]]
+    error: str | None = None
+
+
+@dataclass
+class TodoistWriteResult:
+    task: dict[str, Any] | None = None
     error: str | None = None
 
 
@@ -47,6 +54,57 @@ def list_active_tasks(settings: Settings) -> TodoistReadResult:
 def list_tasks(settings: Settings) -> TodoistReadResult:
     """Alias for the MVP read-only Todoist task reader."""
     return list_active_tasks(settings)
+
+
+def create_task(
+    settings: Settings,
+    content: str,
+    project_id: str | None = None,
+    due_string: str | None = None,
+    labels: list[str] | None = None,
+    priority: int | None = None,
+) -> TodoistWriteResult:
+    """Create a simple Todoist task. Used only after the agent allows it."""
+    if settings.missing_todoist:
+        return TodoistWriteResult(
+            error="TODOIST_API_TOKEN is missing. Add it to backend/.env to create Todoist tasks.",
+        )
+
+    payload: dict[str, Any] = {"content": content}
+    if project_id:
+        payload["project_id"] = project_id
+    if due_string:
+        payload["due_string"] = due_string
+    if labels:
+        payload["labels"] = labels
+    if priority:
+        # Todoist API v1 priority: 1 is highest, 4 is normal.
+        payload["priority"] = max(1, min(4, priority))
+
+    try:
+        response = requests.post(
+            f"{TODOIST_API_BASE_URL}/tasks",
+            headers={
+                **_auth_headers(settings),
+                "Content-Type": "application/json",
+                "X-Request-Id": str(uuid.uuid4()),
+            },
+            json=payload,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        projects = _fetch_projects(settings)
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else "unknown"
+        return TodoistWriteResult(
+            error=f"Could not create Todoist task. Todoist returned HTTP {status_code}.",
+        )
+    except requests.RequestException as exc:
+        return TodoistWriteResult(
+            error=f"Could not create Todoist task: {exc.__class__.__name__}.",
+        )
+
+    return TodoistWriteResult(task=_normalize_task(response.json(), projects))
 
 
 def _fetch_projects(settings: Settings) -> dict[str, str]:

@@ -1,13 +1,13 @@
 # Personal Chief of Staff Backend
 
-Read-only planning MVP for Personal Chief of Staff.
+AI-assisted MVP for Personal Chief of Staff.
 
 The MVP exposes:
 
 - `GET /health`
 - `POST /chat`
 
-`POST /chat` reads active Todoist tasks, reads today's Google Calendar events, finds the current or next free block, ranks tasks, and returns 1 to 3 recommendations. It does not create, update, move, delete, or complete tasks or calendar events.
+`POST /chat` reads active Todoist tasks, reads today's Google Calendar events, finds the current or next free block, and sends that context to OpenAI for a structured decision. The backend may execute only safe simple actions after the model returns JSON: create a simple Todoist task or create a simple Google Calendar event with no busy conflict. Deterministic planning remains as fallback if OpenAI fails.
 
 ## 1. Create a Virtual Environment
 
@@ -38,9 +38,11 @@ GOOGLE_REFRESH_TOKEN=your_google_refresh_token
 GOOGLE_CALENDAR_ID=primary
 
 OPENAI_API_KEY=
+OPENAI_MODEL=gpt-5.4-mini
 ```
 
 `GOOGLE_CALENDAR_ID` defaults to `primary` if omitted.
+`OPENAI_MODEL` defaults to `gpt-5.4-mini` if omitted.
 
 ## 4. Get a Todoist API Token
 
@@ -53,10 +55,16 @@ OPENAI_API_KEY=
 
 ## 5. Get Google OAuth Credentials and Refresh Token
 
-The backend uses `google-api-python-client` with a refresh token and the read-only Calendar scope:
+The backend uses `google-api-python-client` with a refresh token. For planning-only reads, authorize the read-only Calendar scope:
 
 ```text
 https://www.googleapis.com/auth/calendar.readonly
+```
+
+For automatic simple calendar event creation, reauthorize with:
+
+```text
+https://www.googleapis.com/auth/calendar.events
 ```
 
 One practical setup path:
@@ -67,7 +75,7 @@ One practical setup path:
 4. Configure the OAuth consent screen.
 5. Create an OAuth client ID. A Desktop app client is fine for local development.
 6. Copy the client ID and client secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
-7. Use OAuth 2.0 Playground or a local OAuth helper script to authorize the Calendar read-only scope.
+7. Use OAuth 2.0 Playground or a local OAuth helper script to authorize the Calendar scope you need.
 8. Exchange the authorization code for tokens.
 9. Copy the refresh token into `GOOGLE_REFRESH_TOKEN`.
 
@@ -109,10 +117,14 @@ Expected response fields:
 ```json
 {
   "answer": "Natural language recommendation...",
+  "intent": "plan",
+  "actions_taken": [],
+  "needs_confirmation": false,
+  "confirmation_prompt": null,
   "free_block": {},
   "recommended_tasks": [],
   "calendar_events": [],
-  "mode": "planning_read_only",
+  "mode": "ai_agent",
   "errors": []
 }
 ```
@@ -127,8 +139,10 @@ curl -X POST http://127.0.0.1:8000/chat \
 
 ## Notes
 
-- This MVP is read-only.
+- The model never calls Todoist or Google directly. It returns structured JSON, then the backend executes allowed safe actions.
+- Unsafe actions are blocked: deletes, event moves, meeting cancellation, emails, attendee invites, and task completion unless explicitly requested.
 - Missing Todoist or Google credentials are returned as clear response errors.
+- If OpenAI fails or `OPENAI_API_KEY` is invalid, `/chat` falls back to deterministic planning.
 - Secrets are loaded from `backend/.env`.
 - The backend does not print or return secret values.
-- Siri Shortcuts, Apple Reminders, calendar writes, and Todoist writes are intentionally out of scope for the MVP.
+- Siri Shortcuts and Apple Reminders are intentionally out of scope for this version.

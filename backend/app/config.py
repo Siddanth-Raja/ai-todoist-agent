@@ -34,6 +34,7 @@ class Settings:
     google_calendar_id: str
     timezone: str
     openai_api_key: str | None
+    openai_model: str
 
     @property
     def local_tz(self) -> ZoneInfo:
@@ -70,4 +71,5 @@ def get_settings() -> Settings:
         google_calendar_id=_optional_env("GOOGLE_CALENDAR_ID") or "primary",
         timezone=timezone,
         openai_api_key=_optional_env("OPENAI_API_KEY"),
+        openai_model=_optional_env("OPENAI_MODEL") or "gpt-5.4-mini",
     )

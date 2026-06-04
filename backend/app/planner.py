@@ -19,6 +19,9 @@ LOW_ENERGY_USER_KEYWORDS = (
     "no motivation",
     "don't feel like",
     "do not feel like",
+    "chill",
+    "don't feel like working",
+    "do not feel like working",
 )
 
 HIGH_ENERGY_USER_KEYWORDS = (
@@ -43,6 +46,10 @@ LOW_ENERGY_TASK_KEYWORDS = (
     "admin",
     "text",
     "call",
+    "organize",
+    "organizing",
+    "migrate",
+    "migration",
 )
 
 HIGH_ENERGY_TASK_KEYWORDS = (
@@ -57,6 +64,10 @@ HIGH_ENERGY_TASK_KEYWORDS = (
     "proposal",
     "finish",
     "deep work",
+    "prototype",
+    "environment",
+    "agent",
+    "context control",
 )
 
 QUICK_TASK_KEYWORDS = (
@@ -72,6 +83,10 @@ QUICK_TASK_KEYWORDS = (
     "schedule",
     "buy",
     "order",
+    "organize",
+    "organizing",
+    "migrate",
+    "migration",
 )
 
 LONG_TASK_KEYWORDS = (
@@ -84,6 +99,8 @@ LONG_TASK_KEYWORDS = (
     "design",
     "research",
     "proposal",
+    "prototype",
+    "environment",
 )
 
 SHOPPING_KEYWORDS = (
@@ -108,15 +125,46 @@ PERSONAL_KEYWORDS = (
     "home",
     "clean",
     "family",
+    "notion migration",
+    "notion",
+    "organize",
+    "organizing",
+    "productivity",
 )
 
 FREELANCE_KEYWORDS = (
     "client",
+    "clients",
     "invoice",
     "proposal",
     "contract",
     "deliverable",
     "freelance",
+    "outreach",
+    "business",
+    "law firm",
+    "law firms",
+)
+
+XO_KEYWORDS = (
+    "vr",
+    "headset",
+    "prototype",
+    "environment",
+)
+
+NEBULO_KEYWORDS = (
+    "nebulo",
+    "agent",
+    "context control",
+)
+
+AM_KEYWORDS = (
+    "a&m",
+    "a and m",
+    "college",
+    "transcript",
+    "housing",
 )
 
 DURATION_MINUTE_RE = re.compile(r"\b(\d{1,3})\s*(m|min|mins|minute|minutes)\b", re.IGNORECASE)
@@ -275,7 +323,7 @@ def score_task(
     if free_minutes is not None:
         if estimated_duration <= free_minutes:
             score += 25
-            reasons.append(f"fits the {free_minutes}-minute free block")
+            reasons.append("fits your available time")
         elif estimated_duration <= free_minutes + 15:
             score += 5
             reasons.append("almost fits the available time")
@@ -285,16 +333,22 @@ def score_task(
     task_energy = task.get("energy_level") or "medium"
     if user_energy == "low":
         if task_energy == "low":
-            score += 45
+            score += 60
             reasons.append("low-energy friendly")
         elif task_energy == "high":
-            score -= 40
+            if due_date and due_date <= today:
+                reasons.append("higher effort, but time-sensitive")
+            else:
+                score -= 70
 
         if estimated_duration <= 20:
-            score += 30
+            score += 45
+            reasons.append("tiny enough to count as a win")
+        elif estimated_duration <= 30:
+            score += 20
             reasons.append("small enough to start now")
         elif estimated_duration > 45:
-            score -= 25
+            score -= 35
     elif user_energy == "high" and task_energy == "high":
         score += 15
         reasons.append("matches high-energy focus")
@@ -384,11 +438,13 @@ def infer_project_category(
 def infer_category_from_text(text: str) -> str:
     lowered = text.lower()
 
-    if "a&m" in lowered or "a and m" in lowered:
+    if any(keyword in lowered for keyword in AM_KEYWORDS):
         return "A&M"
     if re.search(r"\bxo\b", lowered):
         return "XO"
-    if "nebulo" in lowered:
+    if any(keyword in lowered for keyword in XO_KEYWORDS):
+        return "XO"
+    if any(keyword in lowered for keyword in NEBULO_KEYWORDS):
         return "Nebulo"
     if "freelance" in lowered or any(keyword in lowered for keyword in FREELANCE_KEYWORDS):
         return "Freelance"

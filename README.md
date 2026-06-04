@@ -1,1 +1,1 @@
-# personal-productivity-MCP
+# ai-todoist-agent

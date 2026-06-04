@@ -67,6 +67,8 @@ For automatic simple calendar event creation, reauthorize with:
 https://www.googleapis.com/auth/calendar.events
 ```
 
+If you need both read and write behavior, include both scopes when generating the refresh token.
+
 One practical setup path:
 
 1. Open Google Cloud Console.
@@ -80,6 +82,14 @@ One practical setup path:
 9. Copy the refresh token into `GOOGLE_REFRESH_TOKEN`.
 
 If your OAuth app is in testing mode, make sure your Google account is listed as a test user.
+
+To diagnose Google auth without printing secrets:
+
+```bash
+python scripts/debug_google_auth.py
+```
+
+If read works but event creation fails with `invalid_scope`, generate a new refresh token with the same client ID and secret while authorizing `https://www.googleapis.com/auth/calendar.events`.
 
 ## 6. Run the Server
 

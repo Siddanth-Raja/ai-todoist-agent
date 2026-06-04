@@ -3,6 +3,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from google.auth.transport.requests import Request as GoogleAuthRequest
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -24,6 +25,108 @@ class CalendarReadResult:
 class CalendarWriteResult:
     event: dict[str, Any] | None = None
     error: str | None = None
+
+
+def check_google_auth(settings: Settings) -> dict[str, Any]:
+    """Diagnose Google Calendar OAuth without exposing secrets."""
+    diagnostics: dict[str, Any] = {
+        "calendar_id": settings.google_calendar_id,
+        "configured_scopes": {
+            "read": CALENDAR_READONLY_SCOPES,
+            "write": CALENDAR_EVENT_SCOPES,
+        },
+        "refresh_token_present": bool(settings.google_refresh_token),
+        "token_refresh_succeeds": False,
+        "calendar_read_succeeds": False,
+        "calendar_write_scope_present": False,
+        "first_calendar_name": None,
+        "write_permission_status": "unknown",
+        "errors": [],
+    }
+
+    missing_fields = settings.missing_google_calendar_fields
+    if missing_fields:
+        diagnostics["errors"].append(
+            {
+                "type": "missing_config",
+                "message": f"Missing Google OAuth fields: {', '.join(missing_fields)}.",
+            }
+        )
+        return diagnostics
+
+    readonly_credentials = _build_credentials(settings, scopes=CALENDAR_READONLY_SCOPES)
+    try:
+        readonly_credentials.refresh(GoogleAuthRequest())
+        diagnostics["token_refresh_succeeds"] = True
+        diagnostics["granted_scopes"] = _safe_scopes(readonly_credentials)
+    except RefreshError as exc:
+        diagnostics["errors"].append(_format_refresh_error(exc))
+        diagnostics["write_permission_status"] = "not_checked_refresh_failed"
+        return diagnostics
+    except Exception as exc:  # noqa: BLE001 - diagnostics should surface setup failures.
+        diagnostics["errors"].append(
+            {
+                "type": exc.__class__.__name__,
+                "message": str(exc),
+                "explanation": "Google token refresh failed before Calendar API calls could run.",
+            }
+        )
+        diagnostics["write_permission_status"] = "not_checked_refresh_failed"
+        return diagnostics
+
+    try:
+        service = build("calendar", "v3", credentials=readonly_credentials, cache_discovery=False)
+        calendar_list = service.calendarList().list(maxResults=1).execute()
+        calendars = calendar_list.get("items") or []
+        if calendars:
+            diagnostics["first_calendar_name"] = calendars[0].get("summary")
+
+        service.events().list(
+            calendarId=settings.google_calendar_id,
+            maxResults=1,
+            singleEvents=True,
+        ).execute()
+        diagnostics["calendar_read_succeeds"] = True
+    except HttpError as exc:
+        diagnostics["errors"].append(_format_http_error(exc, "calendar_read"))
+    except Exception as exc:  # noqa: BLE001 - diagnostics should surface setup failures.
+        diagnostics["errors"].append(
+            {
+                "type": exc.__class__.__name__,
+                "source": "calendar_read",
+                "message": str(exc),
+            }
+        )
+
+    write_credentials = _build_credentials(settings, scopes=CALENDAR_EVENT_SCOPES)
+    try:
+        write_credentials.refresh(GoogleAuthRequest())
+        write_service = build("calendar", "v3", credentials=write_credentials, cache_discovery=False)
+        target_calendar = write_service.calendarList().get(
+            calendarId=settings.google_calendar_id
+        ).execute()
+        access_role = target_calendar.get("accessRole")
+        diagnostics["calendar_write_scope_present"] = True
+        diagnostics["write_permission_status"] = (
+            "calendar_writable" if access_role in {"owner", "writer"} else f"calendar_access_role_{access_role}"
+        )
+    except RefreshError as exc:
+        diagnostics["errors"].append(_format_refresh_error(exc, source="calendar_write_scope"))
+        diagnostics["write_permission_status"] = "refresh_failed_for_write_scope"
+    except HttpError as exc:
+        diagnostics["errors"].append(_format_http_error(exc, "calendar_write_scope"))
+        diagnostics["write_permission_status"] = "write_scope_or_calendar_permission_failed"
+    except Exception as exc:  # noqa: BLE001 - diagnostics should surface setup failures.
+        diagnostics["errors"].append(
+            {
+                "type": exc.__class__.__name__,
+                "source": "calendar_write_scope",
+                "message": str(exc),
+            }
+        )
+        diagnostics["write_permission_status"] = "write_scope_check_failed"
+
+    return diagnostics
 
 
 def list_todays_events(
@@ -153,7 +256,13 @@ def find_busy_conflict(
 
 
 def _build_calendar_service(settings: Settings, scopes: list[str]):
-    credentials = Credentials(
+    credentials = _build_credentials(settings, scopes=scopes)
+    credentials.refresh(GoogleAuthRequest())
+    return build("calendar", "v3", credentials=credentials, cache_discovery=False)
+
+
+def _build_credentials(settings: Settings, scopes: list[str]) -> Credentials:
+    return Credentials(
         token=None,
         refresh_token=settings.google_refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
@@ -161,8 +270,41 @@ def _build_calendar_service(settings: Settings, scopes: list[str]):
         client_secret=settings.google_client_secret,
         scopes=scopes,
     )
-    credentials.refresh(GoogleAuthRequest())
-    return build("calendar", "v3", credentials=credentials, cache_discovery=False)
+
+
+def _safe_scopes(credentials: Credentials) -> list[str]:
+    scopes = credentials.scopes or credentials._scopes or []
+    return [str(scope) for scope in scopes]
+
+
+def _format_refresh_error(
+    exc: RefreshError,
+    source: str = "token_refresh",
+) -> dict[str, Any]:
+    return {
+        "type": "RefreshError",
+        "source": source,
+        "message": str(exc),
+        "explanation": (
+            "The Google refresh token could not be exchanged for an access token. "
+            "It may be invalid, revoked, expired by OAuth testing-mode rules, tied "
+            "to a different OAuth client, or missing the requested scope. Generate "
+            "a new refresh token with the same GOOGLE_CLIENT_ID/SECRET and include "
+            "the needed Calendar scopes."
+        ),
+    }
+
+
+def _format_http_error(exc: HttpError, source: str) -> dict[str, Any]:
+    status_code = getattr(exc, "status_code", None) or getattr(
+        getattr(exc, "resp", None), "status", None
+    )
+    return {
+        "type": "HttpError",
+        "source": source,
+        "status": status_code,
+        "message": str(exc),
+    }
 
 
 def _normalize_event(event: dict[str, Any], local_tz) -> dict[str, Any]:

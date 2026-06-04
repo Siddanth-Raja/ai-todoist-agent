@@ -62,22 +62,34 @@ https://www.googleapis.com/auth/calendar.readonly
 https://www.googleapis.com/auth/calendar.events
 ```
 
-Google Cloud setup:
+Google Cloud setup for Desktop OAuth, recommended:
 
 1. Open Google Cloud Console.
 2. Create or select a project.
 3. Enable the Google Calendar API.
 4. Configure the OAuth consent screen.
-5. Create an OAuth client ID. Use a Web application client.
-6. Add this authorized redirect URI:
+5. Create an OAuth client ID. Use a Desktop app client.
+6. Copy the client ID and client secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+
+Then run:
+
+```bash
+python scripts/google_oauth_setup.py --desktop --write-env
+```
+
+This uses `google-auth-oauthlib` `InstalledAppFlow`, opens a local consent flow on a random available port, prints the refresh token, and writes it into `backend/.env`.
+
+Google Cloud setup for Web OAuth, alternate:
+
+1. Create an OAuth client ID. Use a Web application client.
+2. Add this authorized redirect URI:
 
 ```text
 http://localhost
 ```
 
-7. Copy the client ID and client secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
-
-Then run the local OAuth setup script:
+3. Copy the client ID and client secret into `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
+4. Run the local OAuth setup script:
 
 ```bash
 python scripts/google_oauth_setup.py --manual --redirect-uri http://localhost
@@ -92,9 +104,11 @@ The script:
 - exchanges the authorization code for tokens
 - prints granted scopes
 - prints the refresh token
+- can write `GOOGLE_REFRESH_TOKEN` to `backend/.env` with `--write-env`
+- prints client ID and refresh token prefixes for diagnostics
 - warns if `calendar.events` is missing
 
-Put the printed refresh token into `GOOGLE_REFRESH_TOKEN`.
+If you do not pass `--write-env`, put the printed refresh token into `GOOGLE_REFRESH_TOKEN` manually.
 
 If you prefer the local callback flow, configure the matching redirect URI in Google Cloud and run one of:
 

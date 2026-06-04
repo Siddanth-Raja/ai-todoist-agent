@@ -16,6 +16,8 @@ def main() -> None:
     print("Google Calendar Auth Diagnostics")
     print("--------------------------------")
     print(f"Calendar ID: {diagnostics['calendar_id']}")
+    print(f"Client ID prefix loaded by debug_google_auth: {_prefix(settings.google_client_id)}")
+    print(f"Refresh token prefix loaded from .env: {_prefix(settings.google_refresh_token)}")
     print("Scopes:")
     print(f"  Read: {', '.join(diagnostics['configured_scopes']['read'])}")
     print(f"  Write: {', '.join(diagnostics['configured_scopes']['write'])}")
@@ -47,6 +49,12 @@ def main() -> None:
 
 def _yes_no(value: bool) -> str:
     return "yes" if value else "no"
+
+
+def _prefix(value: str | None, length: int = 8) -> str:
+    if not value:
+        return "(missing)"
+    return f"{value[:length]}..."
 
 
 if __name__ == "__main__":

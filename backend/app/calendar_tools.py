@@ -13,6 +13,7 @@ from .config import Settings
 
 CALENDAR_READONLY_SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 CALENDAR_EVENT_SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+CALENDAR_SCOPES = [*CALENDAR_READONLY_SCOPES, *CALENDAR_EVENT_SCOPES]
 
 
 @dataclass
@@ -34,6 +35,7 @@ def check_google_auth(settings: Settings) -> dict[str, Any]:
         "configured_scopes": {
             "read": CALENDAR_READONLY_SCOPES,
             "write": CALENDAR_EVENT_SCOPES,
+            "combined": CALENDAR_SCOPES,
         },
         "refresh_token_present": bool(settings.google_refresh_token),
         "token_refresh_succeeds": False,
@@ -54,11 +56,11 @@ def check_google_auth(settings: Settings) -> dict[str, Any]:
         )
         return diagnostics
 
-    readonly_credentials = _build_credentials(settings, scopes=CALENDAR_READONLY_SCOPES)
+    credentials = _build_credentials(settings)
     try:
-        readonly_credentials.refresh(GoogleAuthRequest())
+        credentials.refresh(GoogleAuthRequest())
         diagnostics["token_refresh_succeeds"] = True
-        diagnostics["granted_scopes"] = _safe_scopes(readonly_credentials)
+        diagnostics["granted_scopes"] = _safe_scopes(credentials)
     except RefreshError as exc:
         diagnostics["errors"].append(_format_refresh_error(exc))
         diagnostics["write_permission_status"] = "not_checked_refresh_failed"
@@ -75,7 +77,7 @@ def check_google_auth(settings: Settings) -> dict[str, Any]:
         return diagnostics
 
     try:
-        service = build("calendar", "v3", credentials=readonly_credentials, cache_discovery=False)
+        service = build("calendar", "v3", credentials=credentials, cache_discovery=False)
         calendar_list = service.calendarList().list(maxResults=1).execute()
         calendars = calendar_list.get("items") or []
         if calendars:
@@ -98,11 +100,8 @@ def check_google_auth(settings: Settings) -> dict[str, Any]:
             }
         )
 
-    write_credentials = _build_credentials(settings, scopes=CALENDAR_EVENT_SCOPES)
     try:
-        write_credentials.refresh(GoogleAuthRequest())
-        write_service = build("calendar", "v3", credentials=write_credentials, cache_discovery=False)
-        target_calendar = write_service.calendarList().get(
+        target_calendar = service.calendarList().get(
             calendarId=settings.google_calendar_id
         ).execute()
         access_role = target_calendar.get("accessRole")
@@ -148,7 +147,7 @@ def list_todays_events(
     end_of_day = start_of_day + timedelta(days=1)
 
     try:
-        service = _build_calendar_service(settings, scopes=CALENDAR_READONLY_SCOPES)
+        service = _build_calendar_service(settings)
         response = (
             service.events()
             .list(
@@ -217,7 +216,7 @@ def create_calendar_event(
     }
 
     try:
-        service = _build_calendar_service(settings, scopes=CALENDAR_EVENT_SCOPES)
+        service = _build_calendar_service(settings)
         event = (
             service.events()
             .insert(calendarId=settings.google_calendar_id, body=body)
@@ -255,20 +254,20 @@ def find_busy_conflict(
     return None
 
 
-def _build_calendar_service(settings: Settings, scopes: list[str]):
-    credentials = _build_credentials(settings, scopes=scopes)
+def _build_calendar_service(settings: Settings):
+    credentials = _build_credentials(settings)
     credentials.refresh(GoogleAuthRequest())
     return build("calendar", "v3", credentials=credentials, cache_discovery=False)
 
 
-def _build_credentials(settings: Settings, scopes: list[str]) -> Credentials:
+def _build_credentials(settings: Settings) -> Credentials:
     return Credentials(
         token=None,
         refresh_token=settings.google_refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=settings.google_client_id,
         client_secret=settings.google_client_secret,
-        scopes=scopes,
+        scopes=CALENDAR_SCOPES,
     )
 
 

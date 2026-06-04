@@ -158,9 +158,9 @@ def _build_llm_context(
         "provider_errors": provider_errors,
         "safety_rules": {
             "allowed_automatic_actions": [
-                "answer planning questions",
-                "create a simple Todoist task",
-                "create a simple Google Calendar event only if no busy conflict exists",
+                "none: answer only; use for planning, replanning, reminders that need confirmation, questions, and unknown requests",
+                "create_todoist_task: create one simple Todoist task only when the user explicitly asks to capture/create/add a task",
+                "create_calendar_event: create one simple Google Calendar event only when the user explicitly asks to schedule an event and no busy conflict exists",
             ],
             "not_allowed_automatic_actions": [
                 "delete tasks",
@@ -176,7 +176,7 @@ def _build_llm_context(
     }
 
 
-def _get_llm_decision(settings, context: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+def _get_llm_decision(settings, context: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     payload = {
         "model": settings.openai_model,
         "messages": [
@@ -207,10 +207,30 @@ def _get_llm_decision(settings, context: dict[str, Any]) -> tuple[dict[str, Any]
         content = response.json()["choices"][0]["message"]["content"]
         return json.loads(content), None
     except requests.HTTPError as exc:
-        status_code = exc.response.status_code if exc.response is not None else "unknown"
-        return None, f"OpenAI returned HTTP {status_code}. Used deterministic planner fallback."
+        return None, _format_openai_error(exc)
     except (requests.RequestException, KeyError, json.JSONDecodeError) as exc:
-        return None, f"OpenAI decision failed: {exc.__class__.__name__}. Used deterministic planner fallback."
+        return None, _format_openai_error(exc)
+
+
+def _format_openai_error(exc: Exception) -> dict[str, Any]:
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None) if response is not None else None
+    response_body = None
+    message = str(exc)
+
+    if response is not None:
+        response_body = getattr(response, "text", None)
+        if response_body:
+            message = response_body
+
+    return {
+        "source": "openai",
+        "type": exc.__class__.__name__,
+        "status": status,
+        "message": message,
+        "response_body": response_body,
+        "fallback": "deterministic_planner",
+    }
 
 
 def _system_prompt() -> str:
@@ -227,13 +247,14 @@ For missed plans, replan from the current time and protect hard commitments.
 Classify intent as one of: plan, capture_task, schedule_event, replan, reminder, question, unknown.
 
 You may propose exactly one backend action:
-- create_task for a simple Todoist task.
-- create_calendar_event for a simple event with a title, start, and end.
-- none.
+- none: answer only. Use this for planning questions, replanning, questions, reminders, and anything that does not explicitly ask to create something.
+- create_todoist_task: create one simple Todoist task. Use only when the user explicitly asks to capture/create/add a task.
+- create_calendar_event: create one simple calendar event with a title, start, and end. Use only when the user explicitly asks to schedule an event.
 
 Do not propose unsafe actions: deleting tasks/events, moving fixed events, cancelling meetings,
 sending emails, inviting attendees, or completing tasks unless explicitly requested.
 If a request is risky, ambiguous, or unsupported, set needs_confirmation true and use action_type none.
+For planning questions like "I feel lazy, what is one small useful thing I can do?", action_type must be none.
 Always return valid JSON matching the schema.
 """.strip()
 
@@ -259,7 +280,8 @@ def _decision_schema() -> dict[str, Any]:
             },
             "action_type": {
                 "type": "string",
-                "enum": ["none", "create_task", "create_calendar_event"],
+                "enum": ["none", "create_todoist_task", "create_calendar_event"],
+                "description": "Allowed actions. Use none for planning/replanning/questions. Use create_todoist_task only for explicit task capture. Use create_calendar_event only for explicit scheduling.",
             },
             "task": {
                 "type": "object",
@@ -307,10 +329,10 @@ def _sanitize_decision(decision: dict[str, Any]) -> dict[str, Any]:
 
     if intent not in ALLOWED_INTENTS:
         intent = "unknown"
-    if action_type not in {"none", "create_task", "create_calendar_event"}:
+    if action_type not in {"none", "create_todoist_task", "create_calendar_event"}:
         action_type = "none"
 
-    if needs_confirmation:
+    if needs_confirmation or intent in {"plan", "replan", "question", "reminder", "unknown"}:
         action_type = "none"
 
     return {
@@ -335,7 +357,7 @@ def _execute_allowed_action(
     if action_type == "none":
         return [], []
 
-    if action_type == "create_task" and decision["intent"] == "capture_task":
+    if action_type == "create_todoist_task" and decision["intent"] == "capture_task":
         task = decision.get("task") or {}
         content = (task.get("content") or "").strip()
         if not content:
@@ -354,7 +376,7 @@ def _execute_allowed_action(
             return [], [result.error]
         return [
             {
-                "type": "create_task",
+                "type": "create_todoist_task",
                 "status": "success",
                 "task": result.task,
             }
@@ -400,7 +422,7 @@ def _answer_with_actions(
         return decision["answer"]
 
     action = actions_taken[0]
-    if action["type"] == "create_task":
+    if action["type"] == "create_todoist_task":
         task = action.get("task") or {}
         return f"{decision['answer']} Added Todoist task: {task.get('content')}."
     if action["type"] == "create_calendar_event":

@@ -6,10 +6,11 @@ import unittest
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
+import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.agent import handle_chat  # noqa: E402
+from app.agent import _decision_schema, _sanitize_decision, handle_chat  # noqa: E402
 from app.calendar_tools import CalendarReadResult, CalendarWriteResult  # noqa: E402
 from app.todoist_tools import TodoistReadResult, TodoistWriteResult  # noqa: E402
 
@@ -94,6 +95,7 @@ class AgentExampleTests(unittest.TestCase):
             self._decision(
                 answer="Start with migrating things from Notion. It is due today and high priority.",
                 intent="plan",
+                action_type="none",
             ),
             None,
         )):
@@ -101,21 +103,31 @@ class AgentExampleTests(unittest.TestCase):
 
         self.assertEqual(response["intent"], "plan")
         self.assertEqual(response["actions_taken"], [])
+        self.assertFalse(response["needs_confirmation"])
         self.assertIn("Start with", response["answer"])
         self.assertIn("recommended_tasks", response)
 
-    def test_low_energy_plan(self):
+    def test_planning_question_action_none_even_if_model_proposes_tool(self):
         with patch("app.agent._get_llm_decision", return_value=(
             self._decision(
                 answer="Do one tiny useful win: migrate one small batch from Notion.",
                 intent="plan",
+                action_type="create_todoist_task",
+                task={
+                    "content": "Bad planning tool call",
+                    "project_category": "Misc",
+                    "due_string": None,
+                    "labels": [],
+                    "priority": 4,
+                },
             ),
             None,
-        )):
+        )), patch("app.agent.create_task") as create_task_mock:
             response = handle_chat("I feel lazy, what's one small useful thing I can do?", self.now)
 
         self.assertEqual(response["intent"], "plan")
         self.assertEqual(response["actions_taken"], [])
+        create_task_mock.assert_not_called()
         self.assertIn("tiny", response["answer"].lower())
 
     def test_capture_task(self):
@@ -124,7 +136,7 @@ class AgentExampleTests(unittest.TestCase):
             self._decision(
                 answer="I’ll add that to Todoist.",
                 intent="capture_task",
-                action_type="create_task",
+                action_type="create_todoist_task",
                 task={
                     "content": "Buy Nike socks",
                     "project_category": "Misc",
@@ -138,7 +150,7 @@ class AgentExampleTests(unittest.TestCase):
             response = handle_chat("I need Nike socks", self.now)
 
         self.assertEqual(response["intent"], "capture_task")
-        self.assertEqual(response["actions_taken"][0]["type"], "create_task")
+        self.assertEqual(response["actions_taken"][0]["type"], "create_todoist_task")
         self.assertIn("Added Todoist task", response["answer"])
 
     def test_schedule_event(self):
@@ -171,6 +183,28 @@ class AgentExampleTests(unittest.TestCase):
         self.assertEqual(response["actions_taken"][0]["type"], "create_calendar_event")
         self.assertIn("Added calendar event", response["answer"])
 
+    def test_schema_allowed_actions_are_documented(self):
+        action_enum = _decision_schema()["properties"]["action_type"]["enum"]
+        self.assertEqual(action_enum, ["none", "create_todoist_task", "create_calendar_event"])
+
+    def test_legacy_create_task_action_is_rejected(self):
+        decision = _sanitize_decision(
+            self._decision(
+                answer="I will add that.",
+                intent="capture_task",
+                action_type="create_task",
+                task={
+                    "content": "Buy Nike socks",
+                    "project_category": "Misc",
+                    "due_string": None,
+                    "labels": [],
+                    "priority": 4,
+                },
+            )
+        )
+
+        self.assertEqual(decision["action_type"], "none")
+
     def test_replan_after_lunch(self):
         with patch("app.agent._get_llm_decision", return_value=(
             self._decision(
@@ -184,6 +218,21 @@ class AgentExampleTests(unittest.TestCase):
         self.assertEqual(response["intent"], "replan")
         self.assertEqual(response["actions_taken"], [])
         self.assertIn("lunch", response["answer"].lower())
+
+    def test_openai_http_error_includes_debug_details(self):
+        response = requests.Response()
+        response.status_code = 401
+        response._content = b'{"error":{"message":"Invalid API key"}}'
+        error = requests.HTTPError("401 Client Error", response=response)
+
+        with patch("app.agent.requests.post", side_effect=error):
+            result = handle_chat("What should I work on right now?", self.now)
+
+        self.assertEqual(result["mode"], "planning_deterministic_fallback")
+        self.assertEqual(result["errors"][-1]["source"], "openai")
+        self.assertEqual(result["errors"][-1]["type"], "HTTPError")
+        self.assertEqual(result["errors"][-1]["status"], 401)
+        self.assertIn("Invalid API key", result["errors"][-1]["message"])
 
     def _decision(
         self,

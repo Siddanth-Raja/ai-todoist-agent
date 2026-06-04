@@ -29,7 +29,7 @@ class ChatResponse(BaseModel):
     recommended_tasks: list[dict[str, Any]]
     calendar_events: list[dict[str, Any]]
     mode: str
-    errors: list[str] = Field(default_factory=list)
+    errors: list[str | dict[str, Any]] = Field(default_factory=list)
 
 
 @app.get("/health")

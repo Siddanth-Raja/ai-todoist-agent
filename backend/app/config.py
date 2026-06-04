@@ -71,5 +71,8 @@ def get_settings() -> Settings:
         google_calendar_id=_optional_env("GOOGLE_CALENDAR_ID") or "primary",
         timezone=timezone,
         openai_api_key=_optional_env("OPENAI_API_KEY"),
-        openai_model=_optional_env("OPENAI_MODEL") or "gpt-5.4-mini",
+        openai_model=_optional_env("OPENAI_MODEL") or "gpt-4o-mini",
     )
+
+
+settings = get_settings()

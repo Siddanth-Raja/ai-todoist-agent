@@ -5,8 +5,6 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .agent import MODE, handle_chat
-from .calendar_tools import list_todays_events
-from .config import get_settings
 
 
 app = FastAPI(
@@ -35,16 +33,6 @@ def health() -> dict[str, str]:
     return {
         "status": "ok",
         "mode": MODE,
-    }
-
-
-@app.get("/debug/calendar")
-def debug_calendar() -> dict[str, Any]:
-    result = list_todays_events(get_settings())
-    return {
-        "event_count": len(result.events),
-        "events": result.events,
-        "error": result.error,
     }
 
 

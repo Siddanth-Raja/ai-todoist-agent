@@ -449,7 +449,7 @@ def infer_category_from_text(text: str) -> str:
     if "freelance" in lowered or any(keyword in lowered for keyword in FREELANCE_KEYWORDS):
         return "Freelance"
     if any(keyword in lowered for keyword in SHOPPING_KEYWORDS):
-        return "Misc"
+        return "Personal"
     if "personal" in lowered or any(keyword in lowered for keyword in PERSONAL_KEYWORDS):
         return "Personal"
     return "Misc"

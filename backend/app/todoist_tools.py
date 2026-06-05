@@ -60,6 +60,9 @@ def create_task(
     settings: Settings,
     content: str,
     project_id: str | None = None,
+    project_name: str | None = None,
+    section_id: str | None = None,
+    section_name: str | None = None,
     due_string: str | None = None,
     labels: list[str] | None = None,
     priority: int | None = None,
@@ -70,18 +73,30 @@ def create_task(
             error="TODOIST_API_TOKEN is missing. Add it to backend/.env to create Todoist tasks.",
         )
 
-    payload: dict[str, Any] = {"content": content}
-    if project_id:
-        payload["project_id"] = project_id
-    if due_string:
-        payload["due_string"] = due_string
-    if labels:
-        payload["labels"] = labels
-    if priority:
-        # Todoist API v1 priority: 1 is highest, 4 is normal.
-        payload["priority"] = max(1, min(4, priority))
-
     try:
+        projects: dict[str, str] | None = None
+        sections: dict[str, str] | None = None
+
+        if project_name and not project_id:
+            projects = _fetch_projects(settings)
+            project_id = _find_id_by_name(projects, project_name)
+
+        if section_name and not section_id:
+            sections = _fetch_sections(settings, project_id=project_id)
+            section_id = _find_id_by_name(sections, section_name)
+
+        payload: dict[str, Any] = {"content": content}
+        if project_id:
+            payload["project_id"] = project_id
+        if section_id:
+            payload["section_id"] = section_id
+        if due_string:
+            payload["due_string"] = due_string
+        if labels:
+            payload["labels"] = labels
+        if priority:
+            payload["priority"] = max(1, min(4, priority))
+
         response = requests.post(
             f"{TODOIST_API_BASE_URL}/tasks",
             headers={
@@ -93,7 +108,10 @@ def create_task(
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
-        projects = _fetch_projects(settings)
+        if projects is None:
+            projects = _fetch_projects(settings)
+        if sections is None and (section_id or section_name):
+            sections = _fetch_sections(settings, project_id=project_id)
     except requests.HTTPError as exc:
         status_code = exc.response.status_code if exc.response is not None else "unknown"
         return TodoistWriteResult(
@@ -104,7 +122,7 @@ def create_task(
             error=f"Could not create Todoist task: {exc.__class__.__name__}.",
         )
 
-    return TodoistWriteResult(task=_normalize_task(response.json(), projects))
+    return TodoistWriteResult(task=_normalize_task(response.json(), projects, sections))
 
 
 def _fetch_projects(settings: Settings) -> dict[str, str]:
@@ -118,12 +136,39 @@ def _fetch_projects(settings: Settings) -> dict[str, str]:
     return projects
 
 
-def _fetch_paginated(settings: Settings, resource: str) -> list[dict[str, Any]]:
+def _fetch_sections(settings: Settings, project_id: str | None = None) -> dict[str, str]:
+    sections: dict[str, str] = {}
+    params = {"project_id": project_id} if project_id else None
+    for section in _fetch_paginated(settings, "sections", extra_params=params):
+        section_id = section.get("id")
+        section_name = section.get("name")
+        if section_id and section_name:
+            sections[str(section_id)] = str(section_name)
+
+    return sections
+
+
+def _find_id_by_name(items: dict[str, str], name: str) -> str | None:
+    normalized_name = name.strip().lower()
+    for item_id, item_name in items.items():
+        if item_name.strip().lower() == normalized_name:
+            return item_id
+
+    return None
+
+
+def _fetch_paginated(
+    settings: Settings,
+    resource: str,
+    extra_params: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     cursor: str | None = None
 
     while True:
         params: dict[str, Any] = {"limit": PAGE_LIMIT}
+        if extra_params:
+            params.update(extra_params)
         if cursor:
             params["cursor"] = cursor
 
@@ -158,9 +203,15 @@ def _auth_headers(settings: Settings) -> dict[str, str]:
     }
 
 
-def _normalize_task(task: dict[str, Any], projects: dict[str, str]) -> dict[str, Any]:
+def _normalize_task(
+    task: dict[str, Any],
+    projects: dict[str, str],
+    sections: dict[str, str] | None = None,
+) -> dict[str, Any]:
     project_id = task.get("project_id")
     project_id_text = str(project_id) if project_id is not None else None
+    section_id = task.get("section_id")
+    section_id_text = str(section_id) if section_id is not None else None
     task_id = str(task.get("id")) if task.get("id") is not None else None
 
     labels = task.get("labels") or []
@@ -176,6 +227,8 @@ def _normalize_task(task: dict[str, Any], projects: dict[str, str]) -> dict[str,
         "description": str(task.get("description") or "").strip(),
         "project_id": project_id_text,
         "project_name": projects.get(project_id_text) if project_id_text else None,
+        "section_id": section_id_text,
+        "section_name": sections.get(section_id_text) if sections and section_id_text else None,
         "due": task.get("due"),
         "priority": internal_priority,
         "todoist_priority": todoist_priority,

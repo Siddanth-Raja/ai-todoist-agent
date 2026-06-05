@@ -15,7 +15,7 @@ import app.agent as agent  # noqa: E402
 from app.agent import _decision_schema, _sanitize_decision, handle_chat  # noqa: E402
 from app.calendar_tools import CalendarReadResult, CalendarWriteResult  # noqa: E402
 from app.main import ChatRequest, chat, require_agent_api_key  # noqa: E402
-from app.todoist_tools import TodoistReadResult, TodoistWriteResult  # noqa: E402
+from app.todoist_tools import TodoistReadResult, TodoistWriteResult, create_task  # noqa: E402
 
 
 @dataclass
@@ -47,8 +47,10 @@ TASKS = [
     {
         "id": "task-1",
         "content": "migrate things from notion",
-        "project_id": "project-personal",
-        "project_name": "Personal",
+        "project_id": "project-todo",
+        "project_name": "To-Do",
+        "section_id": "section-personal",
+        "section_name": "Personal",
         "due": {"date": "2026-06-04"},
         "priority": 4,
         "todoist_priority": 1,
@@ -60,6 +62,8 @@ TASKS = [
         "content": "contact more clients",
         "project_id": "project-freelance",
         "project_name": "Freelance",
+        "section_id": None,
+        "section_name": None,
         "due": None,
         "priority": 3,
         "todoist_priority": 2,
@@ -182,8 +186,105 @@ class AgentExampleTests(unittest.TestCase):
 
         self.assertEqual(response["intent"], "capture_task")
         self.assertEqual(response["actions_taken"][0]["type"], "create_todoist_task")
-        self.assertEqual(response["actions_taken"][0]["task"]["project_name"], "Personal")
+        self.assertEqual(response["actions_taken"][0]["task"]["project_name"], "To-Do")
+        self.assertEqual(response["actions_taken"][0]["task"]["section_name"], "Personal")
         self.assertNotIn("think about errands later", response["answer"])
+
+    def test_before_event_capture_sets_personal_section_and_due_date(self):
+        created_task = {
+            **TASKS[0],
+            "id": "task-grad-speech",
+            "content": "Prepare grad speech",
+            "project_name": "To-Do",
+            "section_name": "Personal",
+        }
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="You should think about that later.",
+                intent="plan",
+                action_type="none",
+            ),
+            None,
+        )), patch("app.agent.create_task", return_value=TodoistWriteResult(task=created_task)) as create_task_mock:
+            response = handle_chat(
+                "Prepare for my grad speech before my grad on saturday",
+                self.now,
+            )
+
+        create_task_kwargs = create_task_mock.call_args.kwargs
+        self.assertEqual(create_task_kwargs["content"], "Prepare grad speech")
+        self.assertEqual(create_task_kwargs["project_id"], "project-todo")
+        self.assertEqual(create_task_kwargs["project_name"], "To-Do")
+        self.assertEqual(create_task_kwargs["section_name"], "Personal")
+        self.assertEqual(create_task_kwargs["due_string"], "2026-06-05")
+        self.assertEqual(create_task_kwargs["priority"], 4)
+        self.assertEqual(response["actions_taken"][0]["task"]["project_category"], "Personal")
+        self.assertEqual(response["actions_taken"][0]["task"]["due_date"], "2026-06-05")
+
+    def test_task_extraction_classifies_life_area_examples(self):
+        cases = [
+            ("Buy groceries today", "Buy groceries", "Personal", "2026-06-04"),
+            ("Study for college exam tomorrow", "Study for college exam", "A&M", "2026-06-05"),
+            ("Draft freelance client proposal by friday", "Draft freelance client proposal", "Freelance", "2026-06-05"),
+            ("Prepare XO prototype review next week", "Prepare XO prototype review", "XO", "2026-06-08"),
+        ]
+
+        for message, expected_content, expected_category, expected_due_date in cases:
+            with self.subTest(message=message):
+                metadata = agent._extract_capture_metadata(message, {}, self.now)
+
+            self.assertEqual(metadata["content"], expected_content)
+            self.assertEqual(metadata["project_category"], expected_category)
+            self.assertEqual(metadata["due_date"], expected_due_date)
+
+    def test_temporal_phrase_extraction(self):
+        cases = [
+            ("today", "2026-06-04"),
+            ("tomorrow", "2026-06-05"),
+            ("friday", "2026-06-05"),
+            ("saturday", "2026-06-06"),
+            ("next week", "2026-06-08"),
+        ]
+
+        for phrase, expected_due_date in cases:
+            with self.subTest(phrase=phrase):
+                due_date = agent._extract_due_date_from_message(
+                    f"Finish paperwork {phrase}",
+                    self.now,
+                )
+
+            self.assertEqual(due_date.isoformat(), expected_due_date)
+
+    def test_todoist_create_task_resolves_project_and_section_names(self):
+        response = requests.Response()
+        response.status_code = 200
+        response._content = (
+            b'{"id":"task-grad-speech","content":"Prepare grad speech",'
+            b'"project_id":"project-todo","section_id":"section-personal",'
+            b'"priority":4,"labels":[]}'
+        )
+
+        with patch("app.todoist_tools._fetch_projects", return_value={"project-todo": "To-Do"}), patch(
+            "app.todoist_tools._fetch_sections",
+            return_value={"section-personal": "Personal"},
+        ), patch("app.todoist_tools.requests.post", return_value=response) as post_mock:
+            result = create_task(
+                settings=FakeSettings(),
+                content="Prepare grad speech",
+                project_name="To-Do",
+                section_name="Personal",
+                due_string="2026-06-05",
+                priority=4,
+            )
+
+        payload = post_mock.call_args.kwargs["json"]
+        self.assertEqual(payload["project_id"], "project-todo")
+        self.assertEqual(payload["section_id"], "section-personal")
+        self.assertEqual(payload["due_string"], "2026-06-05")
+        self.assertEqual(payload["priority"], 4)
+        self.assertIsNone(result.error)
+        self.assertEqual(result.task["project_name"], "To-Do")
+        self.assertEqual(result.task["section_name"], "Personal")
 
     def test_schedule_event(self):
         event = {
@@ -419,8 +520,11 @@ class AgentExampleTests(unittest.TestCase):
                 "content": None,
                 "project_category": None,
                 "due_string": None,
+                "due_date": None,
                 "labels": [],
                 "priority": None,
+                "project_name": None,
+                "section_name": None,
             },
             "calendar_event": calendar_event or {
                 "title": None,

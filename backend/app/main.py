@@ -1,8 +1,9 @@
 from datetime import datetime
 from typing import Any
 
-from fastapi import Header, HTTPException
 from fastapi import FastAPI
+from fastapi import Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .agent import MODE, handle_chat
@@ -13,6 +14,13 @@ app = FastAPI(
     title="Personal Chief of Staff",
     description="Read-only planning MVP for Todoist and Google Calendar.",
     version="0.1.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1):\d+|https://.*\.ngrok-free\.app",
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
 )
 
 

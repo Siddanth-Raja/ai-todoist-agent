@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import json
+import re
 from typing import Any
 
 import requests
@@ -16,6 +17,8 @@ READ_ONLY_NOTE = "No changes were made."
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 OPENAI_TIMEOUT_SECONDS = 30
 PROJECT_CATEGORIES = ["A&M", "XO", "Nebulo", "Freelance", "Personal", "Misc"]
+TODOIST_PERSONAL_PROJECT_NAME = "To-Do"
+BEFORE_EVENT_LEAD_DAYS = 1
 PERSONAL_CAPTURE_KEYWORDS = {
     "buy",
     "purchase",
@@ -35,6 +38,55 @@ PERSONAL_CAPTURE_KEYWORDS = {
     "life admin",
     "water bottle",
     "socks",
+    "grad",
+    "graduation",
+    "commencement",
+    "speech",
+}
+COLLEGE_CAPTURE_KEYWORDS = {
+    "a&m",
+    "a and m",
+    "college",
+    "class",
+    "exam",
+    "homework",
+    "assignment",
+    "transcript",
+    "housing",
+}
+FREELANCE_CAPTURE_KEYWORDS = {
+    "client",
+    "clients",
+    "outreach",
+    "business",
+    "law firm",
+    "law firms",
+    "invoice",
+    "proposal",
+    "contract",
+    "deliverable",
+    "freelance",
+}
+XO_CAPTURE_KEYWORDS = {
+    "xo",
+    "vr",
+    "headset",
+    "prototype",
+    "environment",
+}
+NEBULO_CAPTURE_KEYWORDS = {
+    "nebulo",
+    "agent",
+    "context control",
+}
+WEEKDAY_TO_INDEX = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
 }
 ALLOWED_INTENTS = {
     "plan",
@@ -110,7 +162,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
         return fallback
 
     decision = _sanitize_decision(decision)
-    decision = _apply_capture_override(cleaned_message, decision)
+    decision = _apply_capture_override(cleaned_message, decision, local_now)
     if decision["needs_confirmation"]:
         PENDING_ACTION = decision["pending_action"]
     elif active_pending_action:
@@ -340,7 +392,16 @@ def _decision_schema() -> dict[str, Any]:
             "task": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["content", "project_category", "due_string", "labels", "priority"],
+                "required": [
+                    "content",
+                    "project_category",
+                    "due_string",
+                    "due_date",
+                    "labels",
+                    "priority",
+                    "project_name",
+                    "section_name",
+                ],
                 "properties": {
                     "content": {"type": ["string", "null"]},
                     "project_category": {
@@ -348,6 +409,10 @@ def _decision_schema() -> dict[str, Any]:
                         "enum": ["A&M", "XO", "Nebulo", "Freelance", "Personal", "Misc", None],
                     },
                     "due_string": {"type": ["string", "null"]},
+                    "due_date": {
+                        "type": ["string", "null"],
+                        "description": "ISO date YYYY-MM-DD when the task should be due.",
+                    },
                     "labels": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -358,6 +423,8 @@ def _decision_schema() -> dict[str, Any]:
                         "maximum": 4,
                         "description": "Todoist API priority where 1 is highest and 4 is normal.",
                     },
+                    "project_name": {"type": ["string", "null"]},
+                    "section_name": {"type": ["string", "null"]},
                 },
             },
             "calendar_event": {
@@ -442,26 +509,38 @@ def _sanitize_decision(decision: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _apply_capture_override(message: str, decision: dict[str, Any]) -> dict[str, Any]:
-    if not _is_clear_capture_request(message):
+def _apply_capture_override(
+    message: str,
+    decision: dict[str, Any],
+    local_now: datetime,
+) -> dict[str, Any]:
+    is_model_capture = (
+        decision.get("intent") == "capture_task"
+        and decision.get("action_type") == "create_todoist_task"
+    )
+    if not _is_clear_capture_request(message) and not is_model_capture:
         return decision
 
-    task_content = _capture_task_content(message)
-    category = _infer_capture_category(task_content)
     task = decision.get("task") if isinstance(decision.get("task"), dict) else {}
+    metadata = _extract_capture_metadata(message, task, local_now)
+    category = metadata["project_category"]
+    content = metadata["content"]
     task.update(
         {
-            "content": task.get("content") or task_content,
+            "content": content,
             "project_category": category,
-            "due_string": task.get("due_string"),
+            "due_string": metadata["due_string"],
+            "due_date": metadata["due_date"],
             "labels": task.get("labels") or [],
-            "priority": task.get("priority") or 4,
+            "priority": metadata["priority"],
+            "project_name": metadata["project_name"],
+            "section_name": metadata["section_name"],
         }
     )
 
     decision.update(
         {
-            "answer": f"I'll add this to Todoist under {category}: {task['content']}.",
+            "answer": f"I'll add this to Todoist under {category}: {content}.",
             "intent": "capture_task",
             "action_type": "create_todoist_task",
             "task": task,
@@ -478,6 +557,31 @@ def _apply_capture_override(message: str, decision: dict[str, Any]) -> dict[str,
     return decision
 
 
+def _extract_capture_metadata(
+    message: str,
+    task: dict[str, Any],
+    local_now: datetime,
+) -> dict[str, Any]:
+    task_content = _capture_task_content(message)
+    existing_content = str(task.get("content") or "").strip()
+    content = task_content or existing_content
+    category = _infer_capture_category(" ".join([content, message]))
+    due_date = _extract_due_date_from_message(message, local_now)
+    due_date_text = due_date.isoformat() if due_date else None
+    section_name = category if category != "Misc" else None
+    project_name = TODOIST_PERSONAL_PROJECT_NAME if category == "Personal" else None
+
+    return {
+        "content": content,
+        "project_category": category,
+        "due_string": due_date_text or task.get("due_string"),
+        "due_date": due_date_text or task.get("due_date"),
+        "priority": task.get("priority") or _infer_capture_priority(message, due_date_text),
+        "project_name": task.get("project_name") or project_name,
+        "section_name": task.get("section_name") or section_name,
+    }
+
+
 def _is_clear_capture_request(message: str) -> bool:
     text = message.lower().strip()
     capture_starts = (
@@ -487,7 +591,25 @@ def _is_clear_capture_request(message: str) -> bool:
         "remind me to ",
         "todoist ",
     )
-    if not text.startswith(capture_starts):
+    capture_verbs = (
+        "buy ",
+        "purchase ",
+        "order ",
+        "pick up ",
+        "prepare ",
+        "draft ",
+        "write ",
+        "study ",
+        "finish ",
+        "submit ",
+        "send ",
+        "email ",
+        "call ",
+        "pay ",
+        "renew ",
+        "review ",
+    )
+    if not text.startswith(capture_starts) and not text.startswith(capture_verbs):
         return False
 
     schedule_words = ("meeting", "appointment", " at ", " from ", " tomorrow at ")
@@ -515,26 +637,87 @@ def _capture_task_content(message: str) -> str:
             text = text[len(prefix) :]
             break
 
+    text = re.split(r"\bbefore\b", text, maxsplit=1, flags=re.IGNORECASE)[0]
+    text = _remove_due_phrase(text)
+    text = re.sub(r"\bfor my\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(my|the|a|an)\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" .,:;-")
+
     if not text.lower().startswith(("buy ", "purchase ", "order ")):
         if any(word in text.lower() for word in ("target", "water bottle", "socks", "groceries")):
             text = f"Buy {text}"
 
-    return text[:1].upper() + text[1:]
+    return text[:1].upper() + text[1:] if text else text
 
 
 def _infer_capture_category(task_content: str) -> str:
     text = task_content.lower()
+    if any(keyword in text for keyword in ("grad", "graduation", "commencement", "speech")):
+        return "Personal"
     if any(keyword in text for keyword in PERSONAL_CAPTURE_KEYWORDS):
         return "Personal"
-    if any(keyword in text for keyword in ("client", "outreach", "business", "law firm", "invoice")):
+    if any(keyword in text for keyword in FREELANCE_CAPTURE_KEYWORDS):
         return "Freelance"
-    if any(keyword in text for keyword in ("vr", "headset", "prototype", "environment")):
+    if any(keyword in text for keyword in XO_CAPTURE_KEYWORDS):
         return "XO"
-    if any(keyword in text for keyword in ("nebulo", "agent", "context control")):
+    if any(keyword in text for keyword in NEBULO_CAPTURE_KEYWORDS):
         return "Nebulo"
-    if any(keyword in text for keyword in ("a&m", "college", "transcript", "housing")):
+    if any(keyword in text for keyword in COLLEGE_CAPTURE_KEYWORDS):
         return "A&M"
     return "Misc"
+
+
+def _infer_capture_priority(message: str, due_date: str | None) -> int:
+    text = message.lower()
+    urgent_words = ("urgent", "important", "deadline", "before", "due")
+    if due_date or any(word in text for word in urgent_words):
+        return 4
+    return 4
+
+
+def _extract_due_date_from_message(message: str, local_now: datetime):
+    text = message.lower()
+    before_match = re.search(r"\bbefore\b(?P<event>.+)$", text)
+    if before_match:
+        event_date = _extract_temporal_date(before_match.group("event"), local_now)
+        if event_date:
+            return event_date - timedelta(days=BEFORE_EVENT_LEAD_DAYS)
+
+    return _extract_temporal_date(text, local_now)
+
+
+def _extract_temporal_date(text: str, local_now: datetime):
+    today = local_now.date()
+    lowered = text.lower()
+
+    if re.search(r"\btoday\b", lowered):
+        return today
+    if re.search(r"\btomorrow\b", lowered):
+        return today + timedelta(days=1)
+    if re.search(r"\bnext week\b", lowered):
+        days_until_monday = (7 - today.weekday()) % 7
+        if days_until_monday == 0:
+            days_until_monday = 7
+        return today + timedelta(days=days_until_monday)
+
+    for weekday, weekday_index in WEEKDAY_TO_INDEX.items():
+        if re.search(rf"\b(next\s+)?{weekday}\b", lowered):
+            days_until_weekday = (weekday_index - today.weekday()) % 7
+            if re.search(rf"\bnext\s+{weekday}\b", lowered) and days_until_weekday == 0:
+                days_until_weekday = 7
+            return today + timedelta(days=days_until_weekday)
+
+    return None
+
+
+def _remove_due_phrase(text: str) -> str:
+    temporal_words = "|".join(WEEKDAY_TO_INDEX.keys())
+    return re.sub(
+        rf"\b(by|on|due|for)\s+(today|tomorrow|next week|next\s+(?:{temporal_words})|{temporal_words})\b.*$|\b(today|tomorrow|next week)\b.*$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 def _execute_allowed_action(
@@ -554,22 +737,26 @@ def _execute_allowed_action(
         if not content:
             return [], ["OpenAI proposed task creation without task content."]
 
-        project_id = _project_id_for_category(tasks, task.get("project_category"))
+        category = task.get("project_category")
+        project_id = _project_id_for_category(tasks, category)
         result = create_task(
             settings=settings,
             content=content,
             project_id=project_id,
-            due_string=task.get("due_string"),
+            project_name=task.get("project_name") or _project_name_for_category(category),
+            section_name=task.get("section_name") or _section_name_for_category(category),
+            due_string=task.get("due_date") or task.get("due_string"),
             labels=task.get("labels") or [],
             priority=task.get("priority"),
         )
         if result.error:
             return [], [result.error]
+        task_metadata = _created_task_metadata(task, result.task)
         return [
             {
                 "type": "create_todoist_task",
                 "status": "success",
-                "task": result.task,
+                "task": task_metadata,
             }
         ], []
 
@@ -637,6 +824,8 @@ def _compact_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "labels": task.get("labels") or [],
             "estimated_duration": task.get("estimated_duration"),
             "energy_level": task.get("energy_level"),
+            "section_id": task.get("section_id"),
+            "section_name": task.get("section_name"),
             "url": task.get("url"),
         }
         for task in tasks
@@ -647,11 +836,52 @@ def _project_id_for_category(tasks: list[dict[str, Any]], category: str | None) 
     if not category:
         return None
 
+    project_name = _project_name_for_category(category)
+    if project_name:
+        for task in tasks:
+            if task.get("project_name") == project_name and task.get("project_id"):
+                return task["project_id"]
+
     for task in tasks:
         if task.get("category") == category and task.get("project_id"):
             return task["project_id"]
 
     return None
+
+
+def _project_name_for_category(category: str | None) -> str | None:
+    if category == "Personal":
+        return TODOIST_PERSONAL_PROJECT_NAME
+    return None
+
+
+def _section_name_for_category(category: str | None) -> str | None:
+    if category and category != "Misc":
+        return category
+    return None
+
+
+def _created_task_metadata(
+    proposed_task: dict[str, Any],
+    created_task: dict[str, Any] | None,
+) -> dict[str, Any]:
+    task = dict(created_task or {})
+    for key in (
+        "content",
+        "project_category",
+        "priority",
+        "due_date",
+        "project_name",
+        "section_name",
+    ):
+        value = proposed_task.get(key)
+        if value is not None:
+            task[key] = value
+
+    if proposed_task.get("due_date") and "due_string" not in task:
+        task["due_string"] = proposed_task["due_date"]
+
+    return task
 
 
 def _parse_llm_datetime(value: str | None, local_now: datetime) -> datetime | None:

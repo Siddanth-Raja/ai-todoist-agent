@@ -146,37 +146,28 @@ def list_todays_events(
     start_of_day = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
     end_of_day = start_of_day + timedelta(days=1)
 
-    try:
-        service = _build_calendar_service(settings)
-        response = (
-            service.events()
-            .list(
-                calendarId=settings.google_calendar_id,
-                timeMin=start_of_day.isoformat(),
-                timeMax=end_of_day.isoformat(),
-                singleEvents=True,
-                orderBy="startTime",
-            )
-            .execute()
-        )
-    except HttpError as exc:
-        status_code = getattr(exc, "status_code", None) or getattr(
-            getattr(exc, "resp", None), "status", "unknown"
-        )
+    return _list_events_between(settings, start_of_day, end_of_day)
+
+
+def list_upcoming_events(
+    settings: Settings,
+    now: datetime | None = None,
+    days: int = 7,
+) -> CalendarReadResult:
+    """Read today and upcoming Google Calendar events in the configured local timezone."""
+    missing_fields = settings.missing_google_calendar_fields
+    if missing_fields:
+        joined = ", ".join(missing_fields)
         return CalendarReadResult(
             events=[],
-            error=f"Could not read Google Calendar events. Google returned HTTP {status_code}.",
-        )
-    except Exception as exc:  # noqa: BLE001 - provider setup failures should surface clearly.
-        return CalendarReadResult(
-            events=[],
-            error=f"Could not read Google Calendar events: {exc.__class__.__name__}.",
+            error=f"{joined} missing. Add Google OAuth credentials to backend/.env to read Calendar events.",
         )
 
-    raw_events = response.get("items", [])
-    events = [_normalize_event(event, local_tz) for event in raw_events]
-    events.sort(key=lambda event: event["start"])
-    return CalendarReadResult(events=events)
+    local_tz = settings.local_tz
+    local_now = now.astimezone(local_tz) if now else datetime.now(local_tz)
+    start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=max(1, min(days, 30)))
+    return _list_events_between(settings, start, end)
 
 
 def create_calendar_event(
@@ -258,6 +249,44 @@ def _build_calendar_service(settings: Settings):
     credentials = _build_credentials(settings)
     credentials.refresh(GoogleAuthRequest())
     return build("calendar", "v3", credentials=credentials, cache_discovery=False)
+
+
+def _list_events_between(
+    settings: Settings,
+    start: datetime,
+    end: datetime,
+) -> CalendarReadResult:
+    try:
+        service = _build_calendar_service(settings)
+        response = (
+            service.events()
+            .list(
+                calendarId=settings.google_calendar_id,
+                timeMin=start.isoformat(),
+                timeMax=end.isoformat(),
+                singleEvents=True,
+                orderBy="startTime",
+            )
+            .execute()
+        )
+    except HttpError as exc:
+        status_code = getattr(exc, "status_code", None) or getattr(
+            getattr(exc, "resp", None), "status", "unknown"
+        )
+        return CalendarReadResult(
+            events=[],
+            error=f"Could not read Google Calendar events. Google returned HTTP {status_code}.",
+        )
+    except Exception as exc:  # noqa: BLE001 - provider setup failures should surface clearly.
+        return CalendarReadResult(
+            events=[],
+            error=f"Could not read Google Calendar events: {exc.__class__.__name__}.",
+        )
+
+    raw_events = response.get("items", [])
+    events = [_normalize_event(event, settings.local_tz) for event in raw_events]
+    events.sort(key=lambda event: event["start"])
+    return CalendarReadResult(events=events)
 
 
 def _build_credentials(settings: Settings) -> Credentials:

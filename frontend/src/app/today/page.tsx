@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -19,6 +19,7 @@ import {
   Waves,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { apiRequest, formatDateTime, type ActivityEntry } from "@/lib/api";
 
 type LifeArea = {
   name: string;
@@ -27,13 +28,6 @@ type LifeArea = {
   overdue: number;
   status: string;
   gradient: string;
-};
-
-type ActivityItem = {
-  label: string;
-  value: string;
-  detail: string;
-  icon: LucideIcon;
 };
 
 const lifeAreas: LifeArea[] = [
@@ -71,27 +65,6 @@ const lifeAreas: LifeArea[] = [
   },
 ];
 
-const recentActivity: ActivityItem[] = [
-  {
-    label: "Completed",
-    value: "3 tasks",
-    detail: "Inbox triage, invoice draft, calendar cleanup",
-    icon: CheckCircle2,
-  },
-  {
-    label: "Created",
-    value: "1 event",
-    detail: "Freelance review block placed after lunch",
-    icon: CalendarClock,
-  },
-  {
-    label: "Adjusted",
-    value: "2 changes",
-    detail: "XO prep moved into the current open block",
-    icon: Activity,
-  },
-];
-
 function getGreeting(hour: number) {
   if (hour < 12) {
     return "Good morning";
@@ -110,6 +83,23 @@ function getGreetingIcon(hour: number) {
   }
 
   return SunMedium;
+}
+
+function formatActionType(value: string) {
+  return value.replaceAll("_", " ");
+}
+
+function iconForActivity(value: string): LucideIcon {
+  if (value === "task_created") {
+    return CheckCircle2;
+  }
+  if (value === "calendar_event_created" || value === "confirmation_requested") {
+    return CalendarClock;
+  }
+  if (value === "habit_logged") {
+    return HeartHandshake;
+  }
+  return Activity;
 }
 
 function SoftCard({
@@ -146,14 +136,35 @@ function SectionTitle({
 
 export default function TodayPage() {
   const [now, setNow] = useState(() => new Date());
+  const [activityEntries, setActivityEntries] = useState<ActivityEntry[]>([]);
+  const [activityError, setActivityError] = useState<string | null>(null);
 
   useEffect(() => {
     setNow(new Date());
+    apiRequest<ActivityEntry[]>("/activity?limit=5")
+      .then((entries) => {
+        setActivityEntries(entries);
+        setActivityError(null);
+      })
+      .catch((error) => {
+        setActivityError(error instanceof Error ? error.message : "Unable to load activity.");
+      });
   }, []);
 
   const hour = now.getHours();
   const GreetingIcon = getGreetingIcon(hour);
   const greeting = getGreeting(hour);
+  const recentActivity = useMemo(
+    () =>
+      activityEntries.map((entry) => ({
+        id: entry.id,
+        label: formatActionType(entry.action_type),
+        value: entry.title,
+        detail: entry.detail || formatDateTime(entry.created_at),
+        icon: iconForActivity(entry.action_type),
+      })),
+    [activityEntries],
+  );
 
   return (
     <div className="mx-auto grid w-[calc(100vw-2rem)] min-w-0 max-w-full grid-cols-1 gap-6 overflow-x-hidden pb-4 sm:w-full sm:max-w-[860px] md:max-w-[940px] md:gap-8 xl:max-w-[1440px] xl:grid-cols-2">
@@ -339,24 +350,34 @@ export default function TodayPage() {
           <SectionTitle eyebrow="Recent Activity" title="Quiet progress log" />
 
           <div className="mt-8 space-y-4">
-            {recentActivity.map((item) => {
-              const Icon = item.icon;
+            {activityError ? (
+              <div className="rounded-[1.4rem] border border-coral/25 bg-coral/10 p-4 text-sm text-coral">
+                {activityError}
+              </div>
+            ) : recentActivity.length === 0 ? (
+              <div className="rounded-[1.4rem] bg-black/20 p-4 text-sm text-stone-500">
+                No activity recorded yet.
+              </div>
+            ) : (
+              recentActivity.map((item) => {
+                const Icon = item.icon;
 
-              return (
-                <article key={item.label} className="flex gap-4 rounded-[1.4rem] bg-black/20 p-4">
-                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/[0.07] text-pearl">
-                    <Icon className="h-5 w-5" aria-hidden="true" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                      <h4 className="text-sm font-medium text-stone-400">{item.label}</h4>
-                      <p className="text-lg font-semibold text-pearl">{item.value}</p>
+                return (
+                  <article key={item.id} className="flex gap-4 rounded-[1.4rem] bg-black/20 p-4">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/[0.07] text-pearl">
+                      <Icon className="h-5 w-5" aria-hidden="true" />
                     </div>
-                    <p className="mt-1 text-sm leading-6 text-stone-500">{item.detail}</p>
-                  </div>
-                </article>
-              );
-            })}
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                        <h4 className="text-sm font-medium capitalize text-stone-400">{item.label}</h4>
+                        <p className="break-words text-lg font-semibold text-pearl">{item.value}</p>
+                      </div>
+                      <p className="mt-1 break-words text-sm leading-6 text-stone-500">{item.detail}</p>
+                    </div>
+                  </article>
+                );
+              })
+            )}
           </div>
         </SoftCard>
       </section>

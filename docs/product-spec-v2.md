@@ -1,9 +1,9 @@
 # Personal Chief of Staff Product Spec v2
 
-Status: Draft  
+Status: Draft, with functional V1 app surfaces underway  
 Last updated: 2026-06-05  
 Repository: `ai-todoist-agent`  
-Scope: Planning/specification only. Do not implement these features yet.
+Scope: Product direction plus current implementation notes. Basic V1 surfaces now collect useful data while deeper intelligence remains future work.
 
 ## 1. Product Name
 
@@ -226,6 +226,12 @@ Memory entries should have:
 }
 ```
 
+V1 implementation note:
+
+- The app currently stores simplified Memory entries in local SQLite with `id`, `type`, `title`, `content`, `confidence`, `enabled`, `created_at`, and `updated_at`.
+- The Memory tab supports add, edit, delete, and disable.
+- Future fields like `source` and `user_editable` remain part of the richer Memory Center design.
+
 Example project memory:
 
 > XO is Siddanth's VR/worldbuilding project involving Ashwin and Charlie.
@@ -374,6 +380,12 @@ Sensitive habit tracking rules:
 
 Habit tracking should help Siddanth understand patterns and take better next actions. It should not become a judgment system.
 
+V1 implementation note:
+
+- The app currently stores habit definitions and check-ins in local SQLite.
+- Default habit definitions are Gym, Running, and Work.
+- Check-ins support `yes`, `no`, and `partial`, with optional notes and timestamps.
+
 ## 8. Primary Interfaces
 
 ### 8.1 Primary Interface
@@ -443,6 +455,10 @@ The Today tab should show:
 
 The Today tab should answer: "What should I do next?"
 
+V1 implementation note:
+
+- The Today tab now reads the backend activity log and shows recent system actions.
+
 ### 9.2 Chat Tab
 
 The Chat tab should provide natural language conversation with action cards.
@@ -481,6 +497,11 @@ The Tasks tab should show Todoist tasks grouped by:
 
 The app should preserve Todoist as the task source of truth while making tasks easier to reason about in context.
 
+V1 implementation note:
+
+- The Tasks tab reads active Todoist tasks through the backend and groups them into A&M, XO, Freelance, Personal, and Misc.
+- The task view shows due date, priority, and completed/open status when available.
+
 ### 9.5 Habits Tab
 
 The Habits tab should show:
@@ -492,6 +513,10 @@ The Habits tab should show:
 - Planned vs actual
 
 The Habits tab should focus on insight and recovery, not guilt.
+
+V1 implementation note:
+
+- The Habits tab supports habit definition CRUD and quick check-in buttons for enabled habits.
 
 ### 9.6 Memory Tab
 
@@ -506,7 +531,27 @@ The user should be able to:
 - Hide memories
 - See why a memory exists
 
-### 9.7 Settings
+V1 implementation note:
+
+- The Memory tab groups entries by type and supports create, edit, delete, and disable.
+
+### 9.7 Activity Log
+
+V1 includes a local activity log for:
+
+- Task created
+- Calendar event created
+- Habit logged
+- Memory added
+- Confirmation requested
+
+The activity log is stored in SQLite and surfaced on the Today tab.
+
+### 9.8 Chat History
+
+V1 persists chat messages locally in browser storage. Server-side chat history remains a future migration.
+
+### 9.9 Settings
 
 Settings should include:
 

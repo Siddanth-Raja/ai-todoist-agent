@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CheckCircle2, Loader2, Send, ShieldQuestion } from "lucide-react";
 import { readAgentSettings } from "@/lib/settings";
 
@@ -25,7 +25,11 @@ type ConversationItem = {
   prompt: string;
   response?: ChatResponse;
   error?: string;
+  createdAt?: string;
 };
+
+const CHAT_HISTORY_KEY = "pcos.chatHistory";
+const MAX_CHAT_HISTORY_ITEMS = 80;
 
 function formatObject(value: unknown): string {
   if (typeof value === "string") {
@@ -101,11 +105,42 @@ function DevDebugPanel({ item }: { item: ConversationItem }) {
 export function ChatPanel() {
   const [input, setInput] = useState("");
   const [items, setItems] = useState<ConversationItem[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
 
   const hasConversation = items.length > 0;
   const canSend = useMemo(() => input.trim().length > 0 && !isSending, [input, isSending]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(CHAT_HISTORY_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          setItems(
+            parsed.filter(
+              (item): item is ConversationItem =>
+                typeof item?.id === "string" && typeof item?.prompt === "string",
+            ),
+          );
+        }
+      }
+    } finally {
+      setHistoryLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!historyLoaded) {
+      return;
+    }
+
+    localStorage.setItem(
+      CHAT_HISTORY_KEY,
+      JSON.stringify(items.slice(-MAX_CHAT_HISTORY_ITEMS)),
+    );
+  }, [historyLoaded, items]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -117,7 +152,11 @@ export function ChatPanel() {
 
     const settings = readAgentSettings();
     const itemId = crypto.randomUUID();
-    const nextItem: ConversationItem = { id: itemId, prompt: message };
+    const nextItem: ConversationItem = {
+      id: itemId,
+      prompt: message,
+      createdAt: new Date().toISOString(),
+    };
 
     setItems((current) => [...current, nextItem]);
     setInput("");

@@ -61,6 +61,13 @@ class ChatResponse(BaseModel):
 
 
 TASK_SECTION_NAMES = ("A&M", "XO", "Freelance", "Personal", "Misc")
+LIFE_AREA_DESCRIPTIONS = {
+    "A&M": "College, TAMU, Blinn, housing, registration",
+    "XO": "VR, prototype, headset, Ashwin, Charlie",
+    "Freelance": "clients, outreach, websites, invoices",
+    "Personal": "gym, health, shopping, errands, car, life admin",
+    "Misc": "uncategorized",
+}
 
 
 class MemoryCreate(BaseModel):
@@ -199,6 +206,21 @@ class CalendarConflict(BaseModel):
 class CalendarResponse(BaseModel):
     events: list[CalendarEvent]
     conflicts: list[CalendarConflict]
+    errors: list[str] = Field(default_factory=list)
+
+
+class LifeArea(BaseModel):
+    name: str
+    description: str
+    status: str
+    task_count: int
+    overdue_count: int
+    today_count: int
+    high_priority_count: int
+
+
+class TodayResponse(BaseModel):
+    life_areas: list[LifeArea]
     errors: list[str] = Field(default_factory=list)
 
 
@@ -390,6 +412,31 @@ def tasks_index(
     }
 
 
+@app.get("/today", response_model=TodayResponse)
+def today_index(
+    current_time: datetime | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_agent_api_key(authorization)
+    settings = get_settings()
+    todoist_result = list_active_tasks(settings)
+    local_now = current_time.astimezone(settings.local_tz) if current_time else datetime.now(settings.local_tz)
+    enriched_tasks = [
+        enrich_task(task, local_now.date()) for task in todoist_result.tasks if task.get("content")
+    ]
+
+    grouped: dict[str, list[dict[str, Any]]] = {section: [] for section in TASK_SECTION_NAMES}
+    for task in enriched_tasks:
+        grouped[_task_section_for(task)].append(task)
+
+    return {
+        "life_areas": [
+            _life_area_summary(section, grouped[section]) for section in TASK_SECTION_NAMES
+        ],
+        "errors": [todoist_result.error] if todoist_result.error else [],
+    }
+
+
 @app.get("/calendar", response_model=CalendarResponse)
 def calendar_index(
     days: int = 7,
@@ -457,6 +504,60 @@ def _task_item(task: dict[str, Any], section: str) -> dict[str, Any]:
         "labels": task.get("labels") or [],
         "url": task.get("url"),
     }
+
+
+def _life_area_summary(section: str, tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    overdue_count = sum(1 for task in tasks if task.get("due_status") == "overdue")
+    today_count = sum(1 for task in tasks if task.get("due_status") == "today")
+    high_priority_count = sum(1 for task in tasks if _is_high_priority_task(task))
+
+    return {
+        "name": section,
+        "description": LIFE_AREA_DESCRIPTIONS[section],
+        "status": _life_area_status(
+            task_count=len(tasks),
+            overdue_count=overdue_count,
+            today_count=today_count,
+            high_priority_count=high_priority_count,
+        ),
+        "task_count": len(tasks),
+        "overdue_count": overdue_count,
+        "today_count": today_count,
+        "high_priority_count": high_priority_count,
+    }
+
+
+def _life_area_status(
+    *,
+    task_count: int,
+    overdue_count: int,
+    today_count: int,
+    high_priority_count: int,
+) -> str:
+    if overdue_count > 0:
+        return "Needs attention"
+    if high_priority_count > 0:
+        return "High priority active"
+    if today_count > 0:
+        return "Due today"
+    if task_count > 0:
+        return "Clear for steady work"
+    return "Clear"
+
+
+def _is_high_priority_task(task: dict[str, Any]) -> bool:
+    raw_priority = task.get("todoist_priority")
+    if raw_priority is not None:
+        try:
+            return int(raw_priority) >= 4
+        except (TypeError, ValueError):
+            return False
+
+    priority = task.get("priority")
+    try:
+        return int(priority) >= 4
+    except (TypeError, ValueError):
+        return False
 
 
 def _detect_calendar_conflicts(events: list[dict[str, Any]]) -> list[dict[str, Any]]:

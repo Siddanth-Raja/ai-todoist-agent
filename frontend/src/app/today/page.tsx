@@ -19,51 +19,15 @@ import {
   Waves,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { apiRequest, formatDateTime, type ActivityEntry } from "@/lib/api";
+import { apiRequest, formatDateTime, type ActivityEntry, type LifeArea, type TodayResponse } from "@/lib/api";
 
-type LifeArea = {
-  name: string;
-  subtitle: string;
-  tasks: number;
-  overdue: number;
-  status: string;
-  gradient: string;
+const lifeAreaGradients: Record<string, string> = {
+  "A&M": "from-rose-300/20 via-white/[0.055] to-white/[0.035]",
+  XO: "from-sky-300/20 via-white/[0.055] to-white/[0.035]",
+  Freelance: "from-moss/20 via-white/[0.055] to-white/[0.035]",
+  Personal: "from-gold/20 via-white/[0.055] to-white/[0.035]",
+  Misc: "from-iris/20 via-white/[0.055] to-white/[0.035]",
 };
-
-const lifeAreas: LifeArea[] = [
-  {
-    name: "A&M",
-    subtitle: "Shared life, home rhythm, relationship care",
-    tasks: 5,
-    overdue: 1,
-    status: "Needs a gentle check-in",
-    gradient: "from-rose-300/20 via-white/[0.055] to-white/[0.035]",
-  },
-  {
-    name: "XO",
-    subtitle: "Leadership loops, decisions, operating cadence",
-    tasks: 8,
-    overdue: 2,
-    status: "Two decisions waiting",
-    gradient: "from-sky-300/20 via-white/[0.055] to-white/[0.035]",
-  },
-  {
-    name: "Freelance",
-    subtitle: "Client delivery, cashflow, pipeline",
-    tasks: 4,
-    overdue: 0,
-    status: "Clear for deep work",
-    gradient: "from-moss/20 via-white/[0.055] to-white/[0.035]",
-  },
-  {
-    name: "Personal",
-    subtitle: "Health, recovery, errands, maintenance",
-    tasks: 6,
-    overdue: 1,
-    status: "One loose end",
-    gradient: "from-gold/20 via-white/[0.055] to-white/[0.035]",
-  },
-];
 
 function getGreeting(hour: number) {
   if (hour < 12) {
@@ -102,6 +66,27 @@ function iconForActivity(value: string): LucideIcon {
   return Activity;
 }
 
+function gradientForLifeArea(name: string) {
+  return lifeAreaGradients[name] ?? lifeAreaGradients.Misc;
+}
+
+function metricsForLifeArea(area: LifeArea) {
+  const metrics = [
+    { label: "Tasks", value: area.task_count },
+    { label: "Overdue", value: area.overdue_count },
+  ];
+
+  if (area.today_count > 0) {
+    metrics.push({ label: "Today", value: area.today_count });
+  }
+
+  if (area.high_priority_count > 0) {
+    metrics.push({ label: "High", value: area.high_priority_count });
+  }
+
+  return metrics;
+}
+
 function SoftCard({
   children,
   className = "",
@@ -136,11 +121,28 @@ function SectionTitle({
 
 export default function TodayPage() {
   const [now, setNow] = useState(() => new Date());
+  const [lifeAreas, setLifeAreas] = useState<LifeArea[]>([]);
+  const [isLifeAreasLoading, setIsLifeAreasLoading] = useState(true);
+  const [lifeAreaError, setLifeAreaError] = useState<string | null>(null);
+  const [lifeAreaWarnings, setLifeAreaWarnings] = useState<string[]>([]);
   const [activityEntries, setActivityEntries] = useState<ActivityEntry[]>([]);
   const [activityError, setActivityError] = useState<string | null>(null);
 
   useEffect(() => {
     setNow(new Date());
+    apiRequest<TodayResponse>("/today")
+      .then((today) => {
+        setLifeAreas(today.life_areas);
+        setLifeAreaWarnings(today.errors);
+        setLifeAreaError(null);
+      })
+      .catch((error) => {
+        setLifeAreaError(error instanceof Error ? error.message : "Unable to load life areas.");
+      })
+      .finally(() => {
+        setIsLifeAreasLoading(false);
+      });
+
     apiRequest<ActivityEntry[]>("/activity?limit=5")
       .then((entries) => {
         setActivityEntries(entries);
@@ -280,39 +282,67 @@ export default function TodayPage() {
           detail="Enough signal to know where attention is needed, without turning your life into a spreadsheet."
         />
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {lifeAreas.map((area) => (
-            <article
-              key={area.name}
-              className={`min-h-60 rounded-[2rem] border border-white/10 bg-gradient-to-br ${area.gradient} p-5 shadow-card backdrop-blur-2xl`}
-            >
-              <div className="flex h-full flex-col justify-between gap-8">
-                <div>
-                  <div className="mb-8 flex items-start justify-between gap-3">
-                    <div>
-                      <h4 className="text-3xl font-semibold text-pearl">{area.name}</h4>
-                      <p className="mt-3 text-sm leading-6 text-stone-400">{area.subtitle}</p>
-                    </div>
-                    <ArrowRight className="h-5 w-5 text-stone-500" aria-hidden="true" />
-                  </div>
-                  <p className="rounded-full border border-white/10 bg-black/20 px-3 py-2 text-sm text-stone-300">
-                    {area.status}
-                  </p>
-                </div>
+        {lifeAreaError ? (
+          <div className="rounded-[1.4rem] border border-coral/25 bg-coral/10 p-4 text-sm text-coral">
+            <div className="flex items-center gap-2 font-medium">
+              <CircleAlert className="h-4 w-4" aria-hidden="true" />
+              Life areas unavailable
+            </div>
+            <p className="mt-2 leading-6">{lifeAreaError}</p>
+          </div>
+        ) : null}
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="rounded-2xl bg-black/20 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-stone-500">Tasks</p>
-                    <p className="mt-2 text-3xl font-semibold text-pearl">{area.tasks}</p>
+        {lifeAreaWarnings.length > 0 ? (
+          <div className="rounded-[1.4rem] border border-gold/25 bg-gold/10 p-4 text-sm text-gold">
+            {lifeAreaWarnings.join(" ")}
+          </div>
+        ) : null}
+
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          {isLifeAreasLoading
+            ? Array.from({ length: 5 }).map((_, index) => (
+                <article
+                  key={index}
+                  className="min-h-60 animate-pulse rounded-[2rem] border border-white/10 bg-white/[0.055] p-5 shadow-card backdrop-blur-2xl"
+                >
+                  <div className="h-8 w-24 rounded-lg bg-white/10" />
+                  <div className="mt-4 h-16 rounded-lg bg-white/10" />
+                  <div className="mt-8 grid grid-cols-2 gap-3">
+                    <div className="h-24 rounded-2xl bg-black/20" />
+                    <div className="h-24 rounded-2xl bg-black/20" />
                   </div>
-                  <div className="rounded-2xl bg-black/20 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-stone-500">Overdue</p>
-                    <p className="mt-2 text-3xl font-semibold text-pearl">{area.overdue}</p>
+                </article>
+              ))
+            : lifeAreas.map((area) => (
+                <article
+                  key={area.name}
+                  className={`min-h-60 rounded-[2rem] border border-white/10 bg-gradient-to-br ${gradientForLifeArea(area.name)} p-5 shadow-card backdrop-blur-2xl`}
+                >
+                  <div className="flex h-full flex-col justify-between gap-8">
+                    <div>
+                      <div className="mb-8 flex items-start justify-between gap-3">
+                        <div>
+                          <h4 className="text-3xl font-semibold text-pearl">{area.name}</h4>
+                          <p className="mt-3 text-sm leading-6 text-stone-400">{area.description}</p>
+                        </div>
+                        <ArrowRight className="h-5 w-5 text-stone-500" aria-hidden="true" />
+                      </div>
+                      <p className="rounded-full border border-white/10 bg-black/20 px-3 py-2 text-sm text-stone-300">
+                        {area.status}
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      {metricsForLifeArea(area).map((metric) => (
+                        <div key={metric.label} className="rounded-2xl bg-black/20 p-4">
+                          <p className="text-xs uppercase tracking-[0.18em] text-stone-500">{metric.label}</p>
+                          <p className="mt-2 text-3xl font-semibold text-pearl">{metric.value}</p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              </div>
-            </article>
-          ))}
+                </article>
+              ))}
         </div>
       </section>
 

@@ -180,6 +180,69 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         self.assertTrue(sections["Personal"][0]["completed"])
         self.assertEqual(payload["errors"], [])
 
+    def test_today_endpoint_summarizes_life_areas_from_todoist(self):
+        tasks = [
+            {
+                "id": "task-am",
+                "content": "Submit housing form",
+                "description": "",
+                "section_name": "A&M",
+                "due": {"date": "2026-06-04"},
+                "priority": 1,
+                "todoist_priority": 1,
+                "labels": [],
+            },
+            {
+                "id": "task-xo",
+                "content": "Review headset prototype",
+                "description": "",
+                "section_name": "XO",
+                "due": {"date": "2026-06-05"},
+                "priority": 1,
+                "todoist_priority": 1,
+                "labels": [],
+            },
+            {
+                "id": "task-freelance",
+                "content": "Send client invoice",
+                "description": "",
+                "section_name": "Freelance",
+                "due": None,
+                "priority": 1,
+                "todoist_priority": 4,
+                "labels": [],
+            },
+            {
+                "id": "task-personal",
+                "content": "Buy groceries",
+                "description": "",
+                "section_name": "Personal",
+                "due": None,
+                "priority": 1,
+                "todoist_priority": 1,
+                "labels": [],
+            },
+        ]
+        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)):
+            payload = main.today_index(
+                current_time=datetime(2026, 6, 5, 12, 0, tzinfo=ZoneInfo("America/Chicago")),
+                authorization=self.authorization,
+            )
+
+        areas = {area["name"]: area for area in payload["life_areas"]}
+        self.assertEqual(areas["A&M"]["description"], "College, TAMU, Blinn, housing, registration")
+        self.assertEqual(areas["A&M"]["task_count"], 1)
+        self.assertEqual(areas["A&M"]["overdue_count"], 1)
+        self.assertEqual(areas["A&M"]["status"], "Needs attention")
+        self.assertEqual(areas["XO"]["today_count"], 1)
+        self.assertEqual(areas["XO"]["status"], "Due today")
+        self.assertEqual(areas["Freelance"]["high_priority_count"], 1)
+        self.assertEqual(areas["Freelance"]["status"], "High priority active")
+        self.assertEqual(areas["Personal"]["status"], "Clear for steady work")
+        self.assertEqual(areas["Misc"]["task_count"], 0)
+        self.assertEqual(areas["Misc"]["status"], "Clear")
+        self.assertEqual(payload["errors"], [])
+
     def test_calendar_endpoint_returns_labels_and_conflicts(self):
         events = [
             {

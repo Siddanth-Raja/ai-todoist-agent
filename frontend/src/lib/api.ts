@@ -99,6 +99,21 @@ export type ActivityEntry = {
   created_at: string;
 };
 
+export type LifeArea = {
+  name: string;
+  description: string;
+  status: string;
+  task_count: number;
+  overdue_count: number;
+  today_count: number;
+  high_priority_count: number;
+};
+
+export type TodayResponse = {
+  life_areas: LifeArea[];
+  errors: string[];
+};
+
 export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const settings = readAgentSettings();
   if (!settings.apiKey) {

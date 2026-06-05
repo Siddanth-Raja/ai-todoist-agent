@@ -39,10 +39,13 @@ GOOGLE_CALENDAR_ID=primary
 
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.4-mini
+
+AGENT_API_KEY=choose_a_private_api_key_for_chat_requests
 ```
 
 `GOOGLE_CALENDAR_ID` defaults to `primary` if omitted.
 `OPENAI_MODEL` defaults to `gpt-5.4-mini` if omitted.
+`AGENT_API_KEY` is required for `POST /chat`.
 
 ## 4. Get a Todoist API Token
 
@@ -173,7 +176,7 @@ Expected shape:
 ```json
 {
   "status": "ok",
-  "mode": "planning_read_only"
+  "mode": "ai_agent"
 }
 ```
 
@@ -181,6 +184,7 @@ Expected shape:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/chat \
+  -H "Authorization: Bearer $AGENT_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"message":"What should I work on right now?"}'
 ```
@@ -194,6 +198,7 @@ Expected response fields:
   "actions_taken": [],
   "needs_confirmation": false,
   "confirmation_prompt": null,
+  "pending_action": null,
   "free_block": {},
   "recommended_tasks": [],
   "calendar_events": [],
@@ -206,6 +211,7 @@ You can pass `current_time` for local testing:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/chat \
+  -H "Authorization: Bearer $AGENT_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"message":"I feel tired. What should I work on right now?","current_time":"2026-06-04T14:00:00-05:00"}'
 ```
@@ -215,6 +221,7 @@ curl -X POST http://127.0.0.1:8000/chat \
 - The model never calls Todoist or Google directly. It returns structured JSON, then the backend executes allowed safe actions.
 - Unsafe actions are blocked: deletes, event moves, meeting cancellation, emails, attendee invites, and task completion unless explicitly requested.
 - Missing Todoist or Google credentials are returned as clear response errors.
+- `/chat` requires `Authorization: Bearer <AGENT_API_KEY>`. `/health` is public.
 - If OpenAI fails or `OPENAI_API_KEY` is invalid, `/chat` falls back to deterministic planning.
 - Secrets are loaded from `backend/.env`.
 - The backend does not print or return secret values.

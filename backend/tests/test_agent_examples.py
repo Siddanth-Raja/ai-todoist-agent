@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
+from fastapi import HTTPException
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app.agent as agent  # noqa: E402
 from app.agent import _decision_schema, _sanitize_decision, handle_chat  # noqa: E402
 from app.calendar_tools import CalendarReadResult, CalendarWriteResult  # noqa: E402
+from app.main import ChatRequest, chat, require_agent_api_key  # noqa: E402
 from app.todoist_tools import TodoistReadResult, TodoistWriteResult  # noqa: E402
 
 
@@ -26,6 +28,7 @@ class FakeSettings:
     timezone: str = "America/Chicago"
     openai_api_key: str | None = "openai-key"
     openai_model: str = "test-model"
+    agent_api_key: str | None = "test-agent-key"
 
     @property
     def local_tz(self):
@@ -160,6 +163,28 @@ class AgentExampleTests(unittest.TestCase):
         self.assertEqual(response["actions_taken"][0]["type"], "create_todoist_task")
         self.assertIn("Added Todoist task", response["answer"])
 
+    def test_water_bottle_capture_overrides_bad_planning_decision(self):
+        created_task = {
+            **TASKS[0],
+            "id": "task-water-bottle",
+            "content": "Buy a new water bottle from Target",
+            "project_name": "Personal",
+        }
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="You could think about errands later.",
+                intent="plan",
+                action_type="none",
+            ),
+            None,
+        )), patch("app.agent.create_task", return_value=TodoistWriteResult(task=created_task)):
+            response = handle_chat("I need to buy a new water bottle from Target", self.now)
+
+        self.assertEqual(response["intent"], "capture_task")
+        self.assertEqual(response["actions_taken"][0]["type"], "create_todoist_task")
+        self.assertEqual(response["actions_taken"][0]["task"]["project_name"], "Personal")
+        self.assertNotIn("think about errands later", response["answer"])
+
     def test_schedule_event(self):
         event = {
             "id": "event-brandon",
@@ -199,6 +224,22 @@ class AgentExampleTests(unittest.TestCase):
             schema["properties"]["pending_action"]["properties"]["type"]["enum"],
             ["resolve_calendar_conflict"],
         )
+
+    def test_structured_output_schema_objects_are_strict(self):
+        def check_object(node):
+            if isinstance(node, dict):
+                if node.get("type") == "object" or (
+                    isinstance(node.get("type"), list) and "object" in node["type"]
+                ):
+                    self.assertIn("additionalProperties", node)
+                    self.assertFalse(node["additionalProperties"])
+                for value in node.values():
+                    check_object(value)
+            elif isinstance(node, list):
+                for value in node:
+                    check_object(value)
+
+        check_object(_decision_schema())
 
     def test_calendar_conflict_needs_confirmation(self):
         pending_action = {
@@ -336,6 +377,28 @@ class AgentExampleTests(unittest.TestCase):
         self.assertEqual(result["errors"][-1]["type"], "HTTPError")
         self.assertEqual(result["errors"][-1]["status"], 401)
         self.assertIn("Invalid API key", result["errors"][-1]["message"])
+
+    def test_api_auth_missing_returns_401(self):
+        with patch("app.main.get_settings", return_value=FakeSettings()):
+            with self.assertRaises(HTTPException) as exc:
+                require_agent_api_key(None)
+
+        self.assertEqual(exc.exception.status_code, 401)
+
+    def test_api_auth_valid_allows_chat(self):
+        with patch("app.main.get_settings", return_value=FakeSettings()):
+            require_agent_api_key("Bearer test-agent-key")
+
+            with patch("app.agent._get_llm_decision", return_value=(
+                self._decision(answer="Start with the Notion migration.", intent="plan"),
+                None,
+            )):
+                response = chat(
+                    ChatRequest(message="What should I work on right now?"),
+                    authorization="Bearer test-agent-key",
+                )
+
+        self.assertEqual(response["intent"], "plan")
 
     def _decision(
         self,

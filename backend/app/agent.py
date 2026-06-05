@@ -16,6 +16,26 @@ READ_ONLY_NOTE = "No changes were made."
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 OPENAI_TIMEOUT_SECONDS = 30
 PROJECT_CATEGORIES = ["A&M", "XO", "Nebulo", "Freelance", "Personal", "Misc"]
+PERSONAL_CAPTURE_KEYWORDS = {
+    "buy",
+    "purchase",
+    "order",
+    "target",
+    "grocery",
+    "groceries",
+    "shopping",
+    "errand",
+    "gym",
+    "health",
+    "doctor",
+    "dentist",
+    "car",
+    "oil change",
+    "registration",
+    "life admin",
+    "water bottle",
+    "socks",
+}
 ALLOWED_INTENTS = {
     "plan",
     "capture_task",
@@ -90,6 +110,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
         return fallback
 
     decision = _sanitize_decision(decision)
+    decision = _apply_capture_override(cleaned_message, decision)
     if decision["needs_confirmation"]:
         PENDING_ACTION = decision["pending_action"]
     elif active_pending_action:
@@ -191,6 +212,12 @@ def _build_llm_context(
                 "When a calendar conflict or reschedule choice needs a decision, include pending_action.type='resolve_calendar_conflict'.",
                 "If pending_action is present in context, interpret the next user message as an attempt to resolve it.",
             ],
+            "routing_rules": [
+                "Clear task-capture requests like 'I need to buy a new water bottle from Target' must be intent=capture_task and action_type=create_todoist_task.",
+                "Shopping, errands, personal purchases, gym/health, car, and life admin tasks belong in Personal.",
+                "Use Misc only when no better category fits.",
+                "Do not give planning advice for a clear capture request.",
+            ],
             "tool_boundary": "The model must not call external APIs. It returns a structured decision only; backend tools execute allowed actions.",
         },
     }
@@ -279,6 +306,8 @@ When needs_confirmation is true, confirmation_prompt must contain the decision b
 When the decision is about a calendar conflict, moving a flexible block, or rescheduling, pending_action must be {"type":"resolve_calendar_conflict","details":{...}}.
 If pending_action is provided in context, treat the user message as a possible resolution of that pending action and answer accordingly.
 For planning questions like "I feel lazy, what is one small useful thing I can do?", action_type must be none.
+For clear capture requests like "I need to buy a new water bottle from Target", return intent="capture_task", action_type="create_todoist_task", task.project_category="Personal", and no planning advice.
+Shopping, errands, personal purchases, gym/health, car, and life admin tasks are Personal. Misc is only for items with no better section.
 Always return valid JSON matching the schema.
 """.strip()
 
@@ -354,7 +383,24 @@ def _decision_schema() -> dict[str, Any]:
                     },
                     "details": {
                         "type": "object",
-                        "additionalProperties": True,
+                        "additionalProperties": False,
+                        "required": [
+                            "conflict",
+                            "options",
+                            "suggested_change",
+                            "affected_event",
+                            "requested_decision",
+                        ],
+                        "properties": {
+                            "conflict": {"type": ["string", "null"]},
+                            "options": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "suggested_change": {"type": ["string", "null"]},
+                            "affected_event": {"type": ["string", "null"]},
+                            "requested_decision": {"type": ["string", "null"]},
+                        },
                     },
                 },
             },
@@ -394,6 +440,101 @@ def _sanitize_decision(decision: dict[str, Any]) -> dict[str, Any]:
         "confirmation_prompt": decision.get("confirmation_prompt"),
         "pending_action": pending_action,
     }
+
+
+def _apply_capture_override(message: str, decision: dict[str, Any]) -> dict[str, Any]:
+    if not _is_clear_capture_request(message):
+        return decision
+
+    task_content = _capture_task_content(message)
+    category = _infer_capture_category(task_content)
+    task = decision.get("task") if isinstance(decision.get("task"), dict) else {}
+    task.update(
+        {
+            "content": task.get("content") or task_content,
+            "project_category": category,
+            "due_string": task.get("due_string"),
+            "labels": task.get("labels") or [],
+            "priority": task.get("priority") or 4,
+        }
+    )
+
+    decision.update(
+        {
+            "answer": f"I'll add this to Todoist under {category}: {task['content']}.",
+            "intent": "capture_task",
+            "action_type": "create_todoist_task",
+            "task": task,
+            "calendar_event": decision.get("calendar_event") or {
+                "title": None,
+                "start": None,
+                "end": None,
+            },
+            "needs_confirmation": False,
+            "confirmation_prompt": None,
+            "pending_action": None,
+        }
+    )
+    return decision
+
+
+def _is_clear_capture_request(message: str) -> bool:
+    text = message.lower().strip()
+    capture_starts = (
+        "i need to ",
+        "i need ",
+        "add ",
+        "remind me to ",
+        "todoist ",
+    )
+    if not text.startswith(capture_starts):
+        return False
+
+    schedule_words = ("meeting", "appointment", " at ", " from ", " tomorrow at ")
+    if any(word in text for word in schedule_words) and not any(
+        word in text for word in PERSONAL_CAPTURE_KEYWORDS
+    ):
+        return False
+
+    planning_words = ("what should", "should i", "plan", "prioritize")
+    return not any(word in text for word in planning_words)
+
+
+def _capture_task_content(message: str) -> str:
+    text = message.strip()
+    lowered = text.lower()
+    prefixes = [
+        "i need to ",
+        "i need ",
+        "add ",
+        "remind me to ",
+        "todoist ",
+    ]
+    for prefix in prefixes:
+        if lowered.startswith(prefix):
+            text = text[len(prefix) :]
+            break
+
+    if not text.lower().startswith(("buy ", "purchase ", "order ")):
+        if any(word in text.lower() for word in ("target", "water bottle", "socks", "groceries")):
+            text = f"Buy {text}"
+
+    return text[:1].upper() + text[1:]
+
+
+def _infer_capture_category(task_content: str) -> str:
+    text = task_content.lower()
+    if any(keyword in text for keyword in PERSONAL_CAPTURE_KEYWORDS):
+        return "Personal"
+    if any(keyword in text for keyword in ("client", "outreach", "business", "law firm", "invoice")):
+        return "Freelance"
+    if any(keyword in text for keyword in ("vr", "headset", "prototype", "environment")):
+        return "XO"
+    if any(keyword in text for keyword in ("nebulo", "agent", "context control")):
+        return "Nebulo"
+    if any(keyword in text for keyword in ("a&m", "college", "transcript", "housing")):
+        return "A&M"
+    return "Misc"
 
 
 def _execute_allowed_action(

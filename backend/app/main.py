@@ -1,10 +1,12 @@
 from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Header, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
 from .agent import MODE, handle_chat
+from .config import get_settings
 
 
 app = FastAPI(
@@ -41,8 +43,23 @@ def health() -> dict[str, str]:
     }
 
 
+def require_agent_api_key(authorization: str | None = Header(default=None)) -> None:
+    settings = get_settings()
+    expected_key = settings.agent_api_key
+    if not expected_key:
+        raise HTTPException(status_code=401, detail="AGENT_API_KEY is not configured")
+
+    expected_header = f"Bearer {expected_key}"
+    if authorization != expected_header:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
 @app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> dict[str, Any]:
+def chat(
+    request: ChatRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_agent_api_key(authorization)
     message = request.message.strip()
     if not message:
         raise HTTPException(status_code=400, detail="message cannot be blank")

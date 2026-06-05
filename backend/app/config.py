@@ -35,6 +35,7 @@ class Settings:
     timezone: str
     openai_api_key: str | None
     openai_model: str
+    agent_api_key: str | None
 
     @property
     def local_tz(self) -> ZoneInfo:
@@ -72,6 +73,7 @@ def get_settings() -> Settings:
         timezone=timezone,
         openai_api_key=_optional_env("OPENAI_API_KEY"),
         openai_model=_optional_env("OPENAI_MODEL") or "gpt-4o-mini",
+        agent_api_key=_optional_env("AGENT_API_KEY"),
     )
 
 

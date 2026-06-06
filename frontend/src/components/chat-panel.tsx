@@ -1,10 +1,23 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Loader2, Send, ShieldQuestion } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarPlus,
+  Check,
+  CheckCircle2,
+  ExternalLink,
+  ListTodo,
+  Loader2,
+  Pencil,
+  Send,
+  ShieldQuestion,
+  X,
+} from "lucide-react";
 import { readAgentSettings } from "@/lib/settings";
 
-type ChatAction = Record<string, unknown>;
+type JsonRecord = Record<string, unknown>;
+type ChatAction = JsonRecord;
 
 type ChatResponse = {
   answer: string;
@@ -31,12 +44,191 @@ type ConversationItem = {
 const CHAT_HISTORY_KEY = "pcos.chatHistory";
 const MAX_CHAT_HISTORY_ITEMS = 80;
 
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function getRecord(value: unknown, key: string): JsonRecord | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const nested = value[key];
+  return isRecord(nested) ? nested : null;
+}
+
+function getString(value: unknown, key: string): string | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const nested = value[key];
+  return typeof nested === "string" && nested.trim() ? nested.trim() : null;
+}
+
+function getNumber(value: unknown, key: string): number | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const nested = value[key];
+  return typeof nested === "number" && Number.isFinite(nested) ? nested : null;
+}
+
 function formatObject(value: unknown): string {
   if (typeof value === "string") {
     return value;
   }
 
   return JSON.stringify(value, null, 2);
+}
+
+function formatDateTime(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatDateTimeRange(start: string | null, end: string | null): string | null {
+  const formattedStart = formatDateTime(start);
+  const formattedEnd = formatDateTime(end);
+  if (formattedStart && formattedEnd) {
+    return `${formattedStart} - ${formattedEnd}`;
+  }
+  return formattedStart || formattedEnd;
+}
+
+function formatDuration(minutes: number | null): string | null {
+  if (minutes === null) {
+    return null;
+  }
+
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours} hr ${remainder} min` : `${hours} hr`;
+}
+
+function projectFromTitle(title: string | null): string | null {
+  if (!title) {
+    return null;
+  }
+
+  const match = title.match(/^(.+?)\s+[—-]\s+/);
+  return match?.[1]?.trim() || null;
+}
+
+function projectFromAction(action: ChatAction): string | null {
+  return (
+    getString(action, "resolved_project") ||
+    getString(action, "project_context") ||
+    getString(getRecord(action, "task"), "resolved_project") ||
+    getString(getRecord(action, "task"), "project_category") ||
+    projectFromTitle(getString(getRecord(action, "event"), "title"))
+  );
+}
+
+function FieldRow({ label, value }: { label: string; value: string | number | null | undefined }) {
+  if (value === null || typeof value === "undefined" || value === "") {
+    return null;
+  }
+
+  return (
+    <div className="grid grid-cols-[6.5rem_1fr] gap-3 text-xs leading-5">
+      <dt className="text-stone-500">{label}</dt>
+      <dd className="min-w-0 break-words text-stone-200">{value}</dd>
+    </div>
+  );
+}
+
+function CardLink({ href, children }: { href: string | null; children: string }) {
+  if (!href) {
+    return null;
+  }
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      className="mt-3 inline-flex h-9 items-center gap-2 rounded-md border border-white/10 bg-white/[0.04] px-3 text-xs font-medium text-stone-100 transition hover:border-moss/40 hover:text-moss"
+    >
+      {children}
+      <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+    </a>
+  );
+}
+
+function CalendarActionCard({ action }: { action: ChatAction }) {
+  const event = getRecord(action, "event") ?? action;
+  const title = getString(event, "title");
+  const start = getString(event, "start");
+  const end = getString(event, "end");
+  const duration = formatDuration(getNumber(event, "duration_minutes"));
+  const category = getString(event, "event_category") || getString(event, "event_type");
+  const project = projectFromAction(action);
+  const link = getString(event, "html_link") || getString(event, "url");
+
+  return (
+    <div className="rounded-lg border border-moss/30 bg-moss/10 p-4">
+      <div className="mb-3 flex items-center gap-2 text-sm font-medium text-moss">
+        <CalendarPlus className="h-4 w-4" aria-hidden="true" />
+        Calendar event added
+      </div>
+      <dl className="space-y-2">
+        <FieldRow label="Title" value={title} />
+        <FieldRow label="Date/time" value={formatDateTimeRange(start, end)} />
+        <FieldRow label="Duration" value={duration} />
+        <FieldRow label="Category" value={category} />
+        <FieldRow label="Project" value={project} />
+      </dl>
+      <CardLink href={link}>Open in Google Calendar</CardLink>
+    </div>
+  );
+}
+
+function TodoistActionCard({ action }: { action: ChatAction }) {
+  const task = getRecord(action, "task") ?? action;
+  const title = getString(task, "content");
+  const section =
+    getString(task, "section_name") ||
+    getString(task, "project_category") ||
+    getString(task, "section");
+  const priority = getNumber(task, "priority");
+  const dueDate = getString(task, "due_date") || getString(task, "due_string");
+  const link = getString(task, "url");
+
+  return (
+    <div className="rounded-lg border border-moss/30 bg-moss/10 p-4">
+      <div className="mb-3 flex items-center gap-2 text-sm font-medium text-moss">
+        <ListTodo className="h-4 w-4" aria-hidden="true" />
+        Task added
+      </div>
+      <dl className="space-y-2">
+        <FieldRow label="Task" value={title} />
+        <FieldRow label="Section" value={section} />
+        <FieldRow label="Priority" value={priority ? `P${priority}` : null} />
+        <FieldRow label="Due" value={dueDate} />
+      </dl>
+      <CardLink href={link}>Open in Todoist</CardLink>
+    </div>
+  );
 }
 
 function ActionCards({ actions }: { actions: ChatAction[] }) {
@@ -46,76 +238,95 @@ function ActionCards({ actions }: { actions: ChatAction[] }) {
 
   return (
     <div className="space-y-2">
-      {actions.map((action, index) => (
-        <div key={index} className="rounded-lg border border-moss/25 bg-moss/10 p-3">
-          <div className="mb-2 flex items-center gap-2 text-sm font-medium text-moss">
-            <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-            Action taken
+      {actions.map((action, index) => {
+        const type = getString(action, "type");
+        if (type === "create_calendar_event") {
+          return <CalendarActionCard key={index} action={action} />;
+        }
+        if (type === "create_todoist_task") {
+          return <TodoistActionCard key={index} action={action} />;
+        }
+
+        return (
+          <div key={index} className="rounded-lg border border-moss/30 bg-moss/10 p-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-moss">
+              <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+              Action completed
+            </div>
           </div>
-          <pre className="overflow-x-auto whitespace-pre-wrap break-words text-xs leading-5 text-stone-300">
-            {formatObject(action)}
-          </pre>
+        );
+      })}
+    </div>
+  );
+}
+
+function readableError(error: string | ChatAction): string {
+  if (typeof error === "string") {
+    return error;
+  }
+
+  return getString(error, "message") || getString(error, "type") || "Something needs attention.";
+}
+
+function ResponseErrorCards({ errors }: { errors: Array<string | ChatAction> }) {
+  if (!errors.length) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-2">
+      {errors.map((error, index) => (
+        <div key={index} className="rounded-lg border border-coral/30 bg-coral/10 p-4 text-sm leading-6 text-coral">
+          <div className="mb-1 flex items-center gap-2 font-medium">
+            <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+            Attention needed
+          </div>
+          <p className="text-xs leading-5 text-stone-200">{readableError(error)}</p>
         </div>
       ))}
     </div>
   );
 }
 
-function confirmationDetails(response: ChatResponse): string[] {
-  const details: string[] = [];
+function confirmationEvent(response: ChatResponse): JsonRecord | null {
   const pendingAction = response.pending_action;
-
-  if (!pendingAction || typeof pendingAction !== "object") {
-    return details;
-  }
-
-  const actionDetails = pendingAction.details;
-  if (actionDetails && typeof actionDetails === "object" && !Array.isArray(actionDetails)) {
-    for (const key of ["conflict", "suggested_change", "affected_event", "requested_decision"]) {
-      const value = (actionDetails as Record<string, unknown>)[key];
-      if (typeof value === "string" && value.trim()) {
-        details.push(value.trim());
-      }
-    }
-  }
-
-  const task = pendingAction.task;
-  if (task && typeof task === "object" && !Array.isArray(task)) {
-    const content = (task as Record<string, unknown>).content;
-    const section = (task as Record<string, unknown>).section_name;
-    if (typeof content === "string" && content.trim()) {
-      details.push(`Task: ${content.trim()}`);
-    }
-    if (typeof section === "string" && section.trim()) {
-      details.push(`Section: ${section.trim()}`);
-    }
-  }
-
-  const calendarEvent = pendingAction.calendar_event;
-  if (calendarEvent && typeof calendarEvent === "object" && !Array.isArray(calendarEvent)) {
-    const event = calendarEvent as Record<string, unknown>;
-    const title = event.title;
-    const start = event.start;
-    if (typeof title === "string" && title.trim()) {
-      details.push(`Event: ${title.trim()}`);
-    }
-    if (typeof start === "string" && start.trim()) {
-      details.push(`Starts: ${start.trim()}`);
-    }
-  }
-
-  return Array.from(new Set(details)).slice(0, 4);
+  return getRecord(pendingAction, "calendar_event");
 }
 
-function ConfirmationCard({ response }: { response: ChatResponse }) {
+function confirmationProject(response: ChatResponse): string | null {
+  const pendingAction = response.pending_action;
+  const event = confirmationEvent(response);
+  return (
+    getString(pendingAction, "resolved_project") ||
+    getString(event, "resolved_project") ||
+    projectFromTitle(getString(event, "title"))
+  );
+}
+
+function ConfirmationCard({
+  response,
+  onConfirm,
+  onCancel,
+  onModify,
+  disabled,
+}: {
+  response: ChatResponse;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onModify: () => void;
+  disabled: boolean;
+}) {
   if (!response.needs_confirmation) {
     return null;
   }
 
-  const details = confirmationDetails(response);
+  const pendingType =
+    getString(response.pending_action, "action_type") || getString(response.pending_action, "type");
+  const event = confirmationEvent(response);
+  const project = confirmationProject(response);
 
   return (
-    <div className="rounded-lg border border-gold/30 bg-gold/10 p-4">
+    <div className="rounded-lg border border-gold/35 bg-gold/10 p-4">
       <div className="mb-2 flex items-center gap-2 text-sm font-medium text-gold">
         <ShieldQuestion className="h-4 w-4" aria-hidden="true" />
         Confirmation needed
@@ -123,32 +334,61 @@ function ConfirmationCard({ response }: { response: ChatResponse }) {
       <p className="text-sm leading-6 text-stone-200">
         {response.confirmation_prompt || "Review this pending action before it runs."}
       </p>
-      {details.length > 0 ? (
-        <div className="mt-3 space-y-2">
-          {details.map((detail) => (
-            <p key={detail} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-stone-300">
-              {detail}
-            </p>
-          ))}
-        </div>
+
+      {pendingType === "create_calendar_event" && event ? (
+        <dl className="mt-3 space-y-2 rounded-lg border border-white/10 bg-black/20 p-3">
+          <FieldRow label="Event" value={getString(event, "title")} />
+          <FieldRow label="Start" value={formatDateTime(getString(event, "start"))} />
+          <FieldRow label="End" value={formatDateTime(getString(event, "end"))} />
+          <FieldRow label="Project" value={project} />
+        </dl>
       ) : null}
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onConfirm}
+          className="inline-flex h-9 items-center gap-2 rounded-md bg-gold px-3 text-xs font-semibold text-ink transition hover:bg-[#ffe29a] disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Check className="h-3.5 w-3.5" aria-hidden="true" />
+          Confirm
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onCancel}
+          className="inline-flex h-9 items-center gap-2 rounded-md border border-white/10 bg-white/[0.04] px-3 text-xs font-medium text-stone-200 transition hover:border-coral/40 hover:text-coral disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <X className="h-3.5 w-3.5" aria-hidden="true" />
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onModify}
+          className="inline-flex h-9 items-center gap-2 rounded-md border border-white/10 bg-white/[0.04] px-3 text-xs font-medium text-stone-200 transition hover:border-gold/40 hover:text-gold disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+          Modify
+        </button>
+      </div>
     </div>
   );
 }
 
 function DevDebugPanel({ item }: { item: ConversationItem }) {
   const isDevelopment = process.env.NODE_ENV === "development";
-  const errors = item.response?.errors ?? [];
 
-  if (!isDevelopment || (!item.error && errors.length === 0)) {
+  if (!isDevelopment) {
     return null;
   }
 
   return (
-    <details className="rounded-lg border border-coral/25 bg-coral/10 p-3 text-xs text-coral">
-      <summary className="cursor-pointer font-medium">Debug</summary>
+    <details className="rounded-lg border border-white/10 bg-white/[0.035] p-3 text-xs text-stone-400">
+      <summary className="cursor-pointer font-medium text-stone-300">Debug</summary>
       <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words leading-5 text-stone-300">
-        {item.error || formatObject(errors)}
+        {formatObject({ error: item.error, response: item.response })}
       </pre>
     </details>
   );
@@ -160,6 +400,11 @@ export function ChatPanel() {
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const sessionIdRef = useRef<string>(
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random()}`,
+  );
 
   const hasConversation = items.length > 0;
   const canSend = useMemo(() => input.trim().length > 0 && !isSending, [input, isSending]);
@@ -194,16 +439,16 @@ export function ChatPanel() {
     );
   }, [historyLoaded, items]);
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const message = input.trim();
-
+  async function sendChatMessage(message: string) {
     if (!message || isSending) {
       return;
     }
 
     const settings = readAgentSettings();
-    const itemId = crypto.randomUUID();
+    const itemId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random()}`;
     const nextItem: ConversationItem = {
       id: itemId,
       prompt: message,
@@ -227,6 +472,7 @@ export function ChatPanel() {
         },
         body: JSON.stringify({
           message,
+          session_id: sessionIdRef.current,
           current_time: new Date().toISOString(),
         }),
       });
@@ -252,6 +498,19 @@ export function ChatPanel() {
       setIsSending(false);
       window.setTimeout(() => inputRef.current?.focus(), 0);
     }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await sendChatMessage(input.trim());
+  }
+
+  function handleModify(response: ChatResponse) {
+    const event = confirmationEvent(response);
+    const title = getString(event, "title");
+    const draft = title ? `Modify ${title}: ` : "Modify: ";
+    setInput(draft);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
   }
 
   return (
@@ -280,7 +539,14 @@ export function ChatPanel() {
                   {item.response.answer}
                 </div>
                 <ActionCards actions={item.response.actions_taken ?? []} />
-                <ConfirmationCard response={item.response} />
+                <ConfirmationCard
+                  response={item.response}
+                  disabled={isSending}
+                  onConfirm={() => void sendChatMessage("yes")}
+                  onCancel={() => void sendChatMessage("cancel")}
+                  onModify={() => handleModify(item.response as ChatResponse)}
+                />
+                <ResponseErrorCards errors={item.response.errors ?? []} />
                 <DevDebugPanel item={item} />
               </div>
             ) : item.error ? (

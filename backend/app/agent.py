@@ -135,6 +135,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
     todoist_result = list_active_tasks(settings)
     calendar_result = list_todays_events(settings, now=current_time)
     enabled_memories = _enabled_memory_entries()
+    resolved_memory = _resolve_memory_context(cleaned_message, enabled_memories)
     errors = [
         error
         for error in (todoist_result.error, calendar_result.error)
@@ -201,6 +202,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
         provider_errors=errors,
         pending_action=active_pending_action,
         memory_entries=enabled_memories,
+        resolved_memory=resolved_memory,
     )
     decision, llm_error = _get_llm_decision(settings, context)
     if llm_error or decision is None:
@@ -216,6 +218,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
 
     decision = _sanitize_decision(decision)
     decision = _apply_capture_override(cleaned_message, decision, local_now, enabled_memories)
+    decision = _apply_memory_resolution(decision, resolved_memory)
     if decision["needs_confirmation"]:
         PENDING_ACTION = decision["pending_action"]
     elif active_pending_action:
@@ -285,8 +288,11 @@ def _build_llm_context(
     provider_errors: list[str],
     pending_action: dict[str, Any] | None,
     memory_entries: list[dict[str, Any]],
+    resolved_memory: dict[str, Any] | None,
 ) -> dict[str, Any]:
     memory_context = _build_memory_context(memory_entries, message)
+    if resolved_memory:
+        memory_context["resolved_context"] = resolved_memory
     return {
         "user_message": message,
         "current_datetime": now.isoformat(),
@@ -434,6 +440,90 @@ def _memory_hints_for_message(
     return hints[:12]
 
 
+def _resolve_memory_context(
+    message: str,
+    memory_entries: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    matches: list[dict[str, str]] = []
+    category_scores: dict[str, int] = {}
+    category_contexts: dict[str, list[str]] = {}
+
+    for memory in memory_entries:
+        if not memory.get("enabled"):
+            continue
+
+        memory_type = _normalized_memory_type(str(memory.get("type") or ""))
+        if memory_type not in {"project", "person", "group"}:
+            continue
+
+        title = str(memory.get("title") or "").strip()
+        content = str(memory.get("content") or "").strip()
+        mentioned = _mentioned_memory_terms(message, title, content, memory_type)
+        if not mentioned:
+            continue
+
+        category = _category_from_memory_text(f"{title} {content}")
+        if not category and memory_type == "project" and title in PROJECT_CATEGORIES:
+            category = title
+        if not category:
+            continue
+
+        context = _context_from_memory_text(title, content, category)
+        weight = 3 if memory_type == "project" else 2 if memory_type == "person" else 1
+        category_scores[category] = category_scores.get(category, 0) + weight + len(mentioned)
+        category_contexts.setdefault(category, []).append(context)
+        matches.append(
+            {
+                "title": title,
+                "type": memory_type,
+                "matched_terms": ", ".join(mentioned),
+                "project_category": category,
+                "context": context,
+            }
+        )
+
+    if not matches:
+        return None
+
+    project = max(category_scores, key=lambda category: category_scores[category])
+    return {
+        "resolved_project": project,
+        "context": category_contexts[project][0],
+        "matches": [match for match in matches if match.get("project_category") == project][:6],
+    }
+
+
+def _mentioned_memory_terms(
+    message: str,
+    title: str,
+    content: str,
+    memory_type: str,
+) -> list[str]:
+    terms = [title]
+    if memory_type == "group":
+        terms.extend(re.split(r"[,/&]|\band\b", content, flags=re.IGNORECASE))
+
+    seen: set[str] = set()
+    mentioned: list[str] = []
+    for raw_term in terms:
+        term = re.sub(r"\s+", " ", raw_term).strip(" .,:;-")
+        if len(term) < 2:
+            continue
+        normalized = term.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if _message_mentions_term(message, term):
+            mentioned.append(term)
+
+    return mentioned
+
+
+def _message_mentions_term(message: str, term: str) -> bool:
+    pattern = rf"(?<![a-z0-9]){re.escape(term.lower())}(?![a-z0-9])"
+    return re.search(pattern, message.lower()) is not None
+
+
 def _category_from_memory_text(text: str) -> str | None:
     lowered = text.lower()
     if "nebulo" in lowered or "context control" in lowered or "context-control" in lowered:
@@ -444,6 +534,8 @@ def _category_from_memory_text(text: str) -> str | None:
         return "A&M"
     if "freelance" in lowered or "client" in lowered or "website" in lowered:
         return "Freelance"
+    if "carrollton" in lowered or "utd" in lowered:
+        return "Personal"
     if "personal" in lowered or "shopping" in lowered or "errand" in lowered:
         return "Personal"
     return None
@@ -560,6 +652,7 @@ def _decision_schema() -> dict[str, Any]:
             "action_type",
             "task",
             "calendar_event",
+            "resolved_project",
             "needs_confirmation",
             "confirmation_prompt",
             "pending_action",
@@ -616,12 +709,18 @@ def _decision_schema() -> dict[str, Any]:
             "calendar_event": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["title", "start", "end"],
+                "required": ["title", "start", "end", "description"],
                 "properties": {
                     "title": {"type": ["string", "null"]},
                     "start": {"type": ["string", "null"], "description": "ISO 8601 datetime with timezone."},
                     "end": {"type": ["string", "null"], "description": "ISO 8601 datetime with timezone."},
+                    "description": {"type": ["string", "null"]},
                 },
+            },
+            "resolved_project": {
+                "type": ["string", "null"],
+                "enum": ["A&M", "XO", "Nebulo", "Freelance", "Personal", "Misc", None],
+                "description": "Project/category resolved from Memory Center entity matches, if any.",
             },
             "needs_confirmation": {"type": "boolean"},
             "confirmation_prompt": {"type": ["string", "null"]},
@@ -702,6 +801,7 @@ def _sanitize_decision(decision: dict[str, Any]) -> dict[str, Any]:
         "action_type": action_type,
         "task": task,
         "calendar_event": calendar_event,
+        "resolved_project": _valid_project_category(decision.get("resolved_project")),
         "needs_confirmation": needs_confirmation,
         "confirmation_prompt": decision.get("confirmation_prompt"),
         "pending_action": pending_action,
@@ -728,12 +828,89 @@ def _executable_pending_action(
         pending["confirmation_prompt"] = confirmation_prompt
         pending["action_type"] = proposed_action_type
         pending["type"] = proposed_action_type
+        pending["resolved_project"] = _valid_project_category(task.get("project_category"))
         if proposed_action_type == "create_todoist_task":
             pending["task"] = task
         if proposed_action_type == "create_calendar_event":
             pending["calendar_event"] = calendar_event
 
     return pending
+
+
+def _valid_project_category(value: Any) -> str | None:
+    return value if value in PROJECT_CATEGORIES else None
+
+
+def _apply_memory_resolution(
+    decision: dict[str, Any],
+    resolved_memory: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not resolved_memory:
+        return decision
+
+    resolved_project = _valid_project_category(resolved_memory.get("resolved_project"))
+    if not resolved_project or resolved_project == "Misc":
+        return decision
+
+    decision["resolved_project"] = resolved_project
+    recognition = _recognition_sentence(resolved_memory)
+    answer = str(decision.get("answer") or "")
+    if recognition and recognition not in answer:
+        decision["answer"] = f"{recognition} {answer}".strip()
+
+    task = decision.get("task") if isinstance(decision.get("task"), dict) else {}
+    if task:
+        task["resolved_project"] = resolved_project
+        task["project_category"] = resolved_project
+        task["section_name"] = _section_name_for_category(resolved_project)
+        task["project_name"] = _project_name_for_category(resolved_project)
+        decision["task"] = task
+
+    calendar_event = (
+        decision.get("calendar_event") if isinstance(decision.get("calendar_event"), dict) else {}
+    )
+    if calendar_event:
+        title = str(calendar_event.get("title") or "").strip()
+        if title:
+            calendar_event["title"] = _prefix_title_with_project(title, resolved_project)
+        description = str(calendar_event.get("description") or "").strip()
+        context = str(resolved_memory.get("context") or "").strip()
+        context_line = f"Project context: {context}" if context else f"Project context: {resolved_project}"
+        calendar_event["description"] = (
+            f"{description}\n\n{context_line}".strip() if description else context_line
+        )
+        decision["calendar_event"] = calendar_event
+
+    pending_action = (
+        decision.get("pending_action") if isinstance(decision.get("pending_action"), dict) else None
+    )
+    if pending_action:
+        pending_action["resolved_project"] = resolved_project
+        if task and pending_action.get("action_type") == "create_todoist_task":
+            pending_action["task"] = task
+        if calendar_event and pending_action.get("action_type") == "create_calendar_event":
+            pending_action["calendar_event"] = calendar_event
+        decision["pending_action"] = pending_action
+
+    return decision
+
+
+def _recognition_sentence(resolved_memory: dict[str, Any]) -> str:
+    project = _valid_project_category(resolved_memory.get("resolved_project"))
+    matches = resolved_memory.get("matches") if isinstance(resolved_memory.get("matches"), list) else []
+    people = [match.get("title") for match in matches if match.get("type") == "person" and match.get("title")]
+    if project and len(people) == 1:
+        return f"I recognized {people[0]} as {project}."
+    if project:
+        return f"I recognized this as {project}."
+    return ""
+
+
+def _prefix_title_with_project(title: str, project: str) -> str:
+    prefix = f"{project} — "
+    if title == project or title.startswith(prefix):
+        return title
+    return f"{prefix}{title}"
 
 
 def _is_affirmative_confirmation(message: str) -> bool:
@@ -751,6 +928,7 @@ def _decision_from_pending_action(pending_action: dict[str, Any]) -> dict[str, A
             "action_type": "none",
             "task": {},
             "calendar_event": {},
+            "resolved_project": _valid_project_category(pending_action.get("resolved_project")),
             "needs_confirmation": False,
             "confirmation_prompt": None,
             "pending_action": None,
@@ -770,6 +948,7 @@ def _decision_from_pending_action(pending_action: dict[str, Any]) -> dict[str, A
             if isinstance(pending_action.get("calendar_event"), dict)
             else {}
         ),
+        "resolved_project": _valid_project_category(pending_action.get("resolved_project")),
         "needs_confirmation": False,
         "confirmation_prompt": None,
         "pending_action": None,
@@ -1025,7 +1204,7 @@ def _execute_allowed_action(
         if not content:
             return [], ["OpenAI proposed task creation without task content."]
 
-        category = task.get("project_category")
+        category = decision.get("resolved_project") or task.get("project_category")
         project_id = _project_id_for_category(tasks, category)
         result = create_task(
             settings=settings,
@@ -1063,6 +1242,7 @@ def _execute_allowed_action(
             end=end,
             existing_events=calendar_events,
             allow_conflicts=bool(decision.get("allow_conflicts")),
+            description=event.get("description"),
         )
         if result.error:
             return [], [result.error]
@@ -1162,6 +1342,7 @@ def _created_task_metadata(
         "due_date",
         "project_name",
         "section_name",
+        "resolved_project",
     ):
         value = proposed_task.get(key)
         if value is not None:

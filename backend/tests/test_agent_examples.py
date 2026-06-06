@@ -119,10 +119,58 @@ MEMORIES = [
         "enabled": True,
     },
     {
+        "id": "memory-person-andy",
+        "type": "person",
+        "title": "Andy",
+        "content": "A&M roommate.",
+        "confidence": 1.0,
+        "enabled": True,
+    },
+    {
+        "id": "memory-person-kamden",
+        "type": "person",
+        "title": "Kamden",
+        "content": "A&M roommate.",
+        "confidence": 1.0,
+        "enabled": True,
+    },
+    {
         "id": "memory-person-sam",
         "type": "person",
         "title": "Sam",
         "content": "Carrollton house / UTD friend group.",
+        "confidence": 1.0,
+        "enabled": True,
+    },
+    {
+        "id": "memory-person-jai",
+        "type": "person",
+        "title": "Jai",
+        "content": "Carrollton house / UTD friend group.",
+        "confidence": 1.0,
+        "enabled": True,
+    },
+    {
+        "id": "memory-person-krrish",
+        "type": "person",
+        "title": "Krrish",
+        "content": "Carrollton house / UTD friend group.",
+        "confidence": 1.0,
+        "enabled": True,
+    },
+    {
+        "id": "memory-group-am-roommates",
+        "type": "group",
+        "title": "A&M roommates",
+        "content": "Nikhil, Andy, Kamden.",
+        "confidence": 1.0,
+        "enabled": True,
+    },
+    {
+        "id": "memory-group-carrollton-utd",
+        "type": "group",
+        "title": "Carrollton house / UTD group",
+        "content": "Sam, Jai, Krrish.",
         "confidence": 1.0,
         "enabled": True,
     },
@@ -308,10 +356,14 @@ class AgentExampleTests(unittest.TestCase):
         with patch("app.agent._get_llm_decision", side_effect=fake_decision), patch(
             "app.agent.create_calendar_event",
             return_value=CalendarWriteResult(event=event),
-        ):
+        ) as create_event_mock:
             response = handle_chat("meeting with Brandon at 6", self.now)
 
+        create_event_kwargs = create_event_mock.call_args.kwargs
+        self.assertEqual(create_event_kwargs["title"], "Nebulo — Meeting with Brandon")
+        self.assertIn("Brandon: Associated with Nebulo.", create_event_kwargs["description"])
         self.assertEqual(response["intent"], "schedule_event")
+        self.assertIn("I recognized Brandon as Nebulo.", response["answer"])
 
     def test_ashwin_and_charlie_memory_hints_map_to_xo(self):
         def fake_decision(settings, context):
@@ -335,6 +387,162 @@ class AgentExampleTests(unittest.TestCase):
             response = handle_chat("meet with Ashwin and Charlie", self.now)
 
         self.assertEqual(response["intent"], "schedule_event")
+
+    def test_ashwin_and_charlie_meeting_prefixes_xo_event_title(self):
+        event = {
+            "id": "event-xo",
+            "title": "XO — Meeting with Ashwin and Charlie",
+            "start": "2026-06-05T16:00:00-05:00",
+            "end": "2026-06-05T17:00:00-05:00",
+        }
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="I can put that on your calendar.",
+                intent="schedule_event",
+                action_type="create_calendar_event",
+                calendar_event={
+                    "title": "Meeting with Ashwin and Charlie",
+                    "start": "2026-06-05T16:00:00-05:00",
+                    "end": "2026-06-05T17:00:00-05:00",
+                    "description": None,
+                },
+            ),
+            None,
+        )), patch(
+            "app.agent.create_calendar_event",
+            return_value=CalendarWriteResult(event=event),
+        ) as create_event_mock:
+            response = handle_chat("meet with Ashwin and Charlie tomorrow at 4", self.now)
+
+        create_event_kwargs = create_event_mock.call_args.kwargs
+        self.assertEqual(create_event_kwargs["title"], "XO — Meeting with Ashwin and Charlie")
+        self.assertIn("Project context:", create_event_kwargs["description"])
+        self.assertIn("XO", create_event_kwargs["description"])
+        self.assertIn("I recognized this as XO.", response["answer"])
+
+    def test_am_roommates_resolve_to_am_context(self):
+        event = {
+            "id": "event-roommates",
+            "title": "A&M — Meeting with Nikhil, Andy, and Kamden",
+            "start": "2026-06-04T18:00:00-05:00",
+            "end": "2026-06-04T19:00:00-05:00",
+        }
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="I can add that.",
+                intent="schedule_event",
+                action_type="create_calendar_event",
+                calendar_event={
+                    "title": "Meeting with Nikhil, Andy, and Kamden",
+                    "start": "2026-06-04T18:00:00-05:00",
+                    "end": "2026-06-04T19:00:00-05:00",
+                    "description": None,
+                },
+            ),
+            None,
+        )), patch(
+            "app.agent.create_calendar_event",
+            return_value=CalendarWriteResult(event=event),
+        ) as create_event_mock:
+            response = handle_chat("meeting with Nikhil, Andy, and Kamden at 6", self.now)
+
+        self.assertEqual(create_event_mock.call_args.kwargs["title"], "A&M — Meeting with Nikhil, Andy, and Kamden")
+        self.assertIn("I recognized this as A&M.", response["answer"])
+
+    def test_carrollton_utd_group_resolves_to_personal_not_am(self):
+        event = {
+            "id": "event-carrollton",
+            "title": "Personal — Meeting with Sam, Jai, and Krrish",
+            "start": "2026-06-04T18:00:00-05:00",
+            "end": "2026-06-04T19:00:00-05:00",
+        }
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="I can add that.",
+                intent="schedule_event",
+                action_type="create_calendar_event",
+                calendar_event={
+                    "title": "Meeting with Sam, Jai, and Krrish",
+                    "start": "2026-06-04T18:00:00-05:00",
+                    "end": "2026-06-04T19:00:00-05:00",
+                    "description": None,
+                },
+            ),
+            None,
+        )), patch(
+            "app.agent.create_calendar_event",
+            return_value=CalendarWriteResult(event=event),
+        ) as create_event_mock:
+            response = handle_chat("meeting with Sam, Jai, and Krrish at 6", self.now)
+
+        create_event_kwargs = create_event_mock.call_args.kwargs
+        self.assertEqual(create_event_kwargs["title"], "Personal — Meeting with Sam, Jai, and Krrish")
+        self.assertIn("Carrollton house / UTD", create_event_kwargs["description"])
+        self.assertNotIn("A&M —", create_event_kwargs["title"])
+        self.assertIn("I recognized this as Personal.", response["answer"])
+
+    def test_no_memory_match_keeps_plain_event_title(self):
+        event = {
+            "id": "event-jordan",
+            "title": "Meeting with Jordan",
+            "start": "2026-06-04T18:00:00-05:00",
+            "end": "2026-06-04T19:00:00-05:00",
+        }
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="I can add that.",
+                intent="schedule_event",
+                action_type="create_calendar_event",
+                calendar_event={
+                    "title": "Meeting with Jordan",
+                    "start": "2026-06-04T18:00:00-05:00",
+                    "end": "2026-06-04T19:00:00-05:00",
+                    "description": None,
+                },
+            ),
+            None,
+        )), patch(
+            "app.agent.create_calendar_event",
+            return_value=CalendarWriteResult(event=event),
+        ) as create_event_mock:
+            response = handle_chat("meeting with Jordan at 6", self.now)
+
+        self.assertEqual(create_event_mock.call_args.kwargs["title"], "Meeting with Jordan")
+        self.assertIsNone(create_event_mock.call_args.kwargs["description"])
+        self.assertNotIn("I recognized", response["answer"])
+
+    def test_resolved_project_routes_todoist_task_to_section(self):
+        created_task = {
+            **TASKS[0],
+            "id": "task-brandon",
+            "content": "Call Brandon",
+            "section_name": "Nebulo",
+        }
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="I can add that.",
+                intent="capture_task",
+                action_type="create_todoist_task",
+                task={
+                    "content": "Call Brandon",
+                    "project_category": "Misc",
+                    "due_string": None,
+                    "due_date": None,
+                    "labels": [],
+                    "priority": 4,
+                    "project_name": None,
+                    "section_name": None,
+                },
+            ),
+            None,
+        )), patch("app.agent.create_task", return_value=TodoistWriteResult(task=created_task)) as create_task_mock:
+            response = handle_chat("call Brandon", self.now)
+
+        create_task_kwargs = create_task_mock.call_args.kwargs
+        self.assertEqual(create_task_kwargs["section_name"], "Nebulo")
+        self.assertEqual(response["actions_taken"][0]["task"]["project_category"], "Nebulo")
+        self.assertEqual(response["actions_taken"][0]["task"]["resolved_project"], "Nebulo")
+        self.assertIn("I recognized Brandon as Nebulo.", response["answer"])
 
     def test_disabled_memories_are_not_in_openai_context(self):
         def fake_decision(settings, context):
@@ -571,8 +779,10 @@ class AgentExampleTests(unittest.TestCase):
 
         self.assertTrue(response["needs_confirmation"])
         self.assertEqual(response["confirmation_prompt"], "Move gym or keep the calendar unchanged?")
-        self.assertEqual(response["pending_action"], pending_action)
-        self.assertEqual(agent.PENDING_ACTION, pending_action)
+        self.assertEqual(response["pending_action"]["type"], pending_action["type"])
+        self.assertEqual(response["pending_action"]["details"], pending_action["details"])
+        self.assertEqual(response["pending_action"]["resolved_project"], "Nebulo")
+        self.assertEqual(agent.PENDING_ACTION, response["pending_action"])
         self.assertEqual(response["actions_taken"], [])
 
     def test_reschedule_suggestion_needs_confirmation(self):
@@ -715,6 +925,7 @@ class AgentExampleTests(unittest.TestCase):
         action_type="none",
         task=None,
         calendar_event=None,
+        resolved_project=None,
         needs_confirmation=False,
         confirmation_prompt=None,
         pending_action=None,
@@ -737,7 +948,9 @@ class AgentExampleTests(unittest.TestCase):
                 "title": None,
                 "start": None,
                 "end": None,
+                "description": None,
             },
+            "resolved_project": resolved_project,
             "needs_confirmation": needs_confirmation,
             "confirmation_prompt": confirmation_prompt,
             "pending_action": pending_action,

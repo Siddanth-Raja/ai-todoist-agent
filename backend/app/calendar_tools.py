@@ -177,6 +177,7 @@ def create_calendar_event(
     end: datetime,
     existing_events: list[dict[str, Any]],
     allow_conflicts: bool = False,
+    description: str | None = None,
 ) -> CalendarWriteResult:
     """Create a simple calendar event if it does not conflict with blocking events."""
     missing_fields = settings.missing_google_calendar_fields
@@ -213,6 +214,8 @@ def create_calendar_event(
             "timeZone": settings.timezone,
         },
     }
+    if description:
+        body["description"] = description
 
     try:
         service = _build_calendar_service(settings)

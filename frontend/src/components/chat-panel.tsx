@@ -61,10 +61,58 @@ function ActionCards({ actions }: { actions: ChatAction[] }) {
   );
 }
 
+function confirmationDetails(response: ChatResponse): string[] {
+  const details: string[] = [];
+  const pendingAction = response.pending_action;
+
+  if (!pendingAction || typeof pendingAction !== "object") {
+    return details;
+  }
+
+  const actionDetails = pendingAction.details;
+  if (actionDetails && typeof actionDetails === "object" && !Array.isArray(actionDetails)) {
+    for (const key of ["conflict", "suggested_change", "affected_event", "requested_decision"]) {
+      const value = (actionDetails as Record<string, unknown>)[key];
+      if (typeof value === "string" && value.trim()) {
+        details.push(value.trim());
+      }
+    }
+  }
+
+  const task = pendingAction.task;
+  if (task && typeof task === "object" && !Array.isArray(task)) {
+    const content = (task as Record<string, unknown>).content;
+    const section = (task as Record<string, unknown>).section_name;
+    if (typeof content === "string" && content.trim()) {
+      details.push(`Task: ${content.trim()}`);
+    }
+    if (typeof section === "string" && section.trim()) {
+      details.push(`Section: ${section.trim()}`);
+    }
+  }
+
+  const calendarEvent = pendingAction.calendar_event;
+  if (calendarEvent && typeof calendarEvent === "object" && !Array.isArray(calendarEvent)) {
+    const event = calendarEvent as Record<string, unknown>;
+    const title = event.title;
+    const start = event.start;
+    if (typeof title === "string" && title.trim()) {
+      details.push(`Event: ${title.trim()}`);
+    }
+    if (typeof start === "string" && start.trim()) {
+      details.push(`Starts: ${start.trim()}`);
+    }
+  }
+
+  return Array.from(new Set(details)).slice(0, 4);
+}
+
 function ConfirmationCard({ response }: { response: ChatResponse }) {
   if (!response.needs_confirmation) {
     return null;
   }
+
+  const details = confirmationDetails(response);
 
   return (
     <div className="rounded-lg border border-gold/30 bg-gold/10 p-4">
@@ -75,10 +123,14 @@ function ConfirmationCard({ response }: { response: ChatResponse }) {
       <p className="text-sm leading-6 text-stone-200">
         {response.confirmation_prompt || "Review this pending action before it runs."}
       </p>
-      {response.pending_action ? (
-        <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-lg border border-line bg-black/30 p-3 text-xs leading-5 text-stone-300">
-          {formatObject(response.pending_action)}
-        </pre>
+      {details.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {details.map((detail) => (
+            <p key={detail} className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs leading-5 text-stone-300">
+              {detail}
+            </p>
+          ))}
+        </div>
       ) : null}
     </div>
   );

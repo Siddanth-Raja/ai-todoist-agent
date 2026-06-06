@@ -68,6 +68,7 @@ export type CalendarEvent = {
   all_day: boolean;
   busy: boolean;
   event_type: string;
+  event_category?: string | null;
   status?: string | null;
   transparency?: string | null;
   attendees_count?: number | null;

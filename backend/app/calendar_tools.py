@@ -176,8 +176,9 @@ def create_calendar_event(
     start: datetime,
     end: datetime,
     existing_events: list[dict[str, Any]],
+    allow_conflicts: bool = False,
 ) -> CalendarWriteResult:
-    """Create a simple calendar event if it does not conflict with busy events."""
+    """Create a simple calendar event if it does not conflict with blocking events."""
     missing_fields = settings.missing_google_calendar_fields
     if missing_fields:
         joined = ", ".join(missing_fields)
@@ -188,11 +189,18 @@ def create_calendar_event(
     if end <= start:
         return CalendarWriteResult(error="Calendar event end time must be after start time.")
 
-    conflict = find_busy_conflict(start=start, end=end, events=existing_events)
-    if conflict:
-        return CalendarWriteResult(
-            error=f"Calendar event conflicts with existing event: {conflict.get('title')}.",
+    event_category = infer_event_category(title, attendees=[])
+    if not allow_conflicts:
+        conflict = find_busy_conflict(
+            start=start,
+            end=end,
+            events=existing_events,
+            event_category=event_category,
         )
+        if conflict:
+            return CalendarWriteResult(
+                error=f"Calendar event conflicts with existing event: {conflict.get('title')}.",
+            )
 
     body = {
         "summary": title,
@@ -232,9 +240,17 @@ def find_busy_conflict(
     start: datetime,
     end: datetime,
     events: list[dict[str, Any]],
+    event_category: str = "hard",
 ) -> dict[str, Any] | None:
+    if event_category == "informational":
+        return None
+
     for event in events:
         if not event.get("busy"):
+            continue
+
+        existing_category = _event_category(event)
+        if not categories_conflict(event_category, existing_category):
             continue
 
         event_start = datetime.fromisoformat(event["start"])
@@ -243,6 +259,13 @@ def find_busy_conflict(
             return event
 
     return None
+
+
+def categories_conflict(first_category: str, second_category: str) -> bool:
+    categories = {first_category, second_category}
+    if "informational" in categories:
+        return False
+    return "hard" in categories
 
 
 def _build_calendar_service(settings: Settings):
@@ -348,6 +371,8 @@ def _normalize_event(event: dict[str, Any], local_tz) -> dict[str, Any]:
 
     duration_minutes = max(0, int((end - start).total_seconds() // 60))
 
+    event_category = infer_event_category(title, attendees)
+
     return {
         "id": event.get("id"),
         "title": title,
@@ -358,7 +383,8 @@ def _normalize_event(event: dict[str, Any], local_tz) -> dict[str, Any]:
         "transparency": transparency,
         "status": status,
         "busy": busy,
-        "event_type": _infer_event_type(title, attendees),
+        "event_category": event_category,
+        "event_type": event_category,
         "attendees_count": len(attendees),
         "location": event.get("location"),
         "html_link": event.get("htmlLink"),
@@ -377,41 +403,60 @@ def _parse_google_time(value: dict[str, Any], local_tz) -> tuple[datetime, bool]
     return datetime.now(local_tz), False
 
 
-def _infer_event_type(title: str, attendees: list[dict[str, Any]]) -> str:
+def _event_category(event: dict[str, Any]) -> str:
+    category = event.get("event_category") or event.get("event_type")
+    if category in {"hard", "flexible", "informational"}:
+        return str(category)
+    if category == "soft":
+        return "informational"
+    return infer_event_category(str(event.get("title") or ""), attendees=[])
+
+
+def infer_event_category(title: str, attendees: list[dict[str, Any]]) -> str:
     text = title.lower()
 
+    informational_keywords = (
+        "birthday",
+        "birthdays",
+        "graduation",
+        "commencement",
+        "holiday",
+        "holidays",
+        "anniversary",
+        "anniversaries",
+    )
     hard_keywords = (
         "meeting",
+        "meet",
         "call",
         "class",
+        "classes",
         "appointment",
+        "appointments",
         "interview",
+        "interviews",
         "exam",
         "doctor",
         "dentist",
     )
     flexible_keywords = (
         "gym",
+        "workout",
+        "run",
+        "running",
+        "study",
+        "study block",
         "work block",
         "deep work",
         "errand",
         "errands",
-        "study block",
         "focus block",
     )
-    soft_keywords = (
-        "rest",
-        "chill",
-        "show",
-        "watch",
-        "buffer",
-        "break",
-    )
 
+    if any(keyword in text for keyword in informational_keywords):
+        return "informational"
     if attendees or any(keyword in text for keyword in hard_keywords):
         return "hard"
     if any(keyword in text for keyword in flexible_keywords):
         return "flexible"
-    if any(keyword in text for keyword in soft_keywords):
-        return "soft"
-    return "unknown"
+    return "flexible"

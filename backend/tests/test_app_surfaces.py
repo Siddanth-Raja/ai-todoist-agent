@@ -13,7 +13,12 @@ from fastapi import HTTPException
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app.main as main  # noqa: E402
-from app.calendar_tools import CalendarReadResult  # noqa: E402
+from app.calendar_tools import (  # noqa: E402
+    CalendarReadResult,
+    categories_conflict,
+    find_busy_conflict,
+    infer_event_category,
+)
 from app.todoist_tools import TodoistReadResult  # noqa: E402
 
 
@@ -254,6 +259,7 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                 "all_day": False,
                 "busy": True,
                 "event_type": "hard",
+                "event_category": "hard",
             },
             {
                 "id": "event-2",
@@ -264,6 +270,18 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                 "all_day": False,
                 "busy": True,
                 "event_type": "flexible",
+                "event_category": "flexible",
+            },
+            {
+                "id": "event-3",
+                "title": "Graduation",
+                "start": "2026-06-05T12:15:00-05:00",
+                "end": "2026-06-05T12:45:00-05:00",
+                "duration_minutes": 30,
+                "all_day": False,
+                "busy": True,
+                "event_type": "informational",
+                "event_category": "informational",
             },
         ]
         with patch(
@@ -276,9 +294,56 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                 authorization=self.authorization,
             )
 
-        self.assertEqual([event["event_type"] for event in payload["events"]], ["hard", "flexible"])
+        self.assertEqual(
+            [event["event_type"] for event in payload["events"]],
+            ["hard", "flexible", "informational"],
+        )
+        self.assertEqual(payload["events"][2]["event_category"], "informational")
         self.assertEqual(len(payload["conflicts"]), 1)
         self.assertEqual(payload["conflicts"][0]["first_event_title"], "XO sync")
+
+    def test_calendar_categories_and_conflict_rules(self):
+        self.assertEqual(infer_event_category("Dentist appointment", []), "hard")
+        self.assertEqual(infer_event_category("Study block", []), "flexible")
+        self.assertEqual(infer_event_category("A&M graduation", []), "informational")
+        self.assertTrue(categories_conflict("hard", "hard"))
+        self.assertTrue(categories_conflict("hard", "flexible"))
+        self.assertFalse(categories_conflict("flexible", "flexible"))
+        self.assertFalse(categories_conflict("hard", "informational"))
+
+        events = [
+            {
+                "id": "hard",
+                "title": "Interview",
+                "start": "2026-06-05T12:00:00-05:00",
+                "end": "2026-06-05T13:00:00-05:00",
+                "busy": True,
+                "event_category": "hard",
+            },
+            {
+                "id": "info",
+                "title": "Birthday",
+                "start": "2026-06-05T12:00:00-05:00",
+                "end": "2026-06-05T13:00:00-05:00",
+                "busy": True,
+                "event_category": "informational",
+            },
+        ]
+        conflict = find_busy_conflict(
+            start=datetime(2026, 6, 5, 12, 30, tzinfo=ZoneInfo("America/Chicago")),
+            end=datetime(2026, 6, 5, 13, 30, tzinfo=ZoneInfo("America/Chicago")),
+            events=events,
+            event_category="flexible",
+        )
+        self.assertEqual(conflict["id"], "hard")
+        self.assertIsNone(
+            find_busy_conflict(
+                start=datetime(2026, 6, 5, 12, 30, tzinfo=ZoneInfo("America/Chicago")),
+                end=datetime(2026, 6, 5, 13, 30, tzinfo=ZoneInfo("America/Chicago")),
+                events=events,
+                event_category="informational",
+            )
+        )
 
     def test_chat_logs_task_and_confirmation_activity(self):
         chat_payload = {

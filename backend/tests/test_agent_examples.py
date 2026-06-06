@@ -316,6 +316,51 @@ class AgentExampleTests(unittest.TestCase):
         self.assertEqual(response["actions_taken"][0]["type"], "create_calendar_event")
         self.assertIn("Added calendar event", response["answer"])
 
+    def test_affirmative_reply_executes_pending_calendar_event(self):
+        created_event = {
+            "id": "event-brandon",
+            "title": "Meeting with Brandon",
+            "start": "2026-06-05T18:00:00-05:00",
+            "end": "2026-06-05T19:00:00-05:00",
+            "duration_minutes": 60,
+            "all_day": False,
+            "busy": True,
+            "event_type": "hard",
+            "event_category": "hard",
+        }
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="I can add that, but it overlaps with gym. Add it anyway?",
+                intent="schedule_event",
+                action_type="create_calendar_event",
+                calendar_event={
+                    "title": "Meeting with Brandon",
+                    "start": "2026-06-05T18:00:00-05:00",
+                    "end": "2026-06-05T19:00:00-05:00",
+                },
+                needs_confirmation=True,
+                confirmation_prompt="Add it anyway?",
+            ),
+            None,
+        )):
+            first_response = handle_chat("Meeting with Brandon tomorrow at 6 for an hour", self.now)
+
+        self.assertTrue(first_response["needs_confirmation"])
+        self.assertEqual(agent.PENDING_ACTION["type"], "create_calendar_event")
+
+        with patch("app.agent._get_llm_decision") as llm_mock, patch(
+            "app.agent.create_calendar_event",
+            return_value=CalendarWriteResult(event=created_event),
+        ) as create_event_mock:
+            second_response = handle_chat("yes please", self.now)
+
+        llm_mock.assert_not_called()
+        self.assertFalse(second_response["needs_confirmation"])
+        self.assertIsNone(second_response["pending_action"])
+        self.assertIsNone(agent.PENDING_ACTION)
+        self.assertEqual(second_response["actions_taken"][0]["type"], "create_calendar_event")
+        self.assertTrue(create_event_mock.call_args.kwargs["allow_conflicts"])
+
     def test_schema_allowed_actions_are_documented(self):
         schema = _decision_schema()
         action_enum = schema["properties"]["action_type"]["enum"]

@@ -97,6 +97,14 @@ ALLOWED_INTENTS = {
     "question",
     "unknown",
 }
+AFFIRMATIVE_CONFIRMATION_REPLIES = {
+    "yes",
+    "yes please",
+    "sure",
+    "do it",
+    "sounds good",
+    "add it",
+}
 PENDING_ACTION: dict[str, Any] | None = None
 
 
@@ -127,6 +135,32 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
     enriched_tasks = [
         enrich_task(task, local_now.date()) for task in todoist_result.tasks if task.get("content")
     ]
+
+    if active_pending_action and _is_affirmative_confirmation(cleaned_message):
+        decision = _decision_from_pending_action(active_pending_action)
+        actions_taken, action_errors = _execute_allowed_action(
+            settings=settings,
+            decision=decision,
+            tasks=enriched_tasks,
+            calendar_events=calendar_result.events,
+            local_now=local_now,
+        )
+        errors.extend(action_errors)
+        PENDING_ACTION = None
+        answer = _answer_with_actions(decision, actions_taken, action_errors)
+        return {
+            "answer": answer,
+            "intent": decision["intent"],
+            "actions_taken": actions_taken,
+            "needs_confirmation": False,
+            "confirmation_prompt": None,
+            "pending_action": None,
+            "free_block": plan["free_block"],
+            "recommended_tasks": plan["recommended_tasks"],
+            "calendar_events": _summarize_calendar_events(calendar_result.events),
+            "mode": MODE,
+            "errors": errors,
+        }
 
     if not settings.openai_api_key:
         fallback = _fallback_response(
@@ -261,6 +295,7 @@ def _build_llm_context(
             "confirmation_rules": [
                 "If the answer asks the user to choose, approve, confirm, or decide before an action can happen, set needs_confirmation=true.",
                 "When needs_confirmation=true, set confirmation_prompt to the exact decision requested.",
+                "For supported task or calendar create actions that only need approval, keep action_type and the task/calendar fields populated so the backend can execute after a yes reply.",
                 "When a calendar conflict or reschedule choice needs a decision, include pending_action.type='resolve_calendar_conflict'.",
                 "If pending_action is present in context, interpret the next user message as an attempt to resolve it.",
             ],
@@ -339,6 +374,8 @@ You coordinate Todoist tasks, Google Calendar events, reminders, and replanning.
 
 Use the provided JSON context only. Be concise, realistic, and human.
 Choose Todoist for unscheduled tasks. Choose Calendar for time-specific events.
+Calendar event categories are hard, flexible, and informational. Informational events
+such as birthdays, graduations, holidays, and anniversaries do not create conflicts.
 For planning, choose a clear next action, adapt to energy, and avoid robotic ranked dumps.
 For low energy, recommend a tiny useful win unless something is truly urgent.
 For missed plans, replan from the current time and protect hard commitments.
@@ -353,6 +390,7 @@ You may propose exactly one backend action:
 Do not propose unsafe actions: deleting tasks/events, moving fixed events, cancelling meetings,
 sending emails, inviting attendees, or completing tasks unless explicitly requested.
 If a request is risky, ambiguous, or unsupported, set needs_confirmation true and use action_type none.
+If a supported task or calendar create action only needs user approval, keep action_type and the task/calendar fields populated while setting needs_confirmation true.
 If your answer asks the user to choose, approve, confirm, or decide before an action can happen, needs_confirmation must be true.
 When needs_confirmation is true, confirmation_prompt must contain the decision being requested.
 When the decision is about a calendar conflict, moving a flexible block, or rescheduling, pending_action must be {"type":"resolve_calendar_conflict","details":{...}}.
@@ -478,8 +516,13 @@ def _decision_schema() -> dict[str, Any]:
 def _sanitize_decision(decision: dict[str, Any]) -> dict[str, Any]:
     intent = decision.get("intent")
     action_type = decision.get("action_type")
+    proposed_action_type = action_type
     needs_confirmation = bool(decision.get("needs_confirmation"))
     pending_action = decision.get("pending_action")
+    task = decision.get("task") if isinstance(decision.get("task"), dict) else {}
+    calendar_event = (
+        decision.get("calendar_event") if isinstance(decision.get("calendar_event"), dict) else {}
+    )
 
     if intent not in ALLOWED_INTENTS:
         intent = "unknown"
@@ -494,6 +537,14 @@ def _sanitize_decision(decision: dict[str, Any]) -> dict[str, Any]:
             decision["confirmation_prompt"] = decision.get("answer")
         if not isinstance(pending_action, dict):
             pending_action = {"type": "resolve_calendar_conflict", "details": {}}
+        pending_action = _executable_pending_action(
+            pending_action=pending_action,
+            proposed_action_type=proposed_action_type,
+            intent=intent,
+            task=task,
+            calendar_event=calendar_event,
+            confirmation_prompt=decision.get("confirmation_prompt"),
+        )
     else:
         pending_action = None
 
@@ -501,11 +552,80 @@ def _sanitize_decision(decision: dict[str, Any]) -> dict[str, Any]:
         "answer": str(decision.get("answer") or "I can help with that, but I need a little more detail."),
         "intent": intent,
         "action_type": action_type,
-        "task": decision.get("task") if isinstance(decision.get("task"), dict) else {},
-        "calendar_event": decision.get("calendar_event") if isinstance(decision.get("calendar_event"), dict) else {},
+        "task": task,
+        "calendar_event": calendar_event,
         "needs_confirmation": needs_confirmation,
         "confirmation_prompt": decision.get("confirmation_prompt"),
         "pending_action": pending_action,
+    }
+
+
+def _executable_pending_action(
+    *,
+    pending_action: dict[str, Any],
+    proposed_action_type: str | None,
+    intent: str,
+    task: dict[str, Any],
+    calendar_event: dict[str, Any],
+    confirmation_prompt: str | None,
+) -> dict[str, Any]:
+    pending = dict(pending_action)
+    details = pending.get("details")
+    if not isinstance(details, dict):
+        details = {}
+    pending["details"] = details
+
+    if proposed_action_type in {"create_todoist_task", "create_calendar_event"}:
+        pending["intent"] = intent
+        pending["confirmation_prompt"] = confirmation_prompt
+        pending["action_type"] = proposed_action_type
+        pending["type"] = proposed_action_type
+        if proposed_action_type == "create_todoist_task":
+            pending["task"] = task
+        if proposed_action_type == "create_calendar_event":
+            pending["calendar_event"] = calendar_event
+
+    return pending
+
+
+def _is_affirmative_confirmation(message: str) -> bool:
+    normalized = re.sub(r"[^a-z\s]", "", message.lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized in AFFIRMATIVE_CONFIRMATION_REPLIES
+
+
+def _decision_from_pending_action(pending_action: dict[str, Any]) -> dict[str, Any]:
+    action_type = pending_action.get("action_type") or pending_action.get("type")
+    if action_type not in {"create_todoist_task", "create_calendar_event"}:
+        return {
+            "answer": "I have a pending confirmation, but it is not an executable action yet.",
+            "intent": str(pending_action.get("intent") or "unknown"),
+            "action_type": "none",
+            "task": {},
+            "calendar_event": {},
+            "needs_confirmation": False,
+            "confirmation_prompt": None,
+            "pending_action": None,
+        }
+
+    intent = pending_action.get("intent")
+    if intent not in ALLOWED_INTENTS:
+        intent = "capture_task" if action_type == "create_todoist_task" else "schedule_event"
+
+    return {
+        "answer": "Got it.",
+        "intent": intent,
+        "action_type": action_type,
+        "task": pending_action.get("task") if isinstance(pending_action.get("task"), dict) else {},
+        "calendar_event": (
+            pending_action.get("calendar_event")
+            if isinstance(pending_action.get("calendar_event"), dict)
+            else {}
+        ),
+        "needs_confirmation": False,
+        "confirmation_prompt": None,
+        "pending_action": None,
+        "allow_conflicts": True,
     }
 
 
@@ -774,6 +894,7 @@ def _execute_allowed_action(
             start=start,
             end=end,
             existing_events=calendar_events,
+            allow_conflicts=bool(decision.get("allow_conflicts")),
         )
         if result.error:
             return [], [result.error]
@@ -1054,6 +1175,7 @@ def _summarize_calendar_events(events: list[dict[str, Any]]) -> list[dict[str, A
             "all_day": event.get("all_day"),
             "busy": event.get("busy"),
             "event_type": event.get("event_type"),
+            "event_category": event.get("event_category"),
         }
         for event in events
     ]

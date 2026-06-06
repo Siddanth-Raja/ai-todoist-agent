@@ -13,8 +13,7 @@ import {
 const labelClasses: Record<string, string> = {
   hard: "border-coral/30 bg-coral/10 text-coral",
   flexible: "border-moss/30 bg-moss/10 text-moss",
-  soft: "border-gold/30 bg-gold/10 text-gold",
-  unknown: "border-white/10 bg-white/[0.06] text-stone-400",
+  informational: "border-gold/30 bg-gold/10 text-gold",
 };
 
 function eventDay(value: string) {
@@ -30,6 +29,17 @@ function eventRange(event: CalendarEvent) {
     return "All day";
   }
   return `${formatTime(event.start)}-${formatTime(event.end)}`;
+}
+
+function eventCategory(event: CalendarEvent) {
+  const category = event.event_category || event.event_type || "flexible";
+  if (category === "soft") {
+    return "informational";
+  }
+  if (category === "unknown") {
+    return "flexible";
+  }
+  return category;
 }
 
 export default function CalendarPage() {
@@ -121,8 +131,8 @@ export default function CalendarPage() {
                             {eventRange(event)}
                           </p>
                         </div>
-                        <span className={`rounded-full border px-3 py-1 text-xs font-medium ${labelClasses[event.event_type] ?? labelClasses.unknown}`}>
-                          {event.event_type}
+                        <span className={`rounded-full border px-3 py-1 text-xs font-medium ${labelClasses[eventCategory(event)] ?? labelClasses.flexible}`}>
+                          {eventCategory(event)}
                         </span>
                       </div>
 
@@ -179,7 +189,7 @@ export default function CalendarPage() {
         <div className="glass-panel rounded-lg p-5">
           <h3 className="text-xl font-semibold text-pearl">Labels</h3>
           <div className="mt-4 space-y-2">
-            {["hard", "flexible", "soft", "unknown"].map((label) => (
+            {["hard", "flexible", "informational"].map((label) => (
               <div key={label} className="flex items-center justify-between rounded-lg bg-black/20 px-3 py-2">
                 <span className="text-sm capitalize text-stone-300">{label}</span>
                 <span className={`h-3 w-3 rounded-full border ${labelClasses[label]}`} />

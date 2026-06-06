@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .agent import MODE, handle_chat
-from .calendar_tools import list_upcoming_events
+from .calendar_tools import categories_conflict, list_upcoming_events
 from .config import get_settings
 from .planner import enrich_task
 from .storage import (
@@ -187,6 +187,7 @@ class CalendarEvent(BaseModel):
     all_day: bool
     busy: bool
     event_type: str
+    event_category: str | None = None
     status: str | None = None
     transparency: str | None = None
     attendees_count: int | None = None
@@ -562,12 +563,22 @@ def _is_high_priority_task(task: dict[str, Any]) -> bool:
 
 def _detect_calendar_conflicts(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     conflicts: list[dict[str, Any]] = []
-    busy_events = [event for event in events if event.get("busy")]
+    busy_events = [
+        event
+        for event in events
+        if event.get("busy") and _calendar_event_category(event) != "informational"
+    ]
 
     for index, first in enumerate(busy_events):
         first_start = datetime.fromisoformat(str(first["start"]))
         first_end = datetime.fromisoformat(str(first["end"]))
         for second in busy_events[index + 1:]:
+            if not categories_conflict(
+                _calendar_event_category(first),
+                _calendar_event_category(second),
+            ):
+                continue
+
             second_start = datetime.fromisoformat(str(second["start"]))
             second_end = datetime.fromisoformat(str(second["end"]))
             if first_start < second_end and first_end > second_start:
@@ -583,6 +594,15 @@ def _detect_calendar_conflicts(events: list[dict[str, Any]]) -> list[dict[str, A
                 )
 
     return conflicts
+
+
+def _calendar_event_category(event: dict[str, Any]) -> str:
+    category = event.get("event_category") or event.get("event_type")
+    if category == "soft":
+        return "informational"
+    if category in {"hard", "flexible", "informational"}:
+        return str(category)
+    return "flexible"
 
 
 def _log_chat_activity(response: dict[str, Any]) -> None:

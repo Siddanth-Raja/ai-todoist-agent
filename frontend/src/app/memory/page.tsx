@@ -6,6 +6,8 @@ import { apiRequest, type MemoryEntry } from "@/lib/api";
 
 const memoryTypes = [
   "project",
+  "person",
+  "group",
   "preference",
   "classification_rule",
   "routine",

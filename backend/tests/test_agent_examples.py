@@ -85,6 +85,65 @@ EVENTS = [
     }
 ]
 
+MEMORIES = [
+    {
+        "id": "memory-person-brandon",
+        "type": "person",
+        "title": "Brandon",
+        "content": "Associated with Nebulo.",
+        "confidence": 1.0,
+        "enabled": True,
+    },
+    {
+        "id": "memory-person-ashwin",
+        "type": "person",
+        "title": "Ashwin",
+        "content": "Associated with XO.",
+        "confidence": 1.0,
+        "enabled": True,
+    },
+    {
+        "id": "memory-person-charlie",
+        "type": "person",
+        "title": "Charlie",
+        "content": "Associated with XO.",
+        "confidence": 1.0,
+        "enabled": True,
+    },
+    {
+        "id": "memory-person-nikhil",
+        "type": "person",
+        "title": "Nikhil",
+        "content": "A&M roommate.",
+        "confidence": 1.0,
+        "enabled": True,
+    },
+    {
+        "id": "memory-person-sam",
+        "type": "person",
+        "title": "Sam",
+        "content": "Carrollton house / UTD friend group.",
+        "confidence": 1.0,
+        "enabled": True,
+    },
+    {
+        "id": "memory-rule-shopping",
+        "type": "classification_rule",
+        "title": "Shopping and errands",
+        "content": "Shopping and errands go to Personal.",
+        "confidence": 1.0,
+        "enabled": True,
+    },
+    {
+        "id": "memory-disabled",
+        "type": "person",
+        "title": "Disabled Person",
+        "content": "Associated with Nebulo.",
+        "confidence": 1.0,
+        "enabled": False,
+    },
+]
+
 
 class AgentExampleTests(unittest.TestCase):
     def setUp(self):
@@ -95,6 +154,7 @@ class AgentExampleTests(unittest.TestCase):
             patch("app.agent.get_settings", return_value=FakeSettings()),
             patch("app.agent.list_active_tasks", return_value=TodoistReadResult(tasks=TASKS)),
             patch("app.agent.list_todays_events", return_value=CalendarReadResult(events=EVENTS)),
+            patch("app.agent.list_memory_entries", return_value=MEMORIES),
         ]
         for item in self.base_patches:
             item.start()
@@ -189,6 +249,108 @@ class AgentExampleTests(unittest.TestCase):
         self.assertEqual(response["actions_taken"][0]["task"]["project_name"], "To-Do")
         self.assertEqual(response["actions_taken"][0]["task"]["section_name"], "Personal")
         self.assertNotIn("think about errands later", response["answer"])
+
+    def test_exact_water_bottle_target_capture_infers_personal_from_memory_rule(self):
+        created_task = {
+            **TASKS[0],
+            "id": "task-water-bottle",
+            "content": "Buy water bottle from Target",
+            "project_name": "To-Do",
+            "section_name": "Personal",
+        }
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="You could plan errands later.",
+                intent="plan",
+                action_type="none",
+            ),
+            None,
+        )), patch("app.agent.create_task", return_value=TodoistWriteResult(task=created_task)) as create_task_mock:
+            response = handle_chat("buy water bottle from Target", self.now)
+
+        create_task_kwargs = create_task_mock.call_args.kwargs
+        self.assertEqual(create_task_kwargs["project_name"], "To-Do")
+        self.assertEqual(create_task_kwargs["section_name"], "Personal")
+        self.assertEqual(response["actions_taken"][0]["task"]["project_category"], "Personal")
+
+    def test_brandon_memory_hint_maps_meeting_to_nebulo_context(self):
+        def fake_decision(settings, context):
+            hints = context["memory_context"]["memory_hints"]
+            self.assertIn(
+                {
+                    "match": "Brandon",
+                    "type": "person",
+                    "context": "Brandon: Associated with Nebulo. Project/category: Nebulo.",
+                    "project_category": "Nebulo",
+                },
+                hints,
+            )
+            return (
+                self._decision(
+                    answer="I can put the Nebulo meeting on your calendar.",
+                    intent="schedule_event",
+                    action_type="create_calendar_event",
+                    calendar_event={
+                        "title": "Meeting with Brandon",
+                        "start": "2026-06-04T18:00:00-05:00",
+                        "end": "2026-06-04T19:00:00-05:00",
+                    },
+                ),
+                None,
+            )
+
+        event = {
+            "id": "event-brandon",
+            "title": "Meeting with Brandon",
+            "start": "2026-06-04T18:00:00-05:00",
+            "end": "2026-06-04T19:00:00-05:00",
+        }
+        with patch("app.agent._get_llm_decision", side_effect=fake_decision), patch(
+            "app.agent.create_calendar_event",
+            return_value=CalendarWriteResult(event=event),
+        ):
+            response = handle_chat("meeting with Brandon at 6", self.now)
+
+        self.assertEqual(response["intent"], "schedule_event")
+
+    def test_ashwin_and_charlie_memory_hints_map_to_xo(self):
+        def fake_decision(settings, context):
+            hints = context["memory_context"]["memory_hints"]
+            xo_matches = {
+                hint["match"]
+                for hint in hints
+                if hint.get("project_category") == "XO"
+            }
+            self.assertEqual(xo_matches, {"Ashwin", "Charlie"})
+            return (
+                self._decision(
+                    answer="That is XO context.",
+                    intent="schedule_event",
+                    action_type="none",
+                ),
+                None,
+            )
+
+        with patch("app.agent._get_llm_decision", side_effect=fake_decision):
+            response = handle_chat("meet with Ashwin and Charlie", self.now)
+
+        self.assertEqual(response["intent"], "schedule_event")
+
+    def test_disabled_memories_are_not_in_openai_context(self):
+        def fake_decision(settings, context):
+            memory_context = context["memory_context"]
+            serialized = str(memory_context)
+            self.assertNotIn("Disabled Person", serialized)
+            self.assertNotIn("memory-disabled", serialized)
+            return (
+                self._decision(answer="I can help with that.", intent="question"),
+                None,
+            )
+
+        with patch("app.agent._get_llm_decision", side_effect=fake_decision):
+            response = handle_chat("Who is Disabled Person?", self.now)
+
+        self.assertEqual(response["intent"], "question")
 
     def test_before_event_capture_sets_personal_section_and_due_date(self):
         created_task = {

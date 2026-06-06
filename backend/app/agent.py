@@ -8,6 +8,7 @@ import requests
 from .calendar_tools import create_calendar_event, list_todays_events
 from .config import get_settings
 from .planner import build_plan, enrich_task
+from .storage import list_memory_entries
 from .todoist_tools import create_task, list_active_tasks
 
 
@@ -17,6 +18,21 @@ READ_ONLY_NOTE = "No changes were made."
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
 OPENAI_TIMEOUT_SECONDS = 30
 PROJECT_CATEGORIES = ["A&M", "XO", "Nebulo", "Freelance", "Personal", "Misc"]
+MEMORY_CONTEXT_TYPES = (
+    "project",
+    "person",
+    "group",
+    "rule",
+    "preference",
+    "pattern",
+    "sensitive_habit",
+)
+MEMORY_TYPE_ALIASES = {
+    "classification_rule": "rule",
+    "sensitive_private_habit": "sensitive_habit",
+}
+MEMORY_ITEMS_PER_TYPE_LIMIT = 8
+MEMORY_TEXT_LIMIT = 140
 TODOIST_PERSONAL_PROJECT_NAME = "To-Do"
 BEFORE_EVENT_LEAD_DAYS = 1
 PERSONAL_CAPTURE_KEYWORDS = {
@@ -46,6 +62,7 @@ PERSONAL_CAPTURE_KEYWORDS = {
 COLLEGE_CAPTURE_KEYWORDS = {
     "a&m",
     "a and m",
+    "tamu",
     "college",
     "class",
     "exam",
@@ -117,6 +134,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
 
     todoist_result = list_active_tasks(settings)
     calendar_result = list_todays_events(settings, now=current_time)
+    enabled_memories = _enabled_memory_entries()
     errors = [
         error
         for error in (todoist_result.error, calendar_result.error)
@@ -182,6 +200,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
         plan=plan,
         provider_errors=errors,
         pending_action=active_pending_action,
+        memory_entries=enabled_memories,
     )
     decision, llm_error = _get_llm_decision(settings, context)
     if llm_error or decision is None:
@@ -196,7 +215,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
         return fallback
 
     decision = _sanitize_decision(decision)
-    decision = _apply_capture_override(cleaned_message, decision, local_now)
+    decision = _apply_capture_override(cleaned_message, decision, local_now, enabled_memories)
     if decision["needs_confirmation"]:
         PENDING_ACTION = decision["pending_action"]
     elif active_pending_action:
@@ -265,12 +284,15 @@ def _build_llm_context(
     plan: dict[str, Any],
     provider_errors: list[str],
     pending_action: dict[str, Any] | None,
+    memory_entries: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    memory_context = _build_memory_context(memory_entries, message)
     return {
         "user_message": message,
         "current_datetime": now.isoformat(),
         "timezone": settings_timezone,
         "project_categories": PROJECT_CATEGORIES,
+        "memory_context": memory_context,
         "todoist_tasks": _compact_tasks(tasks),
         "calendar_events_today": _summarize_calendar_events(calendar_events),
         "free_block": plan["free_block"],
@@ -301,6 +323,8 @@ def _build_llm_context(
             ],
             "routing_rules": [
                 "Clear task-capture requests like 'I need to buy a new water bottle from Target' must be intent=capture_task and action_type=create_todoist_task.",
+                "Use memory_context.memory_hints first when it maps names or topics to a project/context.",
+                "Brandon maps to Nebulo. Ashwin and Charlie map to XO. Nikhil, Andy, and Kamden are A&M roommate context. Sam, Jai, and Krrish are Carrollton house / UTD group context.",
                 "Shopping, errands, personal purchases, gym/health, car, and life admin tasks belong in Personal.",
                 "Use Misc only when no better category fits.",
                 "Do not give planning advice for a clear capture request.",
@@ -308,6 +332,128 @@ def _build_llm_context(
             "tool_boundary": "The model must not call external APIs. It returns a structured decision only; backend tools execute allowed actions.",
         },
     }
+
+
+def _enabled_memory_entries() -> list[dict[str, Any]]:
+    return [memory for memory in list_memory_entries() if memory.get("enabled")]
+
+
+def _build_memory_context(
+    memory_entries: list[dict[str, Any]],
+    message: str,
+) -> dict[str, Any]:
+    grouped = {memory_type: [] for memory_type in MEMORY_CONTEXT_TYPES}
+    for memory in memory_entries:
+        if not memory.get("enabled"):
+            continue
+
+        memory_type = _normalized_memory_type(str(memory.get("type") or ""))
+        if memory_type not in grouped:
+            continue
+
+        if len(grouped[memory_type]) >= MEMORY_ITEMS_PER_TYPE_LIMIT:
+            continue
+
+        title = _compact_memory_text(str(memory.get("title") or ""))
+        content = _compact_memory_text(str(memory.get("content") or ""))
+        if not title and not content:
+            continue
+
+        grouped[memory_type].append(
+            {
+                "title": title,
+                "content": content,
+            }
+        )
+
+    return {
+        "entries_by_type": grouped,
+        "memory_hints": _memory_hints_for_message(memory_entries, message),
+    }
+
+
+def _normalized_memory_type(memory_type: str) -> str:
+    normalized = memory_type.strip().lower()
+    return MEMORY_TYPE_ALIASES.get(normalized, normalized)
+
+
+def _compact_memory_text(value: str) -> str:
+    text = re.sub(r"\s+", " ", value).strip()
+    if len(text) <= MEMORY_TEXT_LIMIT:
+        return text
+    return f"{text[: MEMORY_TEXT_LIMIT - 3].rstrip()}..."
+
+
+def _memory_hints_for_message(
+    memory_entries: list[dict[str, Any]],
+    message: str,
+) -> list[dict[str, str]]:
+    text = message.lower()
+    hints: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for memory in memory_entries:
+        if not memory.get("enabled"):
+            continue
+
+        memory_type = _normalized_memory_type(str(memory.get("type") or ""))
+        if memory_type not in {"person", "group", "project", "rule"}:
+            continue
+
+        title = str(memory.get("title") or "").strip()
+        content = str(memory.get("content") or "").strip()
+        if not title or title.lower() not in text:
+            continue
+
+        category = _category_from_memory_text(f"{title} {content}")
+        context = _context_from_memory_text(title, content, category)
+        key = (title.lower(), context.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+
+        hint = {
+            "match": title,
+            "type": memory_type,
+            "context": context,
+        }
+        if category:
+            hint["project_category"] = category
+        hints.append(hint)
+
+    if re.search(r"\b(shopping|errand|errands|target|buy|purchase|order)\b", text):
+        hints.append(
+            {
+                "match": "shopping/errand",
+                "type": "rule",
+                "context": "Shopping and errands go to Personal.",
+                "project_category": "Personal",
+            }
+        )
+
+    return hints[:12]
+
+
+def _category_from_memory_text(text: str) -> str | None:
+    lowered = text.lower()
+    if "nebulo" in lowered or "context control" in lowered or "context-control" in lowered:
+        return "Nebulo"
+    if "xo" in lowered or "vr" in lowered or "headset" in lowered:
+        return "XO"
+    if "a&m" in lowered or "tamu" in lowered or "blinn" in lowered or "roommate" in lowered:
+        return "A&M"
+    if "freelance" in lowered or "client" in lowered or "website" in lowered:
+        return "Freelance"
+    if "personal" in lowered or "shopping" in lowered or "errand" in lowered:
+        return "Personal"
+    return None
+
+
+def _context_from_memory_text(title: str, content: str, category: str | None) -> str:
+    text = f"{title}: {content}".strip(": ")
+    if category:
+        return f"{text} Project/category: {category}."
+    return text
 
 
 def _get_llm_decision(settings, context: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
@@ -373,6 +519,8 @@ You are Personal Chief of Staff, a practical AI assistant for one user.
 You coordinate Todoist tasks, Google Calendar events, reminders, and replanning.
 
 Use the provided JSON context only. Be concise, realistic, and human.
+Use memory_context for durable user context. Treat memory_context.memory_hints as
+high-priority routing/context clues, and ignore disabled memories because they are not included.
 Choose Todoist for unscheduled tasks. Choose Calendar for time-specific events.
 Calendar event categories are hard, flexible, and informational. Informational events
 such as birthdays, graduations, holidays, and anniversaries do not create conflicts.
@@ -633,6 +781,7 @@ def _apply_capture_override(
     message: str,
     decision: dict[str, Any],
     local_now: datetime,
+    memory_entries: list[dict[str, Any]],
 ) -> dict[str, Any]:
     is_model_capture = (
         decision.get("intent") == "capture_task"
@@ -642,7 +791,7 @@ def _apply_capture_override(
         return decision
 
     task = decision.get("task") if isinstance(decision.get("task"), dict) else {}
-    metadata = _extract_capture_metadata(message, task, local_now)
+    metadata = _extract_capture_metadata(message, task, local_now, memory_entries)
     category = metadata["project_category"]
     content = metadata["content"]
     task.update(
@@ -681,11 +830,12 @@ def _extract_capture_metadata(
     message: str,
     task: dict[str, Any],
     local_now: datetime,
+    memory_entries: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     task_content = _capture_task_content(message)
     existing_content = str(task.get("content") or "").strip()
     content = task_content or existing_content
-    category = _infer_capture_category(" ".join([content, message]))
+    category = _infer_capture_category(" ".join([content, message]), memory_entries or [])
     due_date = _extract_due_date_from_message(message, local_now)
     due_date_text = due_date.isoformat() if due_date else None
     section_name = category if category != "Misc" else None
@@ -770,8 +920,14 @@ def _capture_task_content(message: str) -> str:
     return text[:1].upper() + text[1:] if text else text
 
 
-def _infer_capture_category(task_content: str) -> str:
+def _infer_capture_category(
+    task_content: str,
+    memory_entries: list[dict[str, Any]] | None = None,
+) -> str:
     text = task_content.lower()
+    memory_category = _infer_category_from_memory(task_content, memory_entries or [])
+    if memory_category:
+        return memory_category
     if any(keyword in text for keyword in ("grad", "graduation", "commencement", "speech")):
         return "Personal"
     if any(keyword in text for keyword in PERSONAL_CAPTURE_KEYWORDS):
@@ -785,6 +941,18 @@ def _infer_capture_category(task_content: str) -> str:
     if any(keyword in text for keyword in COLLEGE_CAPTURE_KEYWORDS):
         return "A&M"
     return "Misc"
+
+
+def _infer_category_from_memory(
+    task_content: str,
+    memory_entries: list[dict[str, Any]],
+) -> str | None:
+    hints = _memory_hints_for_message(memory_entries, task_content)
+    for hint in hints:
+        category = hint.get("project_category")
+        if category in PROJECT_CATEGORIES and category != "Misc":
+            return category
+    return None
 
 
 def _infer_capture_priority(message: str, due_date: str | None) -> int:

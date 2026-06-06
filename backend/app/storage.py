@@ -18,6 +18,115 @@ DEFAULT_HABITS = (
     ("work", "Work", "Focused work or useful work block"),
 )
 
+DEFAULT_MEMORIES = (
+    (
+        "memory-project-am",
+        "project",
+        "A&M",
+        "College/TAMU/Blinn/housing/classes/school admin.",
+    ),
+    (
+        "memory-project-xo",
+        "project",
+        "XO",
+        "VR/worldbuilding/prototype project with Ashwin and Charlie.",
+    ),
+    (
+        "memory-project-nebulo",
+        "project",
+        "Nebulo",
+        "Startup/work involving private cloud storage and AI context control.",
+    ),
+    (
+        "memory-project-freelance",
+        "project",
+        "Freelance",
+        "Client outreach, websites, law firms, dentists, realtors, portfolio, invoices.",
+    ),
+    (
+        "memory-project-personal",
+        "project",
+        "Personal",
+        "Gym, health, shopping, errands, car, family, life admin.",
+    ),
+    ("memory-person-brandon", "person", "Brandon", "Associated with Nebulo."),
+    ("memory-person-ashwin", "person", "Ashwin", "Associated with XO."),
+    ("memory-person-charlie", "person", "Charlie", "Associated with XO."),
+    ("memory-person-nikhil", "person", "Nikhil", "A&M roommate."),
+    ("memory-person-andy", "person", "Andy", "A&M roommate."),
+    ("memory-person-kamden", "person", "Kamden", "A&M roommate."),
+    ("memory-person-sam", "person", "Sam", "Carrollton house / UTD friend group."),
+    ("memory-person-jai", "person", "Jai", "Carrollton house / UTD friend group."),
+    ("memory-person-krrish", "person", "Krrish", "Carrollton house / UTD friend group."),
+    ("memory-group-am-roommates", "group", "A&M roommates", "Nikhil, Andy, Kamden."),
+    (
+        "memory-group-carrollton-utd",
+        "group",
+        "Carrollton house / UTD group",
+        "Sam, Jai, Krrish.",
+    ),
+    (
+        "memory-rule-shopping-errands",
+        "classification_rule",
+        "Shopping and errands",
+        "Shopping and errands go to Personal.",
+    ),
+    (
+        "memory-rule-college",
+        "classification_rule",
+        "College/TAMU/Blinn",
+        "College/TAMU/Blinn tasks go to A&M.",
+    ),
+    (
+        "memory-rule-xo",
+        "classification_rule",
+        "VR/headset/Ashwin/Charlie",
+        "VR/headset/Ashwin/Charlie tasks go to XO.",
+    ),
+    (
+        "memory-rule-nebulo",
+        "classification_rule",
+        "Brandon/Nebulo/context-control",
+        "Brandon/Nebulo/context-control tasks go to Nebulo.",
+    ),
+    (
+        "memory-rule-freelance",
+        "classification_rule",
+        "Client/law firm/dentist/realtor/website",
+        "Client/law firm/dentist/realtor/website tasks go to Freelance.",
+    ),
+    (
+        "memory-rule-misc",
+        "classification_rule",
+        "Misc fallback",
+        "Misc is fallback only.",
+    ),
+    (
+        "memory-preference-one-action",
+        "preference",
+        "One clear next action",
+        "Give one clear next action.",
+    ),
+    (
+        "memory-preference-tone",
+        "preference",
+        "Direct supportive tone",
+        "Be direct, supportive, and not guilt-based.",
+    ),
+    (
+        "memory-preference-low-energy",
+        "preference",
+        "Low-energy mode",
+        "Low-energy mode should suggest tiny useful wins.",
+    ),
+    (
+        "memory-preference-gym",
+        "preference",
+        "Gym flexibility",
+        "Gym is flexible but important.",
+    ),
+)
+
 _INITIALIZED_PATHS: set[str] = set()
 _INIT_LOCK = threading.Lock()
 
@@ -99,6 +208,7 @@ def ensure_database() -> None:
                 """
             )
             _seed_default_habits(connection)
+            _seed_default_memories(connection)
 
         _INITIALIZED_PATHS.add(path)
 
@@ -113,6 +223,31 @@ def _seed_default_habits(connection: sqlite3.Connection) -> None:
             VALUES (?, ?, ?, 1, ?, ?)
             """,
             (habit_id, name, description, now, now),
+        )
+
+
+def _seed_default_memories(connection: sqlite3.Connection) -> None:
+    now = _utc_now()
+    for memory_id, memory_type, title, content in DEFAULT_MEMORIES:
+        existing = connection.execute(
+            """
+            SELECT 1
+            FROM memory_entries
+            WHERE lower(type) = lower(?) AND lower(title) = lower(?)
+            LIMIT 1
+            """,
+            (memory_type, title),
+        ).fetchone()
+        if existing:
+            continue
+
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO memory_entries
+                (id, type, title, content, confidence, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 1.0, 1, ?, ?)
+            """,
+            (memory_id, memory_type, title, content, now, now),
         )
 
 

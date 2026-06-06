@@ -19,6 +19,7 @@ from app.calendar_tools import (  # noqa: E402
     find_busy_conflict,
     infer_event_category,
 )
+from app.storage import DEFAULT_MEMORIES, ensure_database  # noqa: E402
 from app.todoist_tools import TodoistReadResult  # noqa: E402
 
 
@@ -60,7 +61,25 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         self.addCleanup(self.settings_patch.stop)
         self.authorization = "Bearer test-agent-key"
 
+    def test_default_memories_are_seeded_once(self):
+        memories = main.memory_index(authorization=self.authorization)
+        self.assertEqual(len(memories), len(DEFAULT_MEMORIES))
+
+        titles_by_type = {(memory["type"], memory["title"]) for memory in memories}
+        self.assertIn(("project", "A&M"), titles_by_type)
+        self.assertIn(("project", "Nebulo"), titles_by_type)
+        self.assertIn(("person", "Brandon"), titles_by_type)
+        self.assertIn(("group", "A&M roommates"), titles_by_type)
+        self.assertIn(("classification_rule", "Misc fallback"), titles_by_type)
+        self.assertIn(("preference", "Low-energy mode"), titles_by_type)
+
+        ensure_database()
+        ensure_database()
+        seeded_again = main.memory_index(authorization=self.authorization)
+        self.assertEqual(len(seeded_again), len(DEFAULT_MEMORIES))
+
     def test_memory_crud_and_activity_log(self):
+        initial_count = len(main.memory_index(authorization=self.authorization))
         memory = main.memory_create(
             main.MemoryCreate(
                 type="preference",
@@ -74,7 +93,7 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         self.assertTrue(memory["enabled"])
 
         memories = main.memory_index(authorization=self.authorization)
-        self.assertEqual(len(memories), 1)
+        self.assertEqual(len(memories), initial_count + 1)
 
         updated = main.memory_update(
             memory["id"],
@@ -89,7 +108,7 @@ class AppSurfaceEndpointTests(unittest.TestCase):
 
         deleted = main.memory_delete(memory["id"], authorization=self.authorization)
         self.assertTrue(deleted["deleted"])
-        self.assertEqual(main.memory_index(authorization=self.authorization), [])
+        self.assertEqual(len(main.memory_index(authorization=self.authorization)), initial_count)
 
     def test_habit_definitions_and_checkins(self):
         default_names = [

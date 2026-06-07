@@ -91,6 +91,38 @@ export type CalendarResponse = {
   errors: string[];
 };
 
+export type TodayEvent = {
+  id: string | null;
+  title: string;
+  start: string;
+  end: string;
+  start_display: string;
+  end_display: string;
+  time_range_display: string;
+  duration_minutes: number;
+  event_category: string;
+  location?: string | null;
+  html_link?: string | null;
+};
+
+export type TodayFreeBlock = {
+  start: string;
+  end: string;
+  start_display: string;
+  end_display: string;
+  time_range_display: string;
+  duration_minutes: number;
+  low_usefulness: boolean;
+};
+
+export type TodayRecommendation = {
+  type: string;
+  title: string;
+  detail: string;
+  task?: TaskItem | Record<string, unknown> | null;
+  event?: TodayEvent | null;
+};
+
 export type ActivityEntry = {
   id: string;
   action_type: string;
@@ -111,6 +143,13 @@ export type LifeArea = {
 };
 
 export type TodayResponse = {
+  now: string;
+  now_display: string;
+  next_event?: TodayEvent | null;
+  minutes_until_next_event?: number | null;
+  current_free_block?: TodayFreeBlock | null;
+  today_remaining_events: TodayEvent[];
+  recommendation: TodayRecommendation;
   life_areas: LifeArea[];
   errors: string[];
 };

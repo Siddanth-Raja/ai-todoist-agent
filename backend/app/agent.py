@@ -5,7 +5,7 @@ from typing import Any
 
 import requests
 
-from .calendar_tools import create_calendar_event, list_todays_events
+from .calendar_tools import create_calendar_event, list_todays_events, list_upcoming_events
 from .config import get_settings
 from .planner import build_plan, enrich_task
 from .storage import list_memory_entries
@@ -58,6 +58,24 @@ PERSONAL_CAPTURE_KEYWORDS = {
     "graduation",
     "commencement",
     "speech",
+}
+CALENDAR_ONLY_EVENT_KEYWORDS = {
+    "gym",
+    "workout",
+    "hangout",
+    "hang out",
+    "party",
+    "parties",
+    "meal",
+    "lunch",
+    "dinner",
+    "breakfast",
+    "brunch",
+    "coffee",
+    "birthday",
+    "birthdays",
+    "holiday",
+    "holidays",
 }
 COLLEGE_CAPTURE_KEYWORDS = {
     "a&m",
@@ -134,11 +152,12 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
 
     todoist_result = list_active_tasks(settings)
     calendar_result = list_todays_events(settings, now=current_time)
+    upcoming_calendar_result = list_upcoming_events(settings, now=current_time)
     enabled_memories = _enabled_memory_entries()
     resolved_memory = _resolve_memory_context(cleaned_message, enabled_memories)
     errors = [
         error
-        for error in (todoist_result.error, calendar_result.error)
+        for error in (todoist_result.error, calendar_result.error, upcoming_calendar_result.error)
         if error is not None
     ]
     local_now = current_time.astimezone(settings.local_tz) if current_time else datetime.now(settings.local_tz)
@@ -161,7 +180,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
             settings=settings,
             decision=decision,
             tasks=enriched_tasks,
-            calendar_events=calendar_result.events,
+            calendar_events=upcoming_calendar_result.events or calendar_result.events,
             local_now=local_now,
         )
         errors.extend(action_errors)
@@ -198,6 +217,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
         settings_timezone=settings.timezone,
         tasks=enriched_tasks,
         calendar_events=calendar_result.events,
+        upcoming_calendar_events=upcoming_calendar_result.events or calendar_result.events,
         plan=plan,
         provider_errors=errors,
         pending_action=active_pending_action,
@@ -228,7 +248,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
         settings=settings,
         decision=decision,
         tasks=enriched_tasks,
-        calendar_events=calendar_result.events,
+        calendar_events=upcoming_calendar_result.events or calendar_result.events,
         local_now=local_now,
     )
     errors.extend(action_errors)
@@ -284,6 +304,7 @@ def _build_llm_context(
     settings_timezone: str,
     tasks: list[dict[str, Any]],
     calendar_events: list[dict[str, Any]],
+    upcoming_calendar_events: list[dict[str, Any]],
     plan: dict[str, Any],
     provider_errors: list[str],
     pending_action: dict[str, Any] | None,
@@ -300,7 +321,12 @@ def _build_llm_context(
         "project_categories": PROJECT_CATEGORIES,
         "memory_context": memory_context,
         "todoist_tasks": _compact_tasks(tasks),
-        "calendar_events_today": _summarize_calendar_events(calendar_events),
+        "calendar_events_today": _summarize_calendar_events(
+            _events_on_date(calendar_events, now.date())
+        ),
+        "calendar_events_for_requested_date": _summarize_calendar_events(
+            _events_for_message_target_date(message, upcoming_calendar_events, now)
+        ),
         "free_block": plan["free_block"],
         "deterministic_recommendations": plan["recommended_tasks"],
         "provider_errors": provider_errors,
@@ -334,6 +360,11 @@ def _build_llm_context(
                 "Shopping, errands, personal purchases, gym/health, car, and life admin tasks belong in Personal.",
                 "Use Misc only when no better category fits.",
                 "Do not give planning advice for a clear capture request.",
+            ],
+            "calendar_conflict_rules": [
+                "When scheduling a new event, check conflicts only against calendar_events_for_requested_date.",
+                "Do not treat events from a different date as conflicts for the requested date.",
+                "Important project/work commitments should be both calendar events and Todoist tasks unless they are gym, social hangouts, parties, casual meals, birthdays, holidays, or purely personal/social events.",
             ],
             "tool_boundary": "The model must not call external APIs. It returns a structured decision only; backend tools execute allowed actions.",
         },
@@ -1187,6 +1218,84 @@ def _remove_due_phrase(text: str) -> str:
     )
 
 
+def _events_for_message_target_date(
+    message: str,
+    events: list[dict[str, Any]],
+    local_now: datetime,
+) -> list[dict[str, Any]]:
+    target_date = _extract_temporal_date(message, local_now) or local_now.date()
+    return _events_on_date(events, target_date)
+
+
+def _events_for_datetime_target(
+    events: list[dict[str, Any]],
+    target_start: datetime,
+) -> list[dict[str, Any]]:
+    return _events_on_date(events, target_start.date())
+
+
+def _events_on_date(events: list[dict[str, Any]], target_date) -> list[dict[str, Any]]:
+    target_events = []
+    for event in events:
+        start_value = event.get("start")
+        if not start_value:
+            continue
+        try:
+            event_start = datetime.fromisoformat(str(start_value))
+        except ValueError:
+            continue
+        if event_start.date() == target_date:
+            target_events.append(event)
+    return target_events
+
+
+def _should_dual_write_calendar_event(
+    decision: dict[str, Any],
+    title: str,
+) -> tuple[bool, str | None]:
+    text = " ".join(
+        [
+            title,
+            str(decision.get("answer") or ""),
+            str((decision.get("calendar_event") or {}).get("description") or ""),
+        ]
+    ).lower()
+    if any(keyword in text for keyword in CALENDAR_ONLY_EVENT_KEYWORDS):
+        return False, None
+
+    category = _valid_project_category(decision.get("resolved_project"))
+    if not category:
+        category = _infer_scheduled_project_category(title)
+    if category in {"A&M", "XO", "Nebulo", "Freelance"}:
+        return True, category
+    return False, None
+
+
+def _infer_scheduled_project_category(title: str) -> str | None:
+    text = title.lower()
+    if "ashwin" in text or "charlie" in text or "xo" in text:
+        return "XO"
+    if "brandon" in text or "nebulo" in text:
+        return "Nebulo"
+    if (
+        "a&m" in text
+        or "a and m" in text
+        or "tamu" in text
+        or "advising" in text
+        or "advisor" in text
+    ):
+        return "A&M"
+    if any(keyword in text for keyword in FREELANCE_CAPTURE_KEYWORDS):
+        return "Freelance"
+    return None
+
+
+def _todoist_content_for_calendar_event(title: str, project: str | None) -> str:
+    if project:
+        return re.sub(rf"^{re.escape(project)}\s+[—-]\s+", "", title).strip()
+    return title
+
+
 def _execute_allowed_action(
     settings,
     decision: dict[str, Any],
@@ -1235,24 +1344,64 @@ def _execute_allowed_action(
         if not title or not start or not end:
             return [], ["OpenAI proposed calendar creation without a title, start, and end."]
 
+        target_date_events = _events_for_datetime_target(calendar_events, start)
         result = create_calendar_event(
             settings=settings,
             title=title,
             start=start,
             end=end,
-            existing_events=calendar_events,
+            existing_events=target_date_events,
             allow_conflicts=bool(decision.get("allow_conflicts")),
             description=event.get("description"),
         )
         if result.error:
             return [], [result.error]
-        return [
+        actions = [
             {
                 "type": "create_calendar_event",
                 "status": "success",
                 "event": result.event,
             }
-        ], []
+        ]
+
+        should_dual_write, project = _should_dual_write_calendar_event(decision, title)
+        if should_dual_write:
+            content = _todoist_content_for_calendar_event(title, project)
+            task_result = create_task(
+                settings=settings,
+                content=content,
+                project_id=_project_id_for_category(tasks, project),
+                project_name=_project_name_for_category(project),
+                section_name=_section_name_for_category(project),
+                due_string=start.date().isoformat(),
+                labels=[],
+                priority=4,
+            )
+            if task_result.error:
+                return actions, [task_result.error]
+            task_metadata = _created_task_metadata(
+                {
+                    "content": content,
+                    "project_category": project,
+                    "due_date": start.date().isoformat(),
+                    "due_string": start.date().isoformat(),
+                    "labels": [],
+                    "priority": 4,
+                    "project_name": _project_name_for_category(project),
+                    "section_name": _section_name_for_category(project),
+                },
+                task_result.task,
+            )
+            actions.append(
+                {
+                    "type": "create_todoist_task",
+                    "status": "success",
+                    "task": task_metadata,
+                    "source": "dual_write_calendar_commitment",
+                }
+            )
+
+        return actions, []
 
     return [], [f"OpenAI proposed unsupported action: {action_type}."]
 
@@ -1269,6 +1418,20 @@ def _answer_with_actions(
         return decision["answer"]
 
     action = actions_taken[0]
+    if any(item.get("type") == "create_calendar_event" for item in actions_taken) and any(
+        item.get("type") == "create_todoist_task" for item in actions_taken
+    ):
+        project = next(
+            (
+                (item.get("task") or {}).get("section_name")
+                for item in actions_taken
+                if item.get("type") == "create_todoist_task"
+            ),
+            None,
+        )
+        section_text = f" under {project}" if project else ""
+        return f"{decision['answer']} I added it to your calendar and created a Todoist task{section_text}."
+
     if action["type"] == "create_todoist_task":
         task = action.get("task") or {}
         return f"{decision['answer']} Added Todoist task: {task.get('content')}."

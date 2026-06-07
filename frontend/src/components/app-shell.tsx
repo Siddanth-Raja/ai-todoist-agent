@@ -35,15 +35,16 @@ function getCurrentItem(pathname: string) {
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const currentItem = getCurrentItem(pathname);
+  const isChatRoute = pathname === "/chat";
 
   return (
-    <div className="min-h-dvh overflow-x-hidden text-pearl">
+    <div className="h-screen overflow-hidden text-pearl">
       <div className="pointer-events-none fixed inset-0 -z-10 opacity-80">
         <div className="absolute left-[-8rem] top-24 h-72 w-72 rounded-full bg-iris/10 blur-3xl" />
         <div className="absolute right-[-10rem] top-10 h-96 w-96 rounded-full bg-moss/10 blur-3xl" />
       </div>
 
-      <div className="mx-auto flex min-h-dvh w-full max-w-[1680px] gap-6 px-3 pb-24 pt-3 md:px-6 lg:pb-6 xl:px-8">
+      <div className="mx-auto flex h-full w-full max-w-[1680px] gap-6 overflow-hidden px-3 pb-24 pt-3 md:px-6 lg:pb-6 xl:px-8">
         <aside className="sticky top-6 hidden h-[calc(100dvh-3rem)] w-72 shrink-0 rounded-[2rem] border border-white/10 bg-white/[0.055] p-3 shadow-soft backdrop-blur-2xl xl:block">
           <div className="px-4 pb-5 pt-4">
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-pearl text-ink shadow-card">
@@ -89,8 +90,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
         </aside>
 
-        <div className="flex min-h-dvh min-w-0 flex-1 flex-col overflow-x-hidden">
-          <header className="z-20 px-2 pb-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] md:px-0 md:pt-3">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <header className="z-20 shrink-0 px-2 pb-4 pt-[calc(env(safe-area-inset-top)+0.75rem)] md:px-0 md:pt-3">
             <div className="mx-auto flex w-[calc(100vw-2rem)] max-w-full items-center justify-between gap-4 rounded-[1.75rem] border border-white/10 bg-white/[0.045] px-4 py-3 shadow-card backdrop-blur-2xl sm:w-full md:px-5">
               <div>
                 <p className="text-xs font-medium uppercase tracking-[0.24em] text-moss md:hidden">Personal OS</p>
@@ -104,7 +105,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </header>
 
-          <main className="min-w-0 flex-1 overflow-x-hidden px-1 pt-1 md:px-0">{children}</main>
+          <main
+            className={`min-h-0 min-w-0 flex-1 px-1 pt-1 md:px-0 ${
+              isChatRoute ? "overflow-hidden" : "overflow-y-auto overflow-x-hidden"
+            }`}
+          >
+            {children}
+          </main>
         </div>
       </div>
 

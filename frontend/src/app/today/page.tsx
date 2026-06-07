@@ -8,8 +8,6 @@ import {
   CheckCircle2,
   CircleAlert,
   Clock3,
-  Dumbbell,
-  Flame,
   HeartHandshake,
   Moon,
   Sparkles,
@@ -19,7 +17,13 @@ import {
   Waves,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { apiRequest, formatDateTime, type ActivityEntry, type LifeArea, type TodayResponse } from "@/lib/api";
+import {
+  apiRequest,
+  formatDateTime,
+  type ActivityEntry,
+  type LifeArea,
+  type TodayResponse,
+} from "@/lib/api";
 
 const lifeAreaGradients: Record<string, string> = {
   "A&M": "from-rose-300/20 via-white/[0.055] to-white/[0.035]",
@@ -87,6 +91,19 @@ function metricsForLifeArea(area: LifeArea) {
   return metrics;
 }
 
+function formatMinutes(minutes: number) {
+  if (minutes < 1) {
+    return "Now";
+  }
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
+}
+
 function SoftCard({
   children,
   className = "",
@@ -127,11 +144,15 @@ export default function TodayPage() {
   const [lifeAreaWarnings, setLifeAreaWarnings] = useState<string[]>([]);
   const [activityEntries, setActivityEntries] = useState<ActivityEntry[]>([]);
   const [activityError, setActivityError] = useState<string | null>(null);
+  const [todayData, setTodayData] = useState<TodayResponse | null>(null);
 
   useEffect(() => {
     setNow(new Date());
+    const timer = window.setInterval(() => setNow(new Date()), 30000);
+
     apiRequest<TodayResponse>("/today")
       .then((today) => {
+        setTodayData(today);
         setLifeAreas(today.life_areas);
         setLifeAreaWarnings(today.errors);
         setLifeAreaError(null);
@@ -151,11 +172,21 @@ export default function TodayPage() {
       .catch((error) => {
         setActivityError(error instanceof Error ? error.message : "Unable to load activity.");
       });
+
+    return () => window.clearInterval(timer);
   }, []);
 
   const hour = now.getHours();
   const GreetingIcon = getGreetingIcon(hour);
   const greeting = getGreeting(hour);
+  const nextEvent = todayData?.next_event ?? null;
+  const currentBlock = todayData?.current_free_block ?? null;
+  const commitments = todayData?.today_remaining_events ?? [];
+  const minutesUntilNext = todayData?.minutes_until_next_event ?? null;
+  const recommendation = todayData?.recommendation ?? null;
+  const shouldPrepare = recommendation?.type === "prepare";
+  const isTodayLoading = !todayData && isLifeAreasLoading;
+  const isTodayUnavailable = !todayData && !isLifeAreasLoading;
   const recentActivity = useMemo(
     () =>
       activityEntries.map((entry) => ({
@@ -182,7 +213,7 @@ export default function TodayPage() {
                 Personal operating system
               </span>
               <span className="text-sm text-stone-400" suppressHydrationWarning>
-                {now.toLocaleDateString(undefined, {
+                {todayData?.now_display ?? now.toLocaleDateString(undefined, {
                   weekday: "long",
                   month: "long",
                   day: "numeric",
@@ -197,7 +228,13 @@ export default function TodayPage() {
               {greeting} Siddanth.
             </h3>
             <p className="mt-6 max-w-2xl text-lg leading-8 text-stone-300">
-              You have a clean window for one meaningful move before the next commitment. Keep the system light.
+              {isTodayLoading
+                ? "Reading live calendar data for the rest of today."
+                : isTodayUnavailable
+                  ? "Live Today data is unavailable until the backend connection is configured."
+                : nextEvent
+                ? `Your next live calendar commitment is ${nextEvent.title} at ${nextEvent.start_display}.`
+                : "No blocking calendar commitments remain today."}
             </p>
           </div>
 
@@ -205,12 +242,36 @@ export default function TodayPage() {
             <SoftCard className="p-5">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-sm text-stone-400">Current free block</p>
-                  <p className="mt-2 text-3xl font-semibold text-pearl">10:30 AM-noon</p>
-                  <p className="mt-2 text-sm text-stone-500">90 minutes open for focused work</p>
+                  <p className="text-sm text-stone-400">{shouldPrepare ? "Prepare" : "Current free block"}</p>
+                  <p className="mt-2 text-3xl font-semibold text-pearl">
+                    {isTodayLoading
+                      ? "Loading live calendar"
+                      : isTodayUnavailable
+                        ? "Today unavailable"
+                      : shouldPrepare
+                      ? nextEvent?.title ?? "Prepare"
+                      : currentBlock?.time_range_display ?? "No meaningful block"}
+                  </p>
+                  <p className="mt-2 text-sm text-stone-500">
+                    {isTodayLoading
+                      ? "Calculating from now through end of day."
+                      : isTodayUnavailable
+                        ? "Add backend URL and API key in Settings to calculate the live day."
+                      : shouldPrepare
+                      ? recommendation?.detail ?? "Focus on preparation for the next commitment."
+                      : currentBlock
+                        ? `${currentBlock.duration_minutes} minutes open${
+                            currentBlock.low_usefulness ? ", low usefulness" : ""
+                          }`
+                        : "The next commitment is too close for meaningful work."}
+                  </p>
                 </div>
                 <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-moss/12 text-moss">
-                  <Clock3 className="h-5 w-5" aria-hidden="true" />
+                  {shouldPrepare ? (
+                    <CalendarClock className="h-5 w-5" aria-hidden="true" />
+                  ) : (
+                    <Clock3 className="h-5 w-5" aria-hidden="true" />
+                  )}
                 </span>
               </div>
             </SoftCard>
@@ -218,13 +279,37 @@ export default function TodayPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <SoftCard className="p-5">
                 <p className="text-sm text-stone-400">Next event</p>
-                <p className="mt-3 text-xl font-semibold text-pearl">XO sync</p>
-                <p className="mt-2 text-sm text-stone-500">12:30 PM</p>
+                <p className="mt-3 text-xl font-semibold text-pearl">
+                  {isTodayLoading ? "Loading" : isTodayUnavailable ? "Unavailable" : nextEvent?.title ?? "None remaining"}
+                </p>
+                <p className="mt-2 text-sm text-stone-500">
+                  {isTodayLoading
+                    ? "Checking live Calendar"
+                    : isTodayUnavailable
+                      ? "Backend connection needed"
+                      : nextEvent?.time_range_display ?? "Calendar is clear"}
+                </p>
               </SoftCard>
               <SoftCard className="p-5">
                 <p className="text-sm text-stone-400">Until commitment</p>
-                <p className="mt-3 text-xl font-semibold text-pearl">2h 12m</p>
-                <p className="mt-2 text-sm text-stone-500">No rush</p>
+                <p className="mt-3 text-xl font-semibold text-pearl">
+                  {isTodayLoading
+                    ? "Loading"
+                    : isTodayUnavailable
+                      ? "Unavailable"
+                      : minutesUntilNext === null ? "No next event" : formatMinutes(minutesUntilNext)}
+                </p>
+                <p className="mt-2 text-sm text-stone-500">
+                  {isTodayLoading
+                    ? "Using current time"
+                    : isTodayUnavailable
+                      ? "No live calculation"
+                    : minutesUntilNext !== null && minutesUntilNext <= 30
+                    ? "Prep/travel only"
+                    : minutesUntilNext !== null && minutesUntilNext <= 60
+                      ? "Prepare now"
+                      : "Room to work"}
+                </p>
               </SoftCard>
             </div>
           </div>
@@ -240,20 +325,23 @@ export default function TodayPage() {
             </span>
             <p className="text-xs font-medium uppercase tracking-[0.28em] text-moss">Recommendation</p>
             <h3 className="mt-4 max-w-3xl text-4xl font-semibold leading-tight tracking-normal text-pearl md:text-6xl">
-              Draft the XO weekly sync agenda.
+              {recommendation?.title ?? (isTodayUnavailable ? "Today unavailable" : "Loading today")}
             </h3>
             <p className="mt-5 max-w-2xl text-base leading-7 text-stone-300 md:text-lg">
-              One recommendation only: prep the agenda now, then enter the meeting with the next decision already framed.
+              {recommendation?.detail ??
+                (isTodayUnavailable
+                  ? "Connect Settings so the backend can read live Calendar and Todoist data."
+                  : "Reading live calendar and Todoist context.")}
             </p>
 
             <div className="mt-8 flex flex-wrap gap-3">
               <span className="inline-flex min-h-11 items-center rounded-full border border-white/10 bg-white/[0.07] px-4 text-sm text-stone-300">
                 <TimerReset className="mr-2 h-4 w-4 text-moss" aria-hidden="true" />
-                Fits current block
+                {currentBlock ? `${currentBlock.duration_minutes} min block` : "No work block"}
               </span>
               <span className="inline-flex min-h-11 items-center rounded-full border border-white/10 bg-white/[0.07] px-4 text-sm text-stone-300">
                 <Waves className="mr-2 h-4 w-4 text-iris" aria-hidden="true" />
-                Lowers afternoon friction
+                {shouldPrepare ? "Calendar-first" : "Task-fit recommendation"}
               </span>
             </div>
           </div>
@@ -263,14 +351,22 @@ export default function TodayPage() {
           <p className="text-xs font-medium uppercase tracking-[0.28em] text-stone-500">Next event</p>
           <div className="mt-7 rounded-[1.5rem] bg-gradient-to-br from-coral/18 to-white/[0.04] p-5">
             <CalendarClock className="h-6 w-6 text-coral" aria-hidden="true" />
-            <h3 className="mt-8 text-2xl font-semibold text-pearl">XO weekly sync</h3>
+            <h3 className="mt-8 text-2xl font-semibold text-pearl">
+              {isTodayUnavailable ? "Unavailable" : nextEvent?.title ?? "No events left"}
+            </h3>
             <p className="mt-3 text-sm leading-6 text-stone-400">
-              12:30 PM. Agenda prep is the only thing that materially improves this meeting.
+              {isTodayUnavailable
+                ? "Live calendar data could not be loaded."
+                : nextEvent
+                ? `${nextEvent.time_range_display}. ${minutesUntilNext ?? 0} minutes away.`
+                : "The rest of today has no future blocking calendar commitments."}
             </p>
           </div>
           <div className="mt-4 flex items-center justify-between rounded-2xl bg-black/20 p-4">
-            <span className="text-sm text-stone-400">Prep state</span>
-            <span className="text-sm font-medium text-gold">Needs 20 min</span>
+            <span className="text-sm text-stone-400">State</span>
+            <span className="text-sm font-medium text-gold">
+              {isTodayUnavailable ? "Needs connection" : shouldPrepare ? "Prepare" : nextEvent ? "Before next event" : "Open"}
+            </span>
           </div>
         </SoftCard>
       </section>
@@ -349,30 +445,39 @@ export default function TodayPage() {
       <section className="grid min-w-0 gap-4 xl:col-span-2 xl:grid-cols-[0.95fr_1.05fr]">
         <SoftCard className="p-6 md:p-8">
           <div className="mb-8 flex items-start justify-between gap-4">
-            <SectionTitle eyebrow="Accountability" title="Promises made visible" />
+            <SectionTitle eyebrow="Calendar" title="Remaining commitments" />
             <HeartHandshake className="h-6 w-6 text-moss" aria-hidden="true" />
           </div>
 
           <div className="space-y-3">
-            <div className="rounded-[1.4rem] bg-black/20 p-5">
-              <div className="flex items-center gap-3">
-                <Dumbbell className="h-5 w-5 text-moss" aria-hidden="true" />
-                <p className="font-medium text-pearl">Gym status</p>
-              </div>
-              <p className="mt-3 text-sm text-stone-400">Scheduled for 6:15 PM. Keep dinner light.</p>
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
+            {commitments.length === 0 ? (
               <div className="rounded-[1.4rem] bg-black/20 p-5">
-                <Flame className="h-5 w-5 text-gold" aria-hidden="true" />
-                <p className="mt-5 text-2xl font-semibold text-pearl">6 days</p>
-                <p className="mt-1 text-sm text-stone-500">Planning streak</p>
+                <div className="flex items-center gap-3">
+                  <CheckCircle2 className="h-5 w-5 text-moss" aria-hidden="true" />
+                  <p className="font-medium text-pearl">No future events today</p>
+                </div>
+                <p className="mt-3 text-sm text-stone-400">
+                  Today has no remaining live calendar commitments.
+                </p>
               </div>
-              <div className="rounded-[1.4rem] bg-black/20 p-5">
-                <CircleAlert className="h-5 w-5 text-coral" aria-hidden="true" />
-                <p className="mt-5 text-2xl font-semibold text-pearl">1</p>
-                <p className="mt-1 text-sm text-stone-500">Missed commitment</p>
-              </div>
-            </div>
+            ) : (
+              commitments.map((event) => (
+                <article key={event.id ?? `${event.title}-${event.start}`} className="rounded-[1.4rem] bg-black/20 p-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="break-words font-medium text-pearl">{event.title}</p>
+                      <p className="mt-2 text-sm text-stone-400">{event.time_range_display}</p>
+                    </div>
+                    <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 text-xs capitalize text-stone-400">
+                      {event.event_category}
+                    </span>
+                  </div>
+                  {event.location ? (
+                    <p className="mt-3 break-words text-sm text-stone-500">{event.location}</p>
+                  ) : null}
+                </article>
+              ))
+            )}
           </div>
         </SoftCard>
 

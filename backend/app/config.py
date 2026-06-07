@@ -59,7 +59,7 @@ class Settings:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    timezone = _optional_env("TIMEZONE") or DEFAULT_TIMEZONE
+    timezone = _optional_env("USER_TIMEZONE") or _optional_env("TIMEZONE") or DEFAULT_TIMEZONE
 
     # Validate early so calendar date math fails with a clear setup error.
     ZoneInfo(timezone)

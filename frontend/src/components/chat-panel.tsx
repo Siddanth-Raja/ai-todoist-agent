@@ -218,7 +218,7 @@ function TodoistActionCard({ action }: { action: ChatAction }) {
     <div className="rounded-lg border border-moss/30 bg-moss/10 p-4">
       <div className="mb-3 flex items-center gap-2 text-sm font-medium text-moss">
         <ListTodo className="h-4 w-4" aria-hidden="true" />
-        Task added
+        Todoist task added
       </div>
       <dl className="space-y-2">
         <FieldRow label="Task" value={title} />
@@ -514,8 +514,8 @@ export function ChatPanel() {
   }
 
   return (
-    <section className="mx-auto flex min-h-[calc(100dvh-11rem)] max-w-3xl flex-col md:min-h-[calc(100dvh-9rem)]">
-      <div className="flex-1 space-y-5 pb-5">
+    <section className="mx-auto flex h-full min-h-0 max-w-3xl flex-col overflow-hidden">
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain pb-5 pr-1">
         {!hasConversation ? (
           <div className="flex min-h-[42dvh] items-center">
             <div>
@@ -571,7 +571,7 @@ export function ChatPanel() {
 
       <form
         onSubmit={handleSubmit}
-        className="sticky bottom-[5.5rem] z-10 rounded-lg border border-line bg-panel/95 p-2 shadow-glow backdrop-blur-xl md:bottom-4"
+        className="z-10 shrink-0 rounded-lg border border-line bg-panel/95 p-2 shadow-glow backdrop-blur-xl"
       >
         <div className="flex items-end gap-2">
           <textarea

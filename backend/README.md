@@ -36,6 +36,7 @@ GOOGLE_CLIENT_ID=your_google_oauth_client_id
 GOOGLE_CLIENT_SECRET=your_google_oauth_client_secret
 GOOGLE_REFRESH_TOKEN=your_google_refresh_token
 GOOGLE_CALENDAR_ID=primary
+USER_TIMEZONE=America/Chicago
 
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5.4-mini
@@ -44,6 +45,7 @@ AGENT_API_KEY=choose_a_private_api_key_for_chat_requests
 ```
 
 `GOOGLE_CALENDAR_ID` defaults to `primary` if omitted.
+`USER_TIMEZONE` defaults to `America/Chicago` if omitted.
 `OPENAI_MODEL` defaults to `gpt-5.4-mini` if omitted.
 `AGENT_API_KEY` is required for `POST /chat`.
 

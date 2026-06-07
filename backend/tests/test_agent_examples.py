@@ -202,7 +202,12 @@ class AgentExampleTests(unittest.TestCase):
             patch("app.agent.get_settings", return_value=FakeSettings()),
             patch("app.agent.list_active_tasks", return_value=TodoistReadResult(tasks=TASKS)),
             patch("app.agent.list_todays_events", return_value=CalendarReadResult(events=EVENTS)),
+            patch("app.agent.list_upcoming_events", return_value=CalendarReadResult(events=EVENTS)),
             patch("app.agent.list_memory_entries", return_value=MEMORIES),
+            patch(
+                "app.agent.create_task",
+                return_value=TodoistWriteResult(task={**TASKS[0], "id": "task-created"}),
+            ),
         ]
         for item in self.base_patches:
             item.start()
@@ -419,6 +424,170 @@ class AgentExampleTests(unittest.TestCase):
         self.assertIn("Project context:", create_event_kwargs["description"])
         self.assertIn("XO", create_event_kwargs["description"])
         self.assertIn("I recognized this as XO.", response["answer"])
+
+    def test_project_meeting_dual_writes_calendar_and_todoist(self):
+        event = {
+            "id": "event-xo",
+            "title": "XO — Meeting with Ashwin and Charlie",
+            "start": "2026-06-05T16:00:00-05:00",
+            "end": "2026-06-05T17:00:00-05:00",
+        }
+        created_task = {
+            **TASKS[0],
+            "id": "task-xo-meeting",
+            "content": "Meeting with Ashwin and Charlie",
+            "section_name": "XO",
+        }
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="I can add that.",
+                intent="schedule_event",
+                action_type="create_calendar_event",
+                calendar_event={
+                    "title": "Meeting with Ashwin and Charlie",
+                    "start": "2026-06-05T16:00:00-05:00",
+                    "end": "2026-06-05T17:00:00-05:00",
+                    "description": None,
+                },
+            ),
+            None,
+        )), patch(
+            "app.agent.create_calendar_event",
+            return_value=CalendarWriteResult(event=event),
+        ), patch(
+            "app.agent.create_task",
+            return_value=TodoistWriteResult(task=created_task),
+        ) as create_task_mock:
+            response = handle_chat("meet with Ashwin and Charlie tomorrow at 4", self.now)
+
+        create_task_kwargs = create_task_mock.call_args.kwargs
+        self.assertEqual(create_task_kwargs["content"], "Meeting with Ashwin and Charlie")
+        self.assertEqual(create_task_kwargs["section_name"], "XO")
+        self.assertEqual(create_task_kwargs["due_string"], "2026-06-05")
+        self.assertEqual([action["type"] for action in response["actions_taken"]], [
+            "create_calendar_event",
+            "create_todoist_task",
+        ])
+        self.assertIn("created a Todoist task under XO", response["answer"])
+
+    def test_gym_schedule_is_calendar_only(self):
+        event = {
+            "id": "event-gym",
+            "title": "Gym",
+            "start": "2026-06-05T14:30:00-05:00",
+            "end": "2026-06-05T15:30:00-05:00",
+        }
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="I added gym tomorrow.",
+                intent="schedule_event",
+                action_type="create_calendar_event",
+                calendar_event={
+                    "title": "Gym",
+                    "start": "2026-06-05T14:30:00-05:00",
+                    "end": "2026-06-05T15:30:00-05:00",
+                    "description": None,
+                },
+            ),
+            None,
+        )), patch(
+            "app.agent.create_calendar_event",
+            return_value=CalendarWriteResult(event=event),
+        ), patch("app.agent.create_task") as create_task_mock:
+            response = handle_chat("I want to go gym tomorrow at 2:30", self.now)
+
+        create_task_mock.assert_not_called()
+        self.assertEqual([action["type"] for action in response["actions_taken"]], ["create_calendar_event"])
+
+    def test_today_meeting_does_not_affect_tomorrow_gym_scheduling(self):
+        today_meeting = {
+            "id": "event-today-xo",
+            "title": "XO — Meeting with Ashwin and Charlie",
+            "start": "2026-06-04T16:00:00-05:00",
+            "end": "2026-06-04T17:00:00-05:00",
+            "busy": True,
+            "event_type": "hard",
+        }
+        tomorrow_gym = {
+            "id": "event-gym",
+            "title": "Gym",
+            "start": "2026-06-05T14:30:00-05:00",
+            "end": "2026-06-05T15:30:00-05:00",
+        }
+
+        def fake_decision(settings, context):
+            self.assertEqual(context["calendar_events_today"][0]["title"], "XO — Meeting with Ashwin and Charlie")
+            self.assertEqual(context["calendar_events_for_requested_date"], [])
+            return (
+                self._decision(
+                    answer="I can put gym on your calendar.",
+                    intent="schedule_event",
+                    action_type="create_calendar_event",
+                    calendar_event={
+                        "title": "Gym",
+                        "start": "2026-06-05T14:30:00-05:00",
+                        "end": "2026-06-05T15:30:00-05:00",
+                        "description": None,
+                    },
+                ),
+                None,
+            )
+
+        with patch("app.agent.list_todays_events", return_value=CalendarReadResult(events=[today_meeting])), patch(
+            "app.agent.list_upcoming_events",
+            return_value=CalendarReadResult(events=[today_meeting]),
+        ), patch("app.agent._get_llm_decision", side_effect=fake_decision), patch(
+            "app.agent.create_calendar_event",
+            return_value=CalendarWriteResult(event=tomorrow_gym),
+        ) as create_event_mock:
+            response = handle_chat("I want to go gym tomorrow at 2:30", self.now)
+
+        self.assertEqual(create_event_mock.call_args.kwargs["existing_events"], [])
+        self.assertEqual(response["actions_taken"][0]["type"], "create_calendar_event")
+        self.assertNotIn("Ashwin", response["answer"])
+
+    def test_tomorrow_event_conflict_detection_still_uses_tomorrow_events(self):
+        tomorrow_meeting = {
+            "id": "event-tomorrow-meeting",
+            "title": "Nebulo — Meeting with Brandon",
+            "start": "2026-06-05T14:00:00-05:00",
+            "end": "2026-06-05T15:00:00-05:00",
+            "busy": True,
+            "event_type": "hard",
+        }
+
+        def fake_decision(settings, context):
+            self.assertEqual(
+                context["calendar_events_for_requested_date"][0]["title"],
+                "Nebulo — Meeting with Brandon",
+            )
+            return (
+                self._decision(
+                    answer="I can put gym on your calendar.",
+                    intent="schedule_event",
+                    action_type="create_calendar_event",
+                    calendar_event={
+                        "title": "Gym",
+                        "start": "2026-06-05T14:30:00-05:00",
+                        "end": "2026-06-05T15:30:00-05:00",
+                        "description": None,
+                    },
+                ),
+                None,
+            )
+
+        with patch("app.agent.list_upcoming_events", return_value=CalendarReadResult(events=[tomorrow_meeting])), patch(
+            "app.agent._get_llm_decision",
+            side_effect=fake_decision,
+        ), patch(
+            "app.agent.create_calendar_event",
+            return_value=CalendarWriteResult(error="Calendar event conflicts with existing event: Nebulo — Meeting with Brandon."),
+        ) as create_event_mock:
+            response = handle_chat("I want to go gym tomorrow at 2:30", self.now)
+
+        self.assertEqual(create_event_mock.call_args.kwargs["existing_events"], [tomorrow_meeting])
+        self.assertEqual(response["actions_taken"], [])
+        self.assertIn("conflicts with existing event", response["errors"][0])
 
     def test_am_roommates_resolve_to_am_context(self):
         event = {
@@ -684,7 +853,8 @@ class AgentExampleTests(unittest.TestCase):
 
         self.assertEqual(response["intent"], "schedule_event")
         self.assertEqual(response["actions_taken"][0]["type"], "create_calendar_event")
-        self.assertIn("Added calendar event", response["answer"])
+        self.assertEqual(response["actions_taken"][1]["type"], "create_todoist_task")
+        self.assertIn("created a Todoist task under Nebulo", response["answer"])
 
     def test_affirmative_reply_executes_pending_calendar_event(self):
         created_event = {

@@ -170,6 +170,25 @@ def list_upcoming_events(
     return _list_events_between(settings, start, end)
 
 
+def list_remaining_today_events(
+    settings: Settings,
+    now: datetime | None = None,
+) -> CalendarReadResult:
+    """Read Calendar events from the current local time through the end of today."""
+    missing_fields = settings.missing_google_calendar_fields
+    if missing_fields:
+        joined = ", ".join(missing_fields)
+        return CalendarReadResult(
+            events=[],
+            error=f"{joined} missing. Add Google OAuth credentials to backend/.env to read Calendar events.",
+        )
+
+    local_tz = settings.local_tz
+    local_now = now.astimezone(local_tz) if now else datetime.now(local_tz)
+    end_of_day = datetime.combine(local_now.date() + timedelta(days=1), time.min, tzinfo=local_tz)
+    return _list_events_between(settings, local_now, end_of_day)
+
+
 def create_calendar_event(
     settings: Settings,
     title: str,

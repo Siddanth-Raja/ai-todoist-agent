@@ -55,10 +55,16 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         self.db_path = os.path.join(self.tempdir.name, "app.sqlite3")
         self.env_patch = patch.dict(os.environ, {"APP_DB_PATH": self.db_path})
         self.settings_patch = patch("app.main.get_settings", return_value=FakeSettings())
+        self.calendar_patch = patch(
+            "app.main.list_remaining_today_events",
+            return_value=CalendarReadResult(events=[]),
+        )
         self.env_patch.start()
         self.settings_patch.start()
+        self.calendar_patch.start()
         self.addCleanup(self.env_patch.stop)
         self.addCleanup(self.settings_patch.stop)
+        self.addCleanup(self.calendar_patch.stop)
         self.authorization = "Bearer test-agent-key"
 
     def test_default_memories_are_seeded_once(self):
@@ -265,7 +271,103 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         self.assertEqual(areas["Personal"]["status"], "Clear for steady work")
         self.assertEqual(areas["Misc"]["task_count"], 0)
         self.assertEqual(areas["Misc"]["status"], "Clear")
+        self.assertIsNone(payload["next_event"])
+        self.assertEqual(payload["today_remaining_events"], [])
         self.assertEqual(payload["errors"], [])
+
+    def test_today_does_not_use_past_event_as_next_event(self):
+        now = datetime(2026, 6, 5, 17, 45, tzinfo=ZoneInfo("America/Chicago"))
+        events = [
+            self._calendar_event("past", "Lunch", "2026-06-05T12:00:00-05:00", "2026-06-05T13:00:00-05:00"),
+        ]
+        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
+            "app.main.list_remaining_today_events",
+            return_value=CalendarReadResult(events=events),
+        ):
+            payload = main.today_index(current_time=now, authorization=self.authorization)
+
+        self.assertIsNone(payload["next_event"])
+        self.assertEqual(payload["today_remaining_events"], [])
+        self.assertGreater(payload["current_free_block"]["duration_minutes"], 0)
+
+    def test_today_event_in_45_minutes_is_next_event_and_ends_free_block(self):
+        now = datetime(2026, 6, 5, 17, 45, tzinfo=ZoneInfo("America/Chicago"))
+        events = [
+            self._calendar_event("next", "Gym", "2026-06-05T18:30:00-05:00", "2026-06-05T19:30:00-05:00"),
+        ]
+        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
+            "app.main.list_remaining_today_events",
+            return_value=CalendarReadResult(events=events),
+        ):
+            payload = main.today_index(current_time=now, authorization=self.authorization)
+
+        self.assertEqual(payload["next_event"]["title"], "Gym")
+        self.assertEqual(payload["minutes_until_next_event"], 45)
+        self.assertEqual(payload["current_free_block"]["start"], now.isoformat())
+        self.assertEqual(payload["current_free_block"]["end"], "2026-06-05T18:30:00-05:00")
+        self.assertTrue(payload["current_free_block"]["low_usefulness"])
+
+    def test_today_event_within_45_minutes_triggers_preparation_recommendation(self):
+        now = datetime(2026, 6, 5, 17, 45, tzinfo=ZoneInfo("America/Chicago"))
+        events = [
+            self._calendar_event("next", "XO sync", "2026-06-05T18:30:00-05:00", "2026-06-05T19:30:00-05:00"),
+        ]
+        tasks = [
+            {
+                "id": "task-1",
+                "content": "Do deep work",
+                "section_name": "XO",
+                "due": None,
+                "priority": 1,
+                "todoist_priority": 1,
+                "labels": [],
+            }
+        ]
+        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)), patch(
+            "app.main.list_remaining_today_events",
+            return_value=CalendarReadResult(events=events),
+        ):
+            payload = main.today_index(current_time=now, authorization=self.authorization)
+
+        self.assertEqual(payload["recommendation"]["type"], "prepare")
+        self.assertIn("Prepare for XO sync", payload["recommendation"]["title"])
+
+    def test_today_all_day_birthday_does_not_block_free_time(self):
+        now = datetime(2026, 6, 5, 17, 45, tzinfo=ZoneInfo("America/Chicago"))
+        events = [
+            self._calendar_event(
+                "birthday",
+                "Ashwin birthday",
+                "2026-06-05T00:00:00-05:00",
+                "2026-06-06T00:00:00-05:00",
+                all_day=True,
+                event_category="informational",
+            ),
+        ]
+        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
+            "app.main.list_remaining_today_events",
+            return_value=CalendarReadResult(events=events),
+        ):
+            payload = main.today_index(current_time=now, authorization=self.authorization)
+
+        self.assertIsNone(payload["next_event"])
+        self.assertEqual(payload["today_remaining_events"][0]["event_category"], "informational")
+        self.assertGreater(payload["current_free_block"]["duration_minutes"], 0)
+
+    def test_today_uses_america_chicago_timezone(self):
+        utc_now = datetime(2026, 6, 5, 22, 45, tzinfo=ZoneInfo("UTC"))
+        events = [
+            self._calendar_event("next", "Dinner", "2026-06-05T18:30:00-05:00", "2026-06-05T19:30:00-05:00"),
+        ]
+        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
+            "app.main.list_remaining_today_events",
+            return_value=CalendarReadResult(events=events),
+        ):
+            payload = main.today_index(current_time=utc_now, authorization=self.authorization)
+
+        self.assertEqual(payload["now"], "2026-06-05T17:45:00-05:00")
+        self.assertIn("5:45 PM", payload["now_display"])
+        self.assertEqual(payload["minutes_until_next_event"], 45)
 
     def test_calendar_endpoint_returns_labels_and_conflicts(self):
         events = [
@@ -405,6 +507,31 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         }
         self.assertIn("task_created", activity_types)
         self.assertIn("confirmation_requested", activity_types)
+
+    def _calendar_event(
+        self,
+        event_id: str,
+        title: str,
+        start: str,
+        end: str,
+        *,
+        all_day: bool = False,
+        busy: bool = True,
+        event_category: str = "hard",
+    ) -> dict:
+        start_dt = datetime.fromisoformat(start)
+        end_dt = datetime.fromisoformat(end)
+        return {
+            "id": event_id,
+            "title": title,
+            "start": start,
+            "end": end,
+            "duration_minutes": int((end_dt - start_dt).total_seconds() // 60),
+            "all_day": all_day,
+            "busy": busy,
+            "event_type": event_category,
+            "event_category": event_category,
+        }
 
     def test_new_endpoints_require_api_key(self):
         with self.assertRaises(HTTPException) as exc:

@@ -15,7 +15,13 @@ import app.agent as agent  # noqa: E402
 from app.agent import _decision_schema, _sanitize_decision, confirm_pending_action, handle_chat  # noqa: E402
 from app.calendar_tools import CalendarReadResult, CalendarWriteResult  # noqa: E402
 from app.main import ChatRequest, chat, require_agent_api_key  # noqa: E402
-from app.todoist_tools import TodoistReadResult, TodoistWriteResult, create_task  # noqa: E402
+from app.todoist_tools import (  # noqa: E402
+    TodoistReadResult,
+    TodoistSectionResult,
+    TodoistWriteResult,
+    create_task,
+    list_todoist_sections,
+)
 
 
 @dataclass
@@ -83,6 +89,15 @@ EVENTS = [
         "busy": True,
         "event_type": "flexible",
     }
+]
+
+TODOIST_SECTIONS = [
+    {"id": "section-am", "name": "A&M"},
+    {"id": "section-xo", "name": "XO Collective"},
+    {"id": "section-freelance", "name": "Freelance Web Design"},
+    {"id": "section-nebulo", "name": "Nebulo"},
+    {"id": "section-personal", "name": "Personal"},
+    {"id": "section-misc", "name": "Misc"},
 ]
 
 MEMORIES = [
@@ -201,6 +216,7 @@ class AgentExampleTests(unittest.TestCase):
         self.base_patches = [
             patch("app.agent.get_settings", return_value=FakeSettings()),
             patch("app.agent.list_active_tasks", return_value=TodoistReadResult(tasks=TASKS)),
+            patch("app.agent.list_todoist_sections", return_value=TodoistSectionResult(sections=TODOIST_SECTIONS)),
             patch("app.agent.list_todays_events", return_value=CalendarReadResult(events=EVENTS)),
             patch("app.agent.list_upcoming_events", return_value=CalendarReadResult(events=EVENTS)),
             patch("app.agent.list_memory_entries", return_value=MEMORIES),
@@ -303,7 +319,7 @@ class AgentExampleTests(unittest.TestCase):
         self.assertEqual(response["actions_taken"][0]["task"]["section_name"], "Personal")
         self.assertNotIn("think about errands later", response["answer"])
 
-    def test_exact_water_bottle_target_capture_infers_personal_from_memory_rule(self):
+    def test_exact_water_bottle_target_capture_infers_personal_from_rule(self):
         created_task = {
             **TASKS[0],
             "id": "task-water-bottle",
@@ -324,7 +340,9 @@ class AgentExampleTests(unittest.TestCase):
         create_task_kwargs = create_task_mock.call_args.kwargs
         self.assertEqual(create_task_kwargs["project_name"], "To-Do")
         self.assertEqual(create_task_kwargs["section_name"], "Personal")
+        self.assertEqual(create_task_kwargs["section_id"], "section-personal")
         self.assertEqual(response["actions_taken"][0]["task"]["project_category"], "Personal")
+        self.assertEqual(response["actions_taken"][0]["task"]["todoist_section_id"], "section-personal")
 
     def test_brandon_memory_hint_maps_meeting_to_nebulo_context(self):
         def fake_decision(settings, context):
@@ -438,7 +456,8 @@ class AgentExampleTests(unittest.TestCase):
             "content": "Meeting with Ashwin and Charlie",
             "section_name": "XO Collective",
             "todoist_section_name": "XO Collective",
-            "classification_source": "memory_rule",
+            "todoist_section_id": "section-xo",
+            "classification_source": "memory",
         }
         with patch("app.agent._get_llm_decision", return_value=(
             self._decision(
@@ -465,6 +484,7 @@ class AgentExampleTests(unittest.TestCase):
         create_task_kwargs = create_task_mock.call_args.kwargs
         self.assertEqual(create_task_kwargs["content"], "Meeting with Ashwin and Charlie")
         self.assertEqual(create_task_kwargs["section_name"], "XO Collective")
+        self.assertEqual(create_task_kwargs["section_id"], "section-xo")
         self.assertEqual(create_task_kwargs["due_string"], "2026-06-05")
         self.assertEqual([action["type"] for action in response["actions_taken"]], [
             "create_calendar_event",
@@ -712,8 +732,10 @@ class AgentExampleTests(unittest.TestCase):
 
         create_task_kwargs = create_task_mock.call_args.kwargs
         self.assertEqual(create_task_kwargs["section_name"], "Nebulo")
+        self.assertEqual(create_task_kwargs["section_id"], "section-nebulo")
         self.assertEqual(response["actions_taken"][0]["task"]["project_category"], "Nebulo")
         self.assertEqual(response["actions_taken"][0]["task"]["resolved_project"], "Nebulo")
+        self.assertEqual(response["actions_taken"][0]["task"]["classification_source"], "memory")
         self.assertIn("I recognized Brandon as Nebulo.", response["answer"])
 
     def test_disabled_memories_are_not_in_openai_context(self):
@@ -758,6 +780,7 @@ class AgentExampleTests(unittest.TestCase):
         self.assertEqual(create_task_kwargs["project_id"], "project-todo")
         self.assertEqual(create_task_kwargs["project_name"], "To-Do")
         self.assertEqual(create_task_kwargs["section_name"], "Personal")
+        self.assertEqual(create_task_kwargs["section_id"], "section-personal")
         self.assertEqual(create_task_kwargs["due_string"], "2026-06-05")
         self.assertEqual(create_task_kwargs["priority"], 4)
         self.assertEqual(response["actions_taken"][0]["task"]["project_category"], "Personal")
@@ -781,14 +804,14 @@ class AgentExampleTests(unittest.TestCase):
 
     def test_task_creation_uses_real_todoist_sections(self):
         cases = [
-            ("call Ashwin and Charlie", "XO Collective", "XO"),
-            ("call Brandon", "Nebulo", "Nebulo"),
-            ("send client outreach email", "Freelance Web Design", "Freelance"),
-            ("buy water bottle", "Personal", "Personal"),
-            ("add mysterious follow up", "Misc", "Misc"),
+            ("call Ashwin and Charlie", "XO Collective", "section-xo", "XO", "memory"),
+            ("call Brandon", "Nebulo", "section-nebulo", "Nebulo", "memory"),
+            ("send client outreach email", "Freelance Web Design", "section-freelance", "Freelance", "rule"),
+            ("buy water bottle", "Personal", "section-personal", "Personal", "rule"),
+            ("add mysterious follow up", "Misc", "section-misc", "Misc", "fallback"),
         ]
 
-        for message, expected_section, expected_category in cases:
+        for message, expected_section, expected_section_id, expected_category, expected_source in cases:
             with self.subTest(message=message):
                 created_task = {
                     **TASKS[0],
@@ -796,7 +819,8 @@ class AgentExampleTests(unittest.TestCase):
                     "content": message,
                     "section_name": expected_section,
                     "todoist_section_name": expected_section,
-                    "classification_source": "memory_rule" if expected_category != "Misc" else "fallback",
+                    "todoist_section_id": expected_section_id,
+                    "classification_source": expected_source,
                 }
                 with patch("app.agent._get_llm_decision", return_value=(
                     self._decision(
@@ -814,8 +838,12 @@ class AgentExampleTests(unittest.TestCase):
                 create_task_kwargs = create_task_mock.call_args.kwargs
                 self.assertEqual(create_task_kwargs["project_name"], "To-Do")
                 self.assertEqual(create_task_kwargs["section_name"], expected_section)
+                self.assertEqual(create_task_kwargs["section_id"], expected_section_id)
                 self.assertEqual(response["actions_taken"][0]["task"]["project_category"], expected_category)
+                self.assertEqual(response["actions_taken"][0]["task"]["resolved_project"], expected_category)
                 self.assertEqual(response["actions_taken"][0]["task"]["todoist_section_name"], expected_section)
+                self.assertEqual(response["actions_taken"][0]["task"]["todoist_section_id"], expected_section_id)
+                self.assertEqual(response["actions_taken"][0]["task"]["classification_source"], expected_source)
 
     def test_temporal_phrase_extraction(self):
         cases = [
@@ -834,6 +862,34 @@ class AgentExampleTests(unittest.TestCase):
                 )
 
             self.assertEqual(due_date.isoformat(), expected_due_date)
+
+    def test_todoist_sections_are_fetched_from_to_do_project(self):
+        with patch("app.todoist_tools._fetch_projects", return_value={"project-todo": "To-Do"}), patch(
+            "app.todoist_tools._fetch_sections",
+            return_value={
+                "section-am": "A&M",
+                "section-xo": "XO Collective",
+                "section-freelance": "Freelance Web Design",
+                "section-nebulo": "Nebulo",
+                "section-personal": "Personal",
+                "section-misc": "Misc",
+            },
+        ) as fetch_sections_mock:
+            result = list_todoist_sections(FakeSettings())
+
+        fetch_sections_mock.assert_called_once_with(FakeSettings(), project_id="project-todo")
+        self.assertIsNone(result.error)
+        self.assertEqual(
+            {section["name"]: section["id"] for section in result.sections},
+            {
+                "A&M": "section-am",
+                "XO Collective": "section-xo",
+                "Freelance Web Design": "section-freelance",
+                "Nebulo": "section-nebulo",
+                "Personal": "section-personal",
+                "Misc": "section-misc",
+            },
+        )
 
     def test_todoist_create_task_resolves_project_and_section_names(self):
         response = requests.Response()

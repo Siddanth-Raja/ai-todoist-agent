@@ -31,6 +31,12 @@ class TodoistReadResult:
 
 
 @dataclass
+class TodoistSectionResult:
+    sections: list[dict[str, str]]
+    error: str | None = None
+
+
+@dataclass
 class TodoistWriteResult:
     task: dict[str, Any] | None = None
     error: str | None = None
@@ -70,6 +76,35 @@ def list_tasks(settings: Settings) -> TodoistReadResult:
     return list_active_tasks(settings)
 
 
+def list_todoist_sections(settings: Settings) -> TodoistSectionResult:
+    """Fetch real sections from the canonical To-Do project."""
+    if settings.missing_todoist:
+        return TodoistSectionResult(
+            sections=[],
+            error="TODOIST_API_TOKEN is missing. Add it to backend/.env to read Todoist sections.",
+        )
+
+    try:
+        projects = _fetch_projects(settings)
+        todo_project_id = _find_id_by_name(projects, TODOIST_INBOX_PROJECT_NAME)
+        sections = _fetch_sections(settings, project_id=todo_project_id)
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else "unknown"
+        return TodoistSectionResult(
+            sections=[],
+            error=f"Could not read Todoist sections. Todoist returned HTTP {status_code}.",
+        )
+    except requests.RequestException as exc:
+        return TodoistSectionResult(
+            sections=[],
+            error=f"Could not read Todoist sections: {exc.__class__.__name__}.",
+        )
+
+    return TodoistSectionResult(
+        sections=[{"id": section_id, "name": section_name} for section_id, section_name in sections.items()]
+    )
+
+
 def create_task(
     settings: Settings,
     content: str,
@@ -102,6 +137,10 @@ def create_task(
         if canonical_section_name and not section_id:
             sections = _fetch_sections(settings, project_id=project_id)
             section_id = _find_id_by_name(sections, canonical_section_name)
+            if not section_id:
+                return TodoistWriteResult(
+                    error=f"Todoist section '{canonical_section_name}' was not found in {TODOIST_INBOX_PROJECT_NAME}.",
+                )
 
         payload: dict[str, Any] = {"content": content}
         if project_id:

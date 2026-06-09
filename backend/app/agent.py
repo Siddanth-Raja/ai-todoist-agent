@@ -14,7 +14,13 @@ from .calendar_tools import (
 from .config import get_settings
 from .planner import build_plan, enrich_task
 from .storage import list_memory_entries
-from .todoist_tools import LIFE_AREA_TO_TODOIST_SECTION, TODOIST_INBOX_PROJECT_NAME, create_task, list_active_tasks
+from .todoist_tools import (
+    LIFE_AREA_TO_TODOIST_SECTION,
+    TODOIST_INBOX_PROJECT_NAME,
+    create_task,
+    list_active_tasks,
+    list_todoist_sections,
+)
 
 
 MODE = "ai_agent"
@@ -1021,7 +1027,7 @@ def _apply_memory_resolution(
         task["section_name"] = _section_name_for_category(resolved_project)
         task["todoist_section_name"] = _section_name_for_category(resolved_project)
         task["project_name"] = _project_name_for_category(resolved_project)
-        task["classification_source"] = task.get("classification_source") or "memory_rule"
+        task["classification_source"] = "memory"
         decision["task"] = task
 
     calendar_event = (
@@ -1314,6 +1320,7 @@ def _extract_capture_metadata(
 
     return {
         "content": content,
+        "resolved_project": category,
         "project_category": category,
         "due_string": due_date_text or task.get("due_string"),
         "due_date": due_date_text or task.get("due_date"),
@@ -1400,19 +1407,19 @@ def _infer_capture_category(
     text = task_content.lower()
     memory_category = _infer_category_from_memory(task_content, memory_entries or [])
     if memory_category:
-        return memory_category, "memory_rule"
+        return memory_category, "memory"
     if any(keyword in text for keyword in ("grad", "graduation", "commencement", "speech")):
-        return "Personal", "memory_rule"
+        return "Personal", "rule"
     if any(keyword in text for keyword in PERSONAL_CAPTURE_KEYWORDS):
-        return "Personal", "memory_rule"
+        return "Personal", "rule"
     if any(keyword in text for keyword in FREELANCE_CAPTURE_KEYWORDS):
-        return "Freelance", "memory_rule"
+        return "Freelance", "rule"
     if any(keyword in text for keyword in XO_CAPTURE_KEYWORDS):
-        return "XO", "memory_rule"
+        return "XO", "rule"
     if any(keyword in text for keyword in NEBULO_CAPTURE_KEYWORDS):
-        return "Nebulo", "memory_rule"
+        return "Nebulo", "rule"
     if any(keyword in text for keyword in COLLEGE_CAPTURE_KEYWORDS):
-        return "A&M", "memory_rule"
+        return "A&M", "rule"
     return "Misc", "fallback"
 
 
@@ -1577,13 +1584,26 @@ def _execute_allowed_action(
             return [], ["OpenAI proposed task creation without task content."]
 
         category = decision.get("resolved_project") or task.get("project_category")
+        todoist_section = _todoist_section_for_category(settings, category)
+        section_name = todoist_section.get("name") or task.get("section_name") or _section_name_for_category(category)
+        section_id = todoist_section.get("id") or task.get("section_id") or task.get("todoist_section_id")
+        task.update(
+            {
+                "resolved_project": category,
+                "project_category": category,
+                "section_name": section_name,
+                "todoist_section_name": section_name,
+                "todoist_section_id": section_id,
+            }
+        )
         project_id = _project_id_for_category(tasks, category)
         result = create_task(
             settings=settings,
             content=content,
             project_id=project_id,
             project_name=task.get("project_name") or _project_name_for_category(category),
-            section_name=task.get("section_name") or _section_name_for_category(category),
+            section_id=section_id,
+            section_name=section_name,
             due_string=task.get("due_date") or task.get("due_string"),
             labels=task.get("labels") or [],
             priority=task.get("priority"),
@@ -1630,12 +1650,16 @@ def _execute_allowed_action(
         should_dual_write, project = _should_dual_write_calendar_event(decision, title)
         if should_dual_write:
             content = _todoist_content_for_calendar_event(title, project)
+            todoist_section = _todoist_section_for_category(settings, project)
+            section_name = todoist_section.get("name") or _section_name_for_category(project)
+            section_id = todoist_section.get("id")
             task_result = create_task(
                 settings=settings,
                 content=content,
                 project_id=_project_id_for_category(tasks, project),
                 project_name=_project_name_for_category(project),
-                section_name=_section_name_for_category(project),
+                section_id=section_id,
+                section_name=section_name,
                 due_string=start.date().isoformat(),
                 labels=[],
                 priority=4,
@@ -1651,9 +1675,11 @@ def _execute_allowed_action(
                     "labels": [],
                     "priority": 4,
                     "project_name": _project_name_for_category(project),
-                    "section_name": _section_name_for_category(project),
-                    "todoist_section_name": _section_name_for_category(project),
-                    "classification_source": "memory_rule",
+                    "section_name": section_name,
+                    "todoist_section_name": section_name,
+                    "todoist_section_id": section_id,
+                    "classification_source": "rule",
+                    "resolved_project": project,
                 },
                 task_result.task,
             )
@@ -1795,6 +1821,19 @@ def _project_name_for_category(category: str | None) -> str | None:
 
 def _section_name_for_category(category: str | None) -> str | None:
     return LIFE_AREA_TO_TODOIST_SECTION.get(category or "")
+
+
+def _todoist_section_for_category(settings, category: str | None) -> dict[str, str | None]:
+    section_name = _section_name_for_category(category)
+    if not section_name:
+        return {"id": None, "name": None}
+
+    result = list_todoist_sections(settings)
+    for section in result.sections:
+        if section.get("name") == section_name:
+            return {"id": section.get("id"), "name": section_name}
+
+    return {"id": None, "name": section_name}
 
 
 def _created_task_metadata(

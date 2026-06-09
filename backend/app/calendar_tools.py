@@ -258,6 +258,63 @@ def create_calendar_event(
     return CalendarWriteResult(event=_normalize_event(event, settings.local_tz))
 
 
+def update_calendar_event(
+    settings: Settings,
+    event_id: str,
+    title: str,
+    start: datetime,
+    end: datetime,
+    description: str | None = None,
+) -> CalendarWriteResult:
+    """Update an existing Google Calendar event after explicit confirmation."""
+    missing_fields = settings.missing_google_calendar_fields
+    if missing_fields:
+        joined = ", ".join(missing_fields)
+        return CalendarWriteResult(
+            error=f"{joined} missing. Add Google OAuth credentials to backend/.env to update Calendar events.",
+        )
+
+    if not event_id:
+        return CalendarWriteResult(error="Calendar update requires an event id.")
+    if end <= start:
+        return CalendarWriteResult(error="Calendar event end time must be after start time.")
+
+    body = {
+        "summary": title,
+        "start": {
+            "dateTime": start.isoformat(),
+            "timeZone": settings.timezone,
+        },
+        "end": {
+            "dateTime": end.isoformat(),
+            "timeZone": settings.timezone,
+        },
+    }
+    if description:
+        body["description"] = description
+
+    try:
+        service = _build_calendar_service(settings)
+        event = (
+            service.events()
+            .patch(calendarId=settings.google_calendar_id, eventId=event_id, body=body)
+            .execute()
+        )
+    except HttpError as exc:
+        status_code = getattr(exc, "status_code", None) or getattr(
+            getattr(exc, "resp", None), "status", "unknown"
+        )
+        return CalendarWriteResult(
+            error=f"Could not update Google Calendar event. Google returned HTTP {status_code}.",
+        )
+    except Exception as exc:  # noqa: BLE001 - provider setup failures should surface clearly.
+        return CalendarWriteResult(
+            error=f"Could not update Google Calendar event: {exc.__class__.__name__}.",
+        )
+
+    return CalendarWriteResult(event=_normalize_event(event, settings.local_tz))
+
+
 def find_busy_conflict(
     start: datetime,
     end: datetime,

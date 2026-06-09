@@ -39,6 +39,10 @@ export type TaskItem = {
   section: string;
   project_name?: string | null;
   section_name?: string | null;
+  category?: string | null;
+  todoist_section_name?: string | null;
+  todoist_section_id?: string | null;
+  classification_source?: string | null;
   due?: Record<string, unknown> | null;
   due_date?: string | null;
   due_status?: string | null;

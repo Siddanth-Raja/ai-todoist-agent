@@ -5,11 +5,16 @@ from typing import Any
 
 import requests
 
-from .calendar_tools import create_calendar_event, list_todays_events, list_upcoming_events
+from .calendar_tools import (
+    create_calendar_event,
+    list_todays_events,
+    list_upcoming_events,
+    update_calendar_event,
+)
 from .config import get_settings
 from .planner import build_plan, enrich_task
 from .storage import list_memory_entries
-from .todoist_tools import create_task, list_active_tasks
+from .todoist_tools import LIFE_AREA_TO_TODOIST_SECTION, TODOIST_INBOX_PROJECT_NAME, create_task, list_active_tasks
 
 
 MODE = "ai_agent"
@@ -33,7 +38,6 @@ MEMORY_TYPE_ALIASES = {
 }
 MEMORY_ITEMS_PER_TYPE_LIMIT = 8
 MEMORY_TEXT_LIMIT = 140
-TODOIST_PERSONAL_PROJECT_NAME = "To-Do"
 BEFORE_EVENT_LEAD_DAYS = 1
 PERSONAL_CAPTURE_KEYWORDS = {
     "buy",
@@ -47,7 +51,6 @@ PERSONAL_CAPTURE_KEYWORDS = {
     "gym",
     "health",
     "doctor",
-    "dentist",
     "car",
     "oil change",
     "registration",
@@ -81,8 +84,10 @@ COLLEGE_CAPTURE_KEYWORDS = {
     "a&m",
     "a and m",
     "tamu",
+    "blinn",
     "college",
     "class",
+    "classes",
     "exam",
     "homework",
     "assignment",
@@ -96,6 +101,12 @@ FREELANCE_CAPTURE_KEYWORDS = {
     "business",
     "law firm",
     "law firms",
+    "dentist",
+    "dentists",
+    "realtor",
+    "realtors",
+    "website",
+    "websites",
     "invoice",
     "proposal",
     "contract",
@@ -139,8 +150,14 @@ AFFIRMATIVE_CONFIRMATION_REPLIES = {
     "do it",
     "sounds good",
     "add it",
+    "confirm",
 }
 PENDING_ACTION: dict[str, Any] | None = None
+EXECUTABLE_PENDING_ACTION_TYPES = {
+    "create_calendar_event",
+    "create_todoist_task",
+    "update_calendar_event",
+}
 
 
 def handle_chat(message: str, current_time: datetime | None = None) -> dict[str, Any]:
@@ -239,6 +256,12 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
     decision = _sanitize_decision(decision)
     decision = _apply_capture_override(cleaned_message, decision, local_now, enabled_memories)
     decision = _apply_memory_resolution(decision, resolved_memory)
+    decision = _apply_calendar_update_override(
+        cleaned_message,
+        decision,
+        upcoming_calendar_result.events or calendar_result.events,
+        local_now,
+    )
     if decision["needs_confirmation"]:
         PENDING_ACTION = decision["pending_action"]
     elif active_pending_action:
@@ -268,6 +291,79 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
         "mode": MODE,
         "errors": errors,
     }
+
+
+def confirm_pending_action(
+    pending_action: dict[str, Any],
+    current_time: datetime | None = None,
+) -> dict[str, Any]:
+    global PENDING_ACTION
+
+    if not is_executable_pending_action(pending_action):
+        raise ValueError("Pending action is not executable.")
+
+    settings = get_settings()
+    todoist_result = list_active_tasks(settings)
+    calendar_result = list_todays_events(settings, now=current_time)
+    upcoming_calendar_result = list_upcoming_events(settings, now=current_time)
+    errors = [
+        error
+        for error in (todoist_result.error, calendar_result.error, upcoming_calendar_result.error)
+        if error is not None
+    ]
+    local_now = current_time.astimezone(settings.local_tz) if current_time else datetime.now(settings.local_tz)
+    plan = build_plan(
+        tasks=todoist_result.tasks,
+        calendar_events=calendar_result.events,
+        message="",
+        local_tz=settings.local_tz,
+        now=current_time,
+        calendar_available=calendar_result.error is None,
+    )
+    enriched_tasks = [
+        enrich_task(task, local_now.date()) for task in todoist_result.tasks if task.get("content")
+    ]
+
+    decision = _decision_from_pending_action(pending_action)
+    actions_taken, action_errors = _execute_allowed_action(
+        settings=settings,
+        decision=decision,
+        tasks=enriched_tasks,
+        calendar_events=upcoming_calendar_result.events or calendar_result.events,
+        local_now=local_now,
+    )
+    errors.extend(action_errors)
+    PENDING_ACTION = None
+    answer = _answer_with_actions(decision, actions_taken, action_errors)
+
+    return {
+        "answer": answer,
+        "intent": decision["intent"],
+        "actions_taken": actions_taken,
+        "needs_confirmation": False,
+        "confirmation_prompt": None,
+        "pending_action": None,
+        "free_block": plan["free_block"],
+        "recommended_tasks": plan["recommended_tasks"],
+        "calendar_events": _summarize_calendar_events(calendar_result.events),
+        "mode": MODE,
+        "errors": errors,
+    }
+
+
+def is_executable_pending_action(pending_action: dict[str, Any] | None) -> bool:
+    if not isinstance(pending_action, dict):
+        return False
+
+    action_type = pending_action.get("action_type") or pending_action.get("type")
+    if action_type not in EXECUTABLE_PENDING_ACTION_TYPES:
+        return False
+
+    if action_type == "update_calendar_event":
+        details = pending_action.get("details") if isinstance(pending_action.get("details"), dict) else {}
+        return _calendar_update_details(details) is not None
+
+    return True
 
 
 def _fallback_response(
@@ -336,6 +432,7 @@ def _build_llm_context(
                 "none: answer only; use for planning, replanning, reminders that need confirmation, questions, and unknown requests",
                 "create_todoist_task: create one simple Todoist task only when the user explicitly asks to capture/create/add a task",
                 "create_calendar_event: create one simple Google Calendar event only when the user explicitly asks to schedule an event and no busy conflict exists",
+                "update_calendar_event: update one existing Google Calendar event only after explicit confirmation of event_id, old time, and new time",
             ],
             "not_allowed_automatic_actions": [
                 "delete tasks",
@@ -350,7 +447,8 @@ def _build_llm_context(
                 "If the answer asks the user to choose, approve, confirm, or decide before an action can happen, set needs_confirmation=true.",
                 "When needs_confirmation=true, set confirmation_prompt to the exact decision requested.",
                 "For supported task or calendar create actions that only need approval, keep action_type and the task/calendar fields populated so the backend can execute after a yes reply.",
-                "When a calendar conflict or reschedule choice needs a decision, include pending_action.type='resolve_calendar_conflict'.",
+                "When a reschedule is specific and executable, include pending_action.type='update_calendar_event' with event_id, title, old_start, old_end, new_start, and new_end.",
+                "When a calendar conflict or reschedule choice needs a decision but is not yet executable, include pending_action.type='resolve_calendar_conflict'.",
                 "If pending_action is present in context, interpret the next user message as an attempt to resolve it.",
             ],
             "routing_rules": [
@@ -364,6 +462,7 @@ def _build_llm_context(
             "calendar_conflict_rules": [
                 "When scheduling a new event, check conflicts only against calendar_events_for_requested_date.",
                 "Do not treat events from a different date as conflicts for the requested date.",
+                "For calendar conflict flows, identify the conflicting event, include its event_id when proposing a move, and propose the exact new start/end time before asking for confirmation.",
                 "Important project/work commitments should be both calendar events and Todoist tasks unless they are gym, social hangouts, parties, casual meals, birthdays, holidays, or purely personal/social events.",
             ],
             "tool_boundary": "The model must not call external APIs. It returns a structured decision only; backend tools execute allowed actions.",
@@ -657,14 +756,16 @@ You may propose exactly one backend action:
 - none: answer only. Use this for planning questions, replanning, questions, reminders, and anything that does not explicitly ask to create something.
 - create_todoist_task: create one simple Todoist task. Use only when the user explicitly asks to capture/create/add a task.
 - create_calendar_event: create one simple calendar event with a title, start, and end. Use only when the user explicitly asks to schedule an event.
+- update_calendar_event: update one existing calendar event after the user explicitly confirms the exact event and new time.
 
-Do not propose unsafe actions: deleting tasks/events, moving fixed events, cancelling meetings,
+Do not propose unsafe actions: deleting tasks/events, moving fixed events without confirmation, cancelling meetings,
 sending emails, inviting attendees, or completing tasks unless explicitly requested.
 If a request is risky, ambiguous, or unsupported, set needs_confirmation true and use action_type none.
 If a supported task or calendar create action only needs user approval, keep action_type and the task/calendar fields populated while setting needs_confirmation true.
 If your answer asks the user to choose, approve, confirm, or decide before an action can happen, needs_confirmation must be true.
 When needs_confirmation is true, confirmation_prompt must contain the decision being requested.
-When the decision is about a calendar conflict, moving a flexible block, or rescheduling, pending_action must be {"type":"resolve_calendar_conflict","details":{...}}.
+When a calendar conflict or reschedule can be executed, pending_action must be {"type":"update_calendar_event","details":{"event_id":"...","title":"...","old_start":"...","old_end":"...","new_start":"...","new_end":"..."}}.
+When a calendar conflict or reschedule still needs a choice, pending_action must be {"type":"resolve_calendar_conflict","details":{...}}.
 If pending_action is provided in context, treat the user message as a possible resolution of that pending action and answer accordingly.
 For planning questions like "I feel lazy, what is one small useful thing I can do?", action_type must be none.
 For clear capture requests like "I need to buy a new water bottle from Target", return intent="capture_task", action_type="create_todoist_task", task.project_category="Personal", and no planning advice.
@@ -696,8 +797,8 @@ def _decision_schema() -> dict[str, Any]:
             },
             "action_type": {
                 "type": "string",
-                "enum": ["none", "create_todoist_task", "create_calendar_event"],
-                "description": "Allowed actions. Use none for planning/replanning/questions. Use create_todoist_task only for explicit task capture. Use create_calendar_event only for explicit scheduling.",
+                "enum": ["none", "create_todoist_task", "create_calendar_event", "update_calendar_event"],
+                "description": "Allowed actions. Use none for planning/replanning/questions. Use create_todoist_task only for explicit task capture. Use create_calendar_event only for explicit scheduling. Use update_calendar_event only after explicit reschedule confirmation.",
             },
             "task": {
                 "type": "object",
@@ -762,7 +863,7 @@ def _decision_schema() -> dict[str, Any]:
                 "properties": {
                     "type": {
                         "type": "string",
-                        "enum": ["resolve_calendar_conflict"],
+                        "enum": ["resolve_calendar_conflict", "update_calendar_event"],
                     },
                     "details": {
                         "type": "object",
@@ -773,6 +874,12 @@ def _decision_schema() -> dict[str, Any]:
                             "suggested_change",
                             "affected_event",
                             "requested_decision",
+                            "event_id",
+                            "title",
+                            "old_start",
+                            "old_end",
+                            "new_start",
+                            "new_end",
                         ],
                         "properties": {
                             "conflict": {"type": ["string", "null"]},
@@ -783,6 +890,12 @@ def _decision_schema() -> dict[str, Any]:
                             "suggested_change": {"type": ["string", "null"]},
                             "affected_event": {"type": ["string", "null"]},
                             "requested_decision": {"type": ["string", "null"]},
+                            "event_id": {"type": ["string", "null"]},
+                            "title": {"type": ["string", "null"]},
+                            "old_start": {"type": ["string", "null"], "description": "ISO 8601 datetime with timezone."},
+                            "old_end": {"type": ["string", "null"], "description": "ISO 8601 datetime with timezone."},
+                            "new_start": {"type": ["string", "null"], "description": "ISO 8601 datetime with timezone."},
+                            "new_end": {"type": ["string", "null"], "description": "ISO 8601 datetime with timezone."},
                         },
                     },
                 },
@@ -804,7 +917,7 @@ def _sanitize_decision(decision: dict[str, Any]) -> dict[str, Any]:
 
     if intent not in ALLOWED_INTENTS:
         intent = "unknown"
-    if action_type not in {"none", "create_todoist_task", "create_calendar_event"}:
+    if action_type not in {"none", "create_todoist_task", "create_calendar_event", "update_calendar_event"}:
         action_type = "none"
 
     if needs_confirmation or intent in {"plan", "replan", "question", "reminder", "unknown"}:
@@ -854,7 +967,11 @@ def _executable_pending_action(
         details = {}
     pending["details"] = details
 
-    if proposed_action_type in {"create_todoist_task", "create_calendar_event"}:
+    pending_type = pending.get("type")
+    executable_update = pending_type == "update_calendar_event" and _calendar_update_details(details)
+    if proposed_action_type in {"create_todoist_task", "create_calendar_event"} or executable_update:
+        if executable_update:
+            proposed_action_type = "update_calendar_event"
         pending["intent"] = intent
         pending["confirmation_prompt"] = confirmation_prompt
         pending["action_type"] = proposed_action_type
@@ -866,6 +983,14 @@ def _executable_pending_action(
             pending["calendar_event"] = calendar_event
 
     return pending
+
+
+def _calendar_update_details(details: dict[str, Any]) -> dict[str, Any] | None:
+    required_fields = ("event_id", "title", "old_start", "old_end", "new_start", "new_end")
+    normalized = {field: str(details.get(field) or "").strip() for field in required_fields}
+    if not all(normalized.values()):
+        return None
+    return normalized
 
 
 def _valid_project_category(value: Any) -> str | None:
@@ -894,7 +1019,9 @@ def _apply_memory_resolution(
         task["resolved_project"] = resolved_project
         task["project_category"] = resolved_project
         task["section_name"] = _section_name_for_category(resolved_project)
+        task["todoist_section_name"] = _section_name_for_category(resolved_project)
         task["project_name"] = _project_name_for_category(resolved_project)
+        task["classification_source"] = task.get("classification_source") or "memory_rule"
         decision["task"] = task
 
     calendar_event = (
@@ -952,9 +1079,9 @@ def _is_affirmative_confirmation(message: str) -> bool:
 
 def _decision_from_pending_action(pending_action: dict[str, Any]) -> dict[str, Any]:
     action_type = pending_action.get("action_type") or pending_action.get("type")
-    if action_type not in {"create_todoist_task", "create_calendar_event"}:
+    if action_type not in {"create_todoist_task", "create_calendar_event", "update_calendar_event"}:
         return {
-            "answer": "I have a pending confirmation, but it is not an executable action yet.",
+            "answer": "I can suggest this, but calendar editing for this action is not implemented yet.",
             "intent": str(pending_action.get("intent") or "unknown"),
             "action_type": "none",
             "task": {},
@@ -967,7 +1094,12 @@ def _decision_from_pending_action(pending_action: dict[str, Any]) -> dict[str, A
 
     intent = pending_action.get("intent")
     if intent not in ALLOWED_INTENTS:
-        intent = "capture_task" if action_type == "create_todoist_task" else "schedule_event"
+        if action_type == "create_todoist_task":
+            intent = "capture_task"
+        elif action_type == "update_calendar_event":
+            intent = "replan"
+        else:
+            intent = "schedule_event"
 
     return {
         "answer": "Got it.",
@@ -978,6 +1110,9 @@ def _decision_from_pending_action(pending_action: dict[str, Any]) -> dict[str, A
             pending_action.get("calendar_event")
             if isinstance(pending_action.get("calendar_event"), dict)
             else {}
+        ),
+        "calendar_event_update": (
+            pending_action.get("details") if isinstance(pending_action.get("details"), dict) else {}
         ),
         "resolved_project": _valid_project_category(pending_action.get("resolved_project")),
         "needs_confirmation": False,
@@ -1036,6 +1171,132 @@ def _apply_capture_override(
     return decision
 
 
+def _apply_calendar_update_override(
+    message: str,
+    decision: dict[str, Any],
+    calendar_events: list[dict[str, Any]],
+    local_now: datetime,
+) -> dict[str, Any]:
+    update_request = _extract_calendar_update_request(message)
+    if not update_request:
+        return decision
+
+    event = _matching_calendar_event(update_request["title"], calendar_events)
+    if not event:
+        return decision
+
+    old_start = _parse_event_datetime(event.get("start"), local_now)
+    old_end = _parse_event_datetime(event.get("end"), local_now)
+    event_id = str(event.get("id") or "").strip()
+    title = str(event.get("title") or update_request["title"]).strip()
+    if not event_id or not title or not old_start or not old_end or old_end <= old_start:
+        return decision
+
+    new_start = _parse_update_time(update_request["time"], old_start, local_now)
+    if not new_start:
+        return decision
+    new_end = new_start + (old_end - old_start)
+
+    old_range = f"{_format_time(old_start)}-{_format_time(old_end)}"
+    new_range = f"{_format_time(new_start)}-{_format_time(new_end)}"
+    confirmation_prompt = f"Move {title} from {old_range} to {new_range}?"
+    pending_action = {
+        "type": "update_calendar_event",
+        "action_type": "update_calendar_event",
+        "intent": "replan",
+        "confirmation_prompt": confirmation_prompt,
+        "details": {
+            "event_id": event_id,
+            "title": title,
+            "old_start": old_start.isoformat(),
+            "old_end": old_end.isoformat(),
+            "new_start": new_start.isoformat(),
+            "new_end": new_end.isoformat(),
+        },
+    }
+
+    return {
+        **decision,
+        "answer": f"I found {title}. {confirmation_prompt}",
+        "intent": "replan",
+        "action_type": "none",
+        "needs_confirmation": True,
+        "confirmation_prompt": confirmation_prompt,
+        "pending_action": pending_action,
+    }
+
+
+def _extract_calendar_update_request(message: str) -> dict[str, str] | None:
+    match = re.search(
+        r"\b(?:move|reschedule)\s+(?P<title>.+?)\s+(?:to|for)\s+(?P<time>\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b",
+        message,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+
+    title = re.sub(r"\b(my|the|a|an)\b", " ", match.group("title"), flags=re.IGNORECASE)
+    title = re.sub(r"\s+", " ", title).strip(" .,:;-")
+    target_time = re.sub(r"\s+", "", match.group("time")).lower()
+    if not title or not target_time:
+        return None
+    return {"title": title, "time": target_time}
+
+
+def _matching_calendar_event(title_hint: str, calendar_events: list[dict[str, Any]]) -> dict[str, Any] | None:
+    hint = title_hint.lower()
+    hint_words = {word for word in re.findall(r"[a-z0-9]+", hint) if len(word) > 1}
+    if not hint_words:
+        return None
+
+    for event in calendar_events:
+        if event.get("all_day"):
+            continue
+        title = str(event.get("title") or "").lower()
+        title_words = {word for word in re.findall(r"[a-z0-9]+", title) if len(word) > 1}
+        if hint in title or title in hint or hint_words & title_words:
+            return event
+    return None
+
+
+def _parse_event_datetime(value: Any, local_now: datetime) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=local_now.tzinfo)
+    return parsed.astimezone(local_now.tzinfo)
+
+
+def _parse_update_time(value: str, reference_start: datetime, local_now: datetime) -> datetime | None:
+    match = re.fullmatch(r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?(?P<meridiem>am|pm)?", value)
+    if not match:
+        return None
+
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute") or 0)
+    meridiem = match.group("meridiem")
+    if minute > 59 or hour < 1 or hour > 23:
+        return None
+
+    if meridiem:
+        if hour > 12:
+            return None
+        if meridiem == "pm" and hour != 12:
+            hour += 12
+        if meridiem == "am" and hour == 12:
+            hour = 0
+    elif hour <= 12 and reference_start.hour >= 12:
+        hour = 12 if hour == 12 else hour + 12
+
+    return reference_start.replace(hour=hour, minute=minute, second=0, microsecond=0).astimezone(
+        local_now.tzinfo
+    )
+
+
 def _extract_capture_metadata(
     message: str,
     task: dict[str, Any],
@@ -1045,11 +1306,11 @@ def _extract_capture_metadata(
     task_content = _capture_task_content(message)
     existing_content = str(task.get("content") or "").strip()
     content = task_content or existing_content
-    category = _infer_capture_category(" ".join([content, message]), memory_entries or [])
+    category, classification_source = _infer_capture_category(" ".join([content, message]), memory_entries or [])
     due_date = _extract_due_date_from_message(message, local_now)
     due_date_text = due_date.isoformat() if due_date else None
-    section_name = category if category != "Misc" else None
-    project_name = TODOIST_PERSONAL_PROJECT_NAME if category == "Personal" else None
+    section_name = LIFE_AREA_TO_TODOIST_SECTION.get(category)
+    project_name = TODOIST_INBOX_PROJECT_NAME
 
     return {
         "content": content,
@@ -1059,6 +1320,8 @@ def _extract_capture_metadata(
         "priority": task.get("priority") or _infer_capture_priority(message, due_date_text),
         "project_name": task.get("project_name") or project_name,
         "section_name": task.get("section_name") or section_name,
+        "todoist_section_name": task.get("todoist_section_name") or section_name,
+        "classification_source": task.get("classification_source") or classification_source,
     }
 
 
@@ -1133,24 +1396,24 @@ def _capture_task_content(message: str) -> str:
 def _infer_capture_category(
     task_content: str,
     memory_entries: list[dict[str, Any]] | None = None,
-) -> str:
+) -> tuple[str, str]:
     text = task_content.lower()
     memory_category = _infer_category_from_memory(task_content, memory_entries or [])
     if memory_category:
-        return memory_category
+        return memory_category, "memory_rule"
     if any(keyword in text for keyword in ("grad", "graduation", "commencement", "speech")):
-        return "Personal"
+        return "Personal", "memory_rule"
     if any(keyword in text for keyword in PERSONAL_CAPTURE_KEYWORDS):
-        return "Personal"
+        return "Personal", "memory_rule"
     if any(keyword in text for keyword in FREELANCE_CAPTURE_KEYWORDS):
-        return "Freelance"
+        return "Freelance", "memory_rule"
     if any(keyword in text for keyword in XO_CAPTURE_KEYWORDS):
-        return "XO"
+        return "XO", "memory_rule"
     if any(keyword in text for keyword in NEBULO_CAPTURE_KEYWORDS):
-        return "Nebulo"
+        return "Nebulo", "memory_rule"
     if any(keyword in text for keyword in COLLEGE_CAPTURE_KEYWORDS):
-        return "A&M"
-    return "Misc"
+        return "A&M", "memory_rule"
+    return "Misc", "fallback"
 
 
 def _infer_category_from_memory(
@@ -1389,6 +1652,8 @@ def _execute_allowed_action(
                     "priority": 4,
                     "project_name": _project_name_for_category(project),
                     "section_name": _section_name_for_category(project),
+                    "todoist_section_name": _section_name_for_category(project),
+                    "classification_source": "memory_rule",
                 },
                 task_result.task,
             )
@@ -1402,6 +1667,43 @@ def _execute_allowed_action(
             )
 
         return actions, []
+
+    if action_type == "update_calendar_event" and decision["intent"] in {"replan", "schedule_event"}:
+        details = decision.get("calendar_event_update") if isinstance(
+            decision.get("calendar_event_update"), dict
+        ) else {}
+        update_details = _calendar_update_details(details)
+        if not update_details:
+            return [], ["Calendar update requires event_id, title, old_start, old_end, new_start, and new_end."]
+
+        start = _parse_llm_datetime(update_details["new_start"], local_now)
+        end = _parse_llm_datetime(update_details["new_end"], local_now)
+        if not start or not end:
+            return [], ["Calendar update requires valid new_start and new_end values."]
+
+        result = update_calendar_event(
+            settings=settings,
+            event_id=update_details["event_id"],
+            title=update_details["title"],
+            start=start,
+            end=end,
+        )
+        if result.error:
+            return [], [result.error]
+
+        return [
+            {
+                "type": "update_calendar_event",
+                "status": "success",
+                "event": result.event,
+                "previous_event": {
+                    "id": update_details["event_id"],
+                    "title": update_details["title"],
+                    "start": update_details["old_start"],
+                    "end": update_details["old_end"],
+                },
+            }
+        ], []
 
     return [], [f"OpenAI proposed unsupported action: {action_type}."]
 
@@ -1438,6 +1740,9 @@ def _answer_with_actions(
     if action["type"] == "create_calendar_event":
         event = action.get("event") or {}
         return f"{decision['answer']} Added calendar event: {event.get('title')}."
+    if action["type"] == "update_calendar_event":
+        event = action.get("event") or {}
+        return f"{decision['answer']} Updated calendar event: {event.get('title')}."
     return decision["answer"]
 
 
@@ -1458,6 +1763,9 @@ def _compact_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "energy_level": task.get("energy_level"),
             "section_id": task.get("section_id"),
             "section_name": task.get("section_name"),
+            "todoist_section_id": task.get("todoist_section_id"),
+            "todoist_section_name": task.get("todoist_section_name"),
+            "classification_source": task.get("classification_source"),
             "url": task.get("url"),
         }
         for task in tasks
@@ -1482,15 +1790,11 @@ def _project_id_for_category(tasks: list[dict[str, Any]], category: str | None) 
 
 
 def _project_name_for_category(category: str | None) -> str | None:
-    if category == "Personal":
-        return TODOIST_PERSONAL_PROJECT_NAME
-    return None
+    return TODOIST_INBOX_PROJECT_NAME if category in PROJECT_CATEGORIES else None
 
 
 def _section_name_for_category(category: str | None) -> str | None:
-    if category and category != "Misc":
-        return category
-    return None
+    return LIFE_AREA_TO_TODOIST_SECTION.get(category or "")
 
 
 def _created_task_metadata(
@@ -1505,6 +1809,9 @@ def _created_task_metadata(
         "due_date",
         "project_name",
         "section_name",
+        "todoist_section_name",
+        "todoist_section_id",
+        "classification_source",
         "resolved_project",
     ):
         value = proposed_task.get(key)

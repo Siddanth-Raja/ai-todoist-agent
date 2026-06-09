@@ -39,6 +39,7 @@ type ConversationItem = {
   response?: ChatResponse;
   error?: string;
   createdAt?: string;
+  confirmationStatus?: "cancelled";
 };
 
 const CHAT_HISTORY_KEY = "pcos.chatHistory";
@@ -203,6 +204,32 @@ function CalendarActionCard({ action }: { action: ChatAction }) {
   );
 }
 
+function CalendarUpdateActionCard({ action }: { action: ChatAction }) {
+  const event = getRecord(action, "event") ?? action;
+  const previousEvent = getRecord(action, "previous_event");
+  const title = getString(event, "title") || getString(previousEvent, "title");
+  const start = getString(event, "start");
+  const end = getString(event, "end");
+  const previousStart = getString(previousEvent, "start");
+  const previousEnd = getString(previousEvent, "end");
+  const link = getString(event, "html_link") || getString(event, "url");
+
+  return (
+    <div className="rounded-lg border border-moss/30 bg-moss/10 p-4">
+      <div className="mb-3 flex items-center gap-2 text-sm font-medium text-moss">
+        <CalendarPlus className="h-4 w-4" aria-hidden="true" />
+        Calendar event updated
+      </div>
+      <dl className="space-y-2">
+        <FieldRow label="Title" value={title} />
+        <FieldRow label="Old time" value={formatDateTimeRange(previousStart, previousEnd)} />
+        <FieldRow label="New time" value={formatDateTimeRange(start, end)} />
+      </dl>
+      <CardLink href={link}>Open in Google Calendar</CardLink>
+    </div>
+  );
+}
+
 function TodoistActionCard({ action }: { action: ChatAction }) {
   const task = getRecord(action, "task") ?? action;
   const title = getString(task, "content");
@@ -242,6 +269,9 @@ function ActionCards({ actions }: { actions: ChatAction[] }) {
         const type = getString(action, "type");
         if (type === "create_calendar_event") {
           return <CalendarActionCard key={index} action={action} />;
+        }
+        if (type === "update_calendar_event") {
+          return <CalendarUpdateActionCard key={index} action={action} />;
         }
         if (type === "create_todoist_task") {
           return <TodoistActionCard key={index} action={action} />;
@@ -293,6 +323,11 @@ function confirmationEvent(response: ChatResponse): JsonRecord | null {
   return getRecord(pendingAction, "calendar_event");
 }
 
+function confirmationUpdateDetails(response: ChatResponse): JsonRecord | null {
+  const pendingAction = response.pending_action;
+  return getRecord(pendingAction, "details");
+}
+
 function confirmationProject(response: ChatResponse): string | null {
   const pendingAction = response.pending_action;
   const event = confirmationEvent(response);
@@ -305,17 +340,32 @@ function confirmationProject(response: ChatResponse): string | null {
 
 function ConfirmationCard({
   response,
+  status,
   onConfirm,
   onCancel,
   onModify,
   disabled,
+  confirming,
 }: {
   response: ChatResponse;
+  status?: "cancelled";
   onConfirm: () => void;
   onCancel: () => void;
   onModify: () => void;
   disabled: boolean;
+  confirming: boolean;
 }) {
+  if (status === "cancelled") {
+    return (
+      <div className="rounded-lg border border-white/10 bg-white/[0.04] p-4">
+        <div className="flex items-center gap-2 text-sm font-medium text-stone-300">
+          <X className="h-4 w-4" aria-hidden="true" />
+          Confirmation cancelled
+        </div>
+      </div>
+    );
+  }
+
   if (!response.needs_confirmation) {
     return null;
   }
@@ -323,7 +373,11 @@ function ConfirmationCard({
   const pendingType =
     getString(response.pending_action, "action_type") || getString(response.pending_action, "type");
   const event = confirmationEvent(response);
+  const updateDetails = confirmationUpdateDetails(response);
   const project = confirmationProject(response);
+  const isExecutable = pendingType
+    ? ["create_calendar_event", "create_todoist_task", "update_calendar_event"].includes(pendingType)
+    : false;
 
   return (
     <div className="rounded-lg border border-gold/35 bg-gold/10 p-4">
@@ -344,19 +398,51 @@ function ConfirmationCard({
         </dl>
       ) : null}
 
+      {pendingType === "update_calendar_event" && updateDetails ? (
+        <dl className="mt-3 space-y-2 rounded-lg border border-white/10 bg-black/20 p-3">
+          <FieldRow label="Event" value={getString(updateDetails, "title")} />
+          <FieldRow
+            label="Old time"
+            value={formatDateTimeRange(
+              getString(updateDetails, "old_start"),
+              getString(updateDetails, "old_end"),
+            )}
+          />
+          <FieldRow
+            label="New time"
+            value={formatDateTimeRange(
+              getString(updateDetails, "new_start"),
+              getString(updateDetails, "new_end"),
+            )}
+          />
+        </dl>
+      ) : null}
+
+      {!isExecutable ? (
+        <p className="mt-3 rounded-lg border border-white/10 bg-black/20 p-3 text-xs leading-5 text-stone-300">
+          I can suggest this, but calendar editing for this action is not implemented yet.
+        </p>
+      ) : null}
+
       <div className="mt-4 flex flex-wrap gap-2">
+        {isExecutable ? (
+          <button
+            type="button"
+            disabled={disabled || confirming}
+            onClick={onConfirm}
+            className="inline-flex h-9 items-center gap-2 rounded-md bg-gold px-3 text-xs font-semibold text-ink transition hover:bg-[#ffe29a] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {confirming ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Check className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            {confirming ? "Confirming" : "Confirm"}
+          </button>
+        ) : null}
         <button
           type="button"
-          disabled={disabled}
-          onClick={onConfirm}
-          className="inline-flex h-9 items-center gap-2 rounded-md bg-gold px-3 text-xs font-semibold text-ink transition hover:bg-[#ffe29a] disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          <Check className="h-3.5 w-3.5" aria-hidden="true" />
-          Confirm
-        </button>
-        <button
-          type="button"
-          disabled={disabled}
+          disabled={disabled || confirming}
           onClick={onCancel}
           className="inline-flex h-9 items-center gap-2 rounded-md border border-white/10 bg-white/[0.04] px-3 text-xs font-medium text-stone-200 transition hover:border-coral/40 hover:text-coral disabled:cursor-not-allowed disabled:opacity-60"
         >
@@ -365,7 +451,7 @@ function ConfirmationCard({
         </button>
         <button
           type="button"
-          disabled={disabled}
+          disabled={disabled || confirming}
           onClick={onModify}
           className="inline-flex h-9 items-center gap-2 rounded-md border border-white/10 bg-white/[0.04] px-3 text-xs font-medium text-stone-200 transition hover:border-gold/40 hover:text-gold disabled:cursor-not-allowed disabled:opacity-60"
         >
@@ -399,6 +485,7 @@ export function ChatPanel() {
   const [items, setItems] = useState<ConversationItem[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [confirmingItemId, setConfirmingItemId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const sessionIdRef = useRef<string>(
     typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -505,6 +592,84 @@ export function ChatPanel() {
     await sendChatMessage(input.trim());
   }
 
+  async function handleConfirm(itemId: string, response: ChatResponse) {
+    const pendingAction = response.pending_action;
+    if (!pendingAction || confirmingItemId) {
+      return;
+    }
+
+    const settings = readAgentSettings();
+    setConfirmingItemId(itemId);
+
+    try {
+      if (!settings.apiKey) {
+        throw new Error("Add your AGENT_API_KEY in Settings first.");
+      }
+
+      const confirmResponse = await fetch(`${settings.backendUrl}/confirm`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${settings.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          pending_action: pendingAction,
+          current_time: new Date().toISOString(),
+        }),
+      });
+
+      const payload = await confirmResponse.json().catch(() => null);
+      if (!confirmResponse.ok) {
+        const detail = payload?.detail ? formatObject(payload.detail) : `HTTP ${confirmResponse.status}`;
+        throw new Error(detail);
+      }
+
+      setItems((current) =>
+        current.map((item) =>
+          item.id === itemId
+            ? {
+                ...item,
+                response: {
+                  ...(payload as ChatResponse),
+                  answer: item.response?.answer ?? (payload as ChatResponse).answer,
+                },
+                error: undefined,
+                confirmationStatus: undefined,
+              }
+            : item,
+        ),
+      );
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unable to confirm this action.";
+      setItems((current) =>
+        current.map((item) =>
+          item.id === itemId
+            ? {
+                ...item,
+                response: item.response
+                  ? {
+                      ...item.response,
+                      errors: [...(item.response.errors ?? []), errorMessage],
+                    }
+                  : item.response,
+              }
+            : item,
+        ),
+      );
+    } finally {
+      setConfirmingItemId(null);
+    }
+  }
+
+  function handleCancel(itemId: string) {
+    setItems((current) =>
+      current.map((item) =>
+        item.id === itemId ? { ...item, confirmationStatus: "cancelled" } : item,
+      ),
+    );
+  }
+
   function handleModify(response: ChatResponse) {
     const event = confirmationEvent(response);
     const title = getString(event, "title");
@@ -541,9 +706,11 @@ export function ChatPanel() {
                 <ActionCards actions={item.response.actions_taken ?? []} />
                 <ConfirmationCard
                   response={item.response}
+                  status={item.confirmationStatus}
                   disabled={isSending}
-                  onConfirm={() => void sendChatMessage("yes")}
-                  onCancel={() => void sendChatMessage("cancel")}
+                  confirming={confirmingItemId === item.id}
+                  onConfirm={() => void handleConfirm(item.id, item.response as ChatResponse)}
+                  onCancel={() => handleCancel(item.id)}
                   onModify={() => handleModify(item.response as ChatResponse)}
                 />
                 <ResponseErrorCards errors={item.response.errors ?? []} />

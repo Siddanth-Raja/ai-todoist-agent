@@ -12,7 +12,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app.agent as agent  # noqa: E402
-from app.agent import _decision_schema, _sanitize_decision, handle_chat  # noqa: E402
+from app.agent import _decision_schema, _sanitize_decision, confirm_pending_action, handle_chat  # noqa: E402
 from app.calendar_tools import CalendarReadResult, CalendarWriteResult  # noqa: E402
 from app.main import ChatRequest, chat, require_agent_api_key  # noqa: E402
 from app.todoist_tools import TodoistReadResult, TodoistWriteResult, create_task  # noqa: E402
@@ -436,7 +436,9 @@ class AgentExampleTests(unittest.TestCase):
             **TASKS[0],
             "id": "task-xo-meeting",
             "content": "Meeting with Ashwin and Charlie",
-            "section_name": "XO",
+            "section_name": "XO Collective",
+            "todoist_section_name": "XO Collective",
+            "classification_source": "memory_rule",
         }
         with patch("app.agent._get_llm_decision", return_value=(
             self._decision(
@@ -462,13 +464,13 @@ class AgentExampleTests(unittest.TestCase):
 
         create_task_kwargs = create_task_mock.call_args.kwargs
         self.assertEqual(create_task_kwargs["content"], "Meeting with Ashwin and Charlie")
-        self.assertEqual(create_task_kwargs["section_name"], "XO")
+        self.assertEqual(create_task_kwargs["section_name"], "XO Collective")
         self.assertEqual(create_task_kwargs["due_string"], "2026-06-05")
         self.assertEqual([action["type"] for action in response["actions_taken"]], [
             "create_calendar_event",
             "create_todoist_task",
         ])
-        self.assertIn("created a Todoist task under XO", response["answer"])
+        self.assertIn("created a Todoist task under XO Collective", response["answer"])
 
     def test_gym_schedule_is_calendar_only(self):
         event = {
@@ -686,6 +688,7 @@ class AgentExampleTests(unittest.TestCase):
             "id": "task-brandon",
             "content": "Call Brandon",
             "section_name": "Nebulo",
+            "todoist_section_name": "Nebulo",
         }
         with patch("app.agent._get_llm_decision", return_value=(
             self._decision(
@@ -775,6 +778,44 @@ class AgentExampleTests(unittest.TestCase):
             self.assertEqual(metadata["content"], expected_content)
             self.assertEqual(metadata["project_category"], expected_category)
             self.assertEqual(metadata["due_date"], expected_due_date)
+
+    def test_task_creation_uses_real_todoist_sections(self):
+        cases = [
+            ("call Ashwin and Charlie", "XO Collective", "XO"),
+            ("call Brandon", "Nebulo", "Nebulo"),
+            ("send client outreach email", "Freelance Web Design", "Freelance"),
+            ("buy water bottle", "Personal", "Personal"),
+            ("add mysterious follow up", "Misc", "Misc"),
+        ]
+
+        for message, expected_section, expected_category in cases:
+            with self.subTest(message=message):
+                created_task = {
+                    **TASKS[0],
+                    "id": f"task-{expected_category.lower()}",
+                    "content": message,
+                    "section_name": expected_section,
+                    "todoist_section_name": expected_section,
+                    "classification_source": "memory_rule" if expected_category != "Misc" else "fallback",
+                }
+                with patch("app.agent._get_llm_decision", return_value=(
+                    self._decision(
+                        answer="I can add that.",
+                        intent="plan",
+                        action_type="none",
+                    ),
+                    None,
+                )), patch(
+                    "app.agent.create_task",
+                    return_value=TodoistWriteResult(task=created_task),
+                ) as create_task_mock:
+                    response = handle_chat(message, self.now)
+
+                create_task_kwargs = create_task_mock.call_args.kwargs
+                self.assertEqual(create_task_kwargs["project_name"], "To-Do")
+                self.assertEqual(create_task_kwargs["section_name"], expected_section)
+                self.assertEqual(response["actions_taken"][0]["task"]["project_category"], expected_category)
+                self.assertEqual(response["actions_taken"][0]["task"]["todoist_section_name"], expected_section)
 
     def test_temporal_phrase_extraction(self):
         cases = [
@@ -901,14 +942,178 @@ class AgentExampleTests(unittest.TestCase):
         self.assertEqual(second_response["actions_taken"][0]["type"], "create_calendar_event")
         self.assertTrue(create_event_mock.call_args.kwargs["allow_conflicts"])
 
+    def test_affirmative_reply_updates_existing_calendar_event(self):
+        gym_event = {
+            "id": "event-gym",
+            "title": "Gym",
+            "start": "2026-06-04T14:30:00-05:00",
+            "end": "2026-06-04T15:30:00-05:00",
+            "duration_minutes": 60,
+            "all_day": False,
+            "busy": True,
+            "event_type": "flexible",
+            "event_category": "flexible",
+        }
+        updated_event = {
+            **gym_event,
+            "start": "2026-06-04T14:45:00-05:00",
+            "end": "2026-06-04T15:45:00-05:00",
+        }
+
+        with patch("app.agent.list_todays_events", return_value=CalendarReadResult(events=[gym_event])), patch(
+            "app.agent.list_upcoming_events", return_value=CalendarReadResult(events=[gym_event])
+        ), patch(
+            "app.agent._get_llm_decision",
+            return_value=(
+                self._decision(answer="I can help move that.", intent="replan"),
+                None,
+            ),
+        ):
+            first_response = handle_chat("move gym to 2:45", self.now)
+
+        self.assertTrue(first_response["needs_confirmation"])
+        self.assertEqual(first_response["pending_action"]["type"], "update_calendar_event")
+        self.assertEqual(first_response["pending_action"]["details"]["event_id"], "event-gym")
+        self.assertEqual(first_response["pending_action"]["details"]["old_start"], "2026-06-04T14:30:00-05:00")
+        self.assertEqual(first_response["pending_action"]["details"]["new_start"], "2026-06-04T14:45:00-05:00")
+
+        with patch("app.agent._get_llm_decision") as llm_mock, patch(
+            "app.agent.update_calendar_event",
+            return_value=CalendarWriteResult(event=updated_event),
+        ) as update_event_mock:
+            second_response = handle_chat("yes", self.now)
+
+        llm_mock.assert_not_called()
+        update_event_mock.assert_called_once()
+        call_kwargs = update_event_mock.call_args.kwargs
+        self.assertEqual(call_kwargs["event_id"], "event-gym")
+        self.assertEqual(call_kwargs["title"], "Gym")
+        self.assertEqual(call_kwargs["start"].isoformat(), "2026-06-04T14:45:00-05:00")
+        self.assertEqual(call_kwargs["end"].isoformat(), "2026-06-04T15:45:00-05:00")
+        self.assertFalse(second_response["needs_confirmation"])
+        self.assertIsNone(second_response["pending_action"])
+        self.assertEqual(second_response["actions_taken"][0]["type"], "update_calendar_event")
+
+    def test_confirm_create_calendar_event_executes_event_creation(self):
+        event = {
+            "id": "event-confirmed",
+            "title": "Meeting with Brandon",
+            "start": "2026-06-05T18:00:00-05:00",
+            "end": "2026-06-05T19:00:00-05:00",
+            "duration_minutes": 60,
+            "all_day": False,
+            "busy": True,
+            "event_type": "hard",
+            "event_category": "hard",
+        }
+        pending_action = {
+            "type": "create_calendar_event",
+            "action_type": "create_calendar_event",
+            "intent": "schedule_event",
+            "calendar_event": {
+                "title": "Meeting with Brandon",
+                "start": "2026-06-05T18:00:00-05:00",
+                "end": "2026-06-05T19:00:00-05:00",
+                "description": None,
+            },
+            "details": {},
+        }
+
+        with patch(
+            "app.agent.create_calendar_event",
+            return_value=CalendarWriteResult(event=event),
+        ) as create_event_mock:
+            response = confirm_pending_action(pending_action, self.now)
+
+        create_event_mock.assert_called_once()
+        self.assertFalse(response["needs_confirmation"])
+        self.assertEqual(response["actions_taken"][0]["type"], "create_calendar_event")
+
+    def test_confirm_create_todoist_task_executes_task_creation(self):
+        created_task = {
+            **TASKS[0],
+            "id": "task-confirmed",
+            "content": "Buy water bottle",
+            "section_name": "Personal",
+            "todoist_section_name": "Personal",
+        }
+        pending_action = {
+            "type": "create_todoist_task",
+            "action_type": "create_todoist_task",
+            "intent": "capture_task",
+            "task": {
+                "content": "Buy water bottle",
+                "project_category": "Personal",
+                "due_string": None,
+                "due_date": None,
+                "labels": [],
+                "priority": 4,
+                "project_name": "To-Do",
+                "section_name": "Personal",
+                "todoist_section_name": "Personal",
+            },
+            "details": {},
+        }
+
+        with patch(
+            "app.agent.create_task",
+            return_value=TodoistWriteResult(task=created_task),
+        ) as create_task_mock:
+            response = confirm_pending_action(pending_action, self.now)
+
+        create_task_mock.assert_called_once()
+        self.assertFalse(response["needs_confirmation"])
+        self.assertEqual(response["actions_taken"][0]["type"], "create_todoist_task")
+        self.assertEqual(response["actions_taken"][0]["task"]["content"], "Buy water bottle")
+
+    def test_confirm_update_calendar_event_executes_calendar_update(self):
+        updated_event = {
+            "id": "event-gym",
+            "title": "Gym",
+            "start": "2026-06-04T14:45:00-05:00",
+            "end": "2026-06-04T15:45:00-05:00",
+            "duration_minutes": 60,
+            "all_day": False,
+            "busy": True,
+            "event_type": "flexible",
+            "event_category": "flexible",
+        }
+        pending_action = {
+            "type": "update_calendar_event",
+            "action_type": "update_calendar_event",
+            "intent": "replan",
+            "details": {
+                "event_id": "event-gym",
+                "title": "Gym",
+                "old_start": "2026-06-04T14:30:00-05:00",
+                "old_end": "2026-06-04T15:30:00-05:00",
+                "new_start": "2026-06-04T14:45:00-05:00",
+                "new_end": "2026-06-04T15:45:00-05:00",
+            },
+        }
+
+        with patch(
+            "app.agent.update_calendar_event",
+            return_value=CalendarWriteResult(event=updated_event),
+        ) as update_event_mock:
+            response = confirm_pending_action(pending_action, self.now)
+
+        update_event_mock.assert_called_once()
+        self.assertFalse(response["needs_confirmation"])
+        self.assertEqual(response["actions_taken"][0]["type"], "update_calendar_event")
+        self.assertEqual(response["actions_taken"][0]["previous_event"]["id"], "event-gym")
+
     def test_schema_allowed_actions_are_documented(self):
         schema = _decision_schema()
         action_enum = schema["properties"]["action_type"]["enum"]
-        self.assertEqual(action_enum, ["none", "create_todoist_task", "create_calendar_event"])
+        self.assertEqual(
+            action_enum,
+            ["none", "create_todoist_task", "create_calendar_event", "update_calendar_event"],
+        )
         self.assertIn("pending_action", schema["required"])
         self.assertEqual(
             schema["properties"]["pending_action"]["properties"]["type"]["enum"],
-            ["resolve_calendar_conflict"],
+            ["resolve_calendar_conflict", "update_calendar_event"],
         )
 
     def test_structured_output_schema_objects_are_strict(self):

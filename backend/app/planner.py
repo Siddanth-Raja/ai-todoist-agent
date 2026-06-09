@@ -2,6 +2,8 @@ from datetime import date, datetime, time, timedelta
 import re
 from typing import Any
 
+from .todoist_tools import life_area_for_todoist_section
+
 
 DEFAULT_ESTIMATED_DURATION_MINUTES = 30
 MAX_RECOMMENDATIONS = 3
@@ -232,6 +234,7 @@ def enrich_task(task: dict[str, Any], today: date) -> dict[str, Any]:
         content=content,
         project_name=project_name,
         labels=labels,
+        section_name=task.get("section_name"),
     )
     enriched["estimated_duration"] = infer_estimated_duration(combined_text)
     enriched["energy_level"] = infer_task_energy(combined_text)
@@ -430,7 +433,12 @@ def infer_project_category(
     content: str,
     project_name: str | None,
     labels: list[str],
+    section_name: str | None = None,
 ) -> str:
+    section_category = life_area_for_todoist_section(section_name)
+    if section_category:
+        return section_category
+
     text = " ".join([content, project_name or "", " ".join(labels)])
     return infer_category_from_text(text)
 

@@ -10,6 +10,18 @@ from .config import Settings
 TODOIST_API_BASE_URL = "https://api.todoist.com/api/v1"
 REQUEST_TIMEOUT_SECONDS = 20
 PAGE_LIMIT = 100
+TODOIST_INBOX_PROJECT_NAME = "To-Do"
+LIFE_AREA_TO_TODOIST_SECTION = {
+    "A&M": "A&M",
+    "XO": "XO Collective",
+    "Freelance": "Freelance Web Design",
+    "Nebulo": "Nebulo",
+    "Personal": "Personal",
+    "Misc": "Misc",
+}
+TODOIST_SECTION_TO_LIFE_AREA = {
+    section_name: life_area for life_area, section_name in LIFE_AREA_TO_TODOIST_SECTION.items()
+}
 
 
 @dataclass
@@ -34,6 +46,8 @@ def list_active_tasks(settings: Settings) -> TodoistReadResult:
 
     try:
         projects = _fetch_projects(settings)
+        todo_project_id = _find_id_by_name(projects, TODOIST_INBOX_PROJECT_NAME)
+        sections = _fetch_sections(settings, project_id=todo_project_id)
         raw_tasks = _fetch_paginated(settings, "tasks")
     except requests.HTTPError as exc:
         status_code = exc.response.status_code if exc.response is not None else "unknown"
@@ -47,7 +61,7 @@ def list_active_tasks(settings: Settings) -> TodoistReadResult:
             error=f"Could not read Todoist tasks: {exc.__class__.__name__}.",
         )
 
-    tasks = [_normalize_task(task, projects) for task in raw_tasks]
+    tasks = [_normalize_task(task, projects, sections) for task in raw_tasks]
     return TodoistReadResult(tasks=tasks)
 
 
@@ -77,13 +91,17 @@ def create_task(
         projects: dict[str, str] | None = None
         sections: dict[str, str] | None = None
 
+        canonical_section_name = canonical_todoist_section_name(section_name)
         if project_name and not project_id:
             projects = _fetch_projects(settings)
             project_id = _find_id_by_name(projects, project_name)
+        elif canonical_section_name and not project_id:
+            projects = _fetch_projects(settings)
+            project_id = _find_id_by_name(projects, TODOIST_INBOX_PROJECT_NAME)
 
-        if section_name and not section_id:
+        if canonical_section_name and not section_id:
             sections = _fetch_sections(settings, project_id=project_id)
-            section_id = _find_id_by_name(sections, section_name)
+            section_id = _find_id_by_name(sections, canonical_section_name)
 
         payload: dict[str, Any] = {"content": content}
         if project_id:
@@ -123,6 +141,30 @@ def create_task(
         )
 
     return TodoistWriteResult(task=_normalize_task(response.json(), projects, sections))
+
+
+def canonical_todoist_section_name(section_name_or_life_area: str | None) -> str | None:
+    if not section_name_or_life_area:
+        return None
+
+    value = section_name_or_life_area.strip()
+    if value in LIFE_AREA_TO_TODOIST_SECTION:
+        return LIFE_AREA_TO_TODOIST_SECTION[value]
+    if value in TODOIST_SECTION_TO_LIFE_AREA:
+        return value
+
+    normalized = value.lower()
+    for life_area, section_name in LIFE_AREA_TO_TODOIST_SECTION.items():
+        if normalized in {life_area.lower(), section_name.lower()}:
+            return section_name
+    return value
+
+
+def life_area_for_todoist_section(section_name: str | None) -> str | None:
+    if not section_name:
+        return None
+    canonical = canonical_todoist_section_name(section_name)
+    return TODOIST_SECTION_TO_LIFE_AREA.get(canonical or section_name)
 
 
 def _fetch_projects(settings: Settings) -> dict[str, str]:
@@ -221,6 +263,10 @@ def _normalize_task(
     todoist_priority = int(task.get("priority") or 4)
     internal_priority = 5 - todoist_priority if 1 <= todoist_priority <= 4 else 1
 
+    section_name = sections.get(section_id_text) if sections and section_id_text else None
+    category = life_area_for_todoist_section(section_name)
+    classification_source = "todoist_section" if category else "fallback"
+
     return {
         "id": task_id,
         "content": str(task.get("content") or "").strip(),
@@ -228,7 +274,12 @@ def _normalize_task(
         "project_id": project_id_text,
         "project_name": projects.get(project_id_text) if project_id_text else None,
         "section_id": section_id_text,
-        "section_name": sections.get(section_id_text) if sections and section_id_text else None,
+        "section_name": section_name,
+        "category": category or "Misc",
+        "project_category": category or "Misc",
+        "todoist_section_name": section_name,
+        "todoist_section_id": section_id_text,
+        "classification_source": classification_source,
         "due": task.get("due"),
         "priority": internal_priority,
         "todoist_priority": todoist_priority,

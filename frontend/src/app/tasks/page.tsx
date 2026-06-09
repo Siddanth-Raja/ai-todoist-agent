@@ -147,6 +147,16 @@ export default function TasksPage() {
                         <span className="rounded-full border border-white/10 bg-white/[0.06] px-2 py-1 text-stone-400">
                           {task.completed ? "done" : "open"}
                         </span>
+                        {task.category ? (
+                          <span className="rounded-full border border-white/10 bg-white/[0.06] px-2 py-1 text-stone-400">
+                            {task.category}
+                          </span>
+                        ) : null}
+                        {task.classification_source ? (
+                          <span className="rounded-full border border-white/10 bg-white/[0.06] px-2 py-1 text-stone-400">
+                            {task.classification_source.replaceAll("_", " ")}
+                          </span>
+                        ) : null}
                       </div>
                     </article>
                   ))}

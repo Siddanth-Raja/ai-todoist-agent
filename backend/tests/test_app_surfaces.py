@@ -84,6 +84,22 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         seeded_again = main.memory_index(authorization=self.authorization)
         self.assertEqual(len(seeded_again), len(DEFAULT_MEMORIES))
 
+    def test_confirm_rejects_non_executable_pending_action(self):
+        with self.assertRaises(HTTPException) as exc:
+            main.confirm(
+                main.ConfirmRequest(
+                    session_id="test-session",
+                    pending_action={
+                        "type": "resolve_calendar_conflict",
+                        "details": {"options": ["move gym", "keep calendar unchanged"]},
+                    },
+                ),
+                authorization=self.authorization,
+            )
+
+        self.assertEqual(exc.exception.status_code, 400)
+        self.assertIn("not executable", exc.exception.detail)
+
     def test_memory_crud_and_activity_log(self):
         initial_count = len(main.memory_index(authorization=self.authorization))
         memory = main.memory_create(
@@ -167,6 +183,11 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                 "description": "",
                 "project_name": "To-Do",
                 "section_name": "A&M",
+                "section_id": "section-am",
+                "todoist_section_name": "A&M",
+                "todoist_section_id": "section-am",
+                "category": "A&M",
+                "classification_source": "todoist_section",
                 "due": {"date": "2026-06-05"},
                 "priority": 4,
                 "todoist_priority": 1,
@@ -177,8 +198,13 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                 "id": "task-client",
                 "content": "Call freelance client",
                 "description": "",
-                "project_name": "Freelance",
-                "section_name": None,
+                "project_name": "To-Do",
+                "section_name": "Freelance Web Design",
+                "section_id": "section-freelance",
+                "todoist_section_name": "Freelance Web Design",
+                "todoist_section_id": "section-freelance",
+                "category": "Freelance",
+                "classification_source": "todoist_section",
                 "due": None,
                 "priority": 3,
                 "todoist_priority": 2,
@@ -190,6 +216,11 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                 "description": "",
                 "project_name": "To-Do",
                 "section_name": "Personal",
+                "section_id": "section-personal",
+                "todoist_section_name": "Personal",
+                "todoist_section_id": "section-personal",
+                "category": "Personal",
+                "classification_source": "todoist_section",
                 "due": None,
                 "priority": 1,
                 "todoist_priority": 4,
@@ -206,7 +237,10 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         sections = {section["name"]: section["tasks"] for section in payload["sections"]}
         self.assertEqual(sections["A&M"][0]["content"], "Study for college exam")
         self.assertEqual(sections["A&M"][0]["due_date"], "2026-06-05")
-        self.assertEqual(sections["Freelance"][0]["content"], "Call freelance client")
+        self.assertEqual(sections["A&M"][0]["todoist_section_name"], "A&M")
+        self.assertEqual(sections["A&M"][0]["classification_source"], "todoist_section")
+        self.assertEqual(sections["Freelance Web Design"][0]["content"], "Call freelance client")
+        self.assertEqual(sections["Freelance Web Design"][0]["category"], "Freelance")
         self.assertTrue(sections["Personal"][0]["completed"])
         self.assertEqual(payload["errors"], [])
 

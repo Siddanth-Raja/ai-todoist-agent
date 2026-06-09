@@ -6,7 +6,7 @@ from fastapi import Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from .agent import MODE, handle_chat
+from .agent import MODE, confirm_pending_action, handle_chat
 from .calendar_tools import categories_conflict, list_remaining_today_events, list_upcoming_events
 from .config import get_settings
 from .planner import enrich_task, rank_tasks
@@ -25,6 +25,7 @@ from .storage import (
     update_memory_entry,
 )
 from .todoist_tools import list_active_tasks
+from .todoist_tools import LIFE_AREA_TO_TODOIST_SECTION, TODOIST_SECTION_TO_LIFE_AREA, life_area_for_todoist_section
 
 
 app = FastAPI(
@@ -60,10 +61,18 @@ class ChatResponse(BaseModel):
     errors: list[str | dict[str, Any]] = Field(default_factory=list)
 
 
-TASK_SECTION_NAMES = ("A&M", "XO", "Freelance", "Personal", "Misc")
+class ConfirmRequest(BaseModel):
+    session_id: str | None = None
+    pending_action: dict[str, Any]
+    current_time: datetime | None = None
+
+
+TASK_SECTION_NAMES = ("A&M", "XO", "Freelance", "Nebulo", "Personal", "Misc")
+TODOIST_TASK_SECTION_NAMES = tuple(LIFE_AREA_TO_TODOIST_SECTION.values())
 LIFE_AREA_DESCRIPTIONS = {
     "A&M": "College, TAMU, Blinn, housing, registration",
     "XO": "VR, prototype, headset, Ashwin, Charlie",
+    "Nebulo": "AI context control, private storage, product work",
     "Freelance": "clients, outreach, websites, invoices",
     "Personal": "gym, health, shopping, errands, car, life admin",
     "Misc": "uncategorized",
@@ -158,6 +167,10 @@ class TaskItem(BaseModel):
     section: str
     project_name: str | None = None
     section_name: str | None = None
+    category: str | None = None
+    todoist_section_name: str | None = None
+    todoist_section_id: str | None = None
+    classification_source: str | None = None
     due: dict[str, Any] | None = None
     due_date: str | None = None
     due_status: str | None = None
@@ -304,6 +317,24 @@ def chat(
     return response
 
 
+@app.post("/confirm", response_model=ChatResponse)
+def confirm(
+    request: ConfirmRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_agent_api_key(authorization)
+    try:
+        response = confirm_pending_action(
+            pending_action=request.pending_action,
+            current_time=request.current_time,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    _log_chat_activity(response)
+    return response
+
+
 @app.get("/memory", response_model=list[MemoryEntry])
 def memory_index(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
     require_agent_api_key(authorization)
@@ -439,14 +470,14 @@ def tasks_index(
         enrich_task(task, local_now.date()) for task in todoist_result.tasks if task.get("content")
     ]
 
-    grouped: dict[str, list[dict[str, Any]]] = {section: [] for section in TASK_SECTION_NAMES}
+    grouped: dict[str, list[dict[str, Any]]] = {section: [] for section in TODOIST_TASK_SECTION_NAMES}
     for task in enriched_tasks:
-        section = _task_section_for(task)
+        section = _todoist_task_section_for(task)
         grouped[section].append(_task_item(task, section))
 
     return {
         "sections": [
-            {"name": section, "tasks": grouped[section]} for section in TASK_SECTION_NAMES
+            {"name": section, "tasks": grouped[section]} for section in TODOIST_TASK_SECTION_NAMES
         ],
         "errors": [todoist_result.error] if todoist_result.error else [],
     }
@@ -730,15 +761,29 @@ def activity_create(
 
 
 def _task_section_for(task: dict[str, Any]) -> str:
-    section_name = str(task.get("section_name") or "").strip()
-    if section_name in TASK_SECTION_NAMES:
-        return section_name
-
     category = str(task.get("category") or task.get("project_category") or "").strip()
     if category in TASK_SECTION_NAMES:
         return category
 
+    section_name = str(task.get("section_name") or "").strip()
+    section_category = life_area_for_todoist_section(section_name)
+    if section_category:
+        return section_category
+
+    todoist_section_name = str(task.get("todoist_section_name") or "").strip()
+    todoist_section_category = life_area_for_todoist_section(todoist_section_name)
+    if todoist_section_category:
+        return todoist_section_category
+
     return "Misc"
+
+
+def _todoist_task_section_for(task: dict[str, Any]) -> str:
+    section_name = str(task.get("todoist_section_name") or task.get("section_name") or "").strip()
+    canonical_section = LIFE_AREA_TO_TODOIST_SECTION.get(_task_section_for(task), LIFE_AREA_TO_TODOIST_SECTION["Misc"])
+    if section_name in TODOIST_SECTION_TO_LIFE_AREA:
+        return section_name
+    return canonical_section
 
 
 def _task_item(task: dict[str, Any], section: str) -> dict[str, Any]:
@@ -749,6 +794,10 @@ def _task_item(task: dict[str, Any], section: str) -> dict[str, Any]:
         "section": section,
         "project_name": task.get("project_name"),
         "section_name": task.get("section_name"),
+        "category": task.get("category") or task.get("project_category") or _task_section_for(task),
+        "todoist_section_name": task.get("todoist_section_name") or task.get("section_name"),
+        "todoist_section_id": task.get("todoist_section_id") or task.get("section_id"),
+        "classification_source": task.get("classification_source") or "fallback",
         "due": task.get("due"),
         "due_date": task.get("due_date"),
         "due_status": task.get("due_status"),

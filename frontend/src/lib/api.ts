@@ -7,6 +7,7 @@ export type MemoryEntry = {
   content: string;
   confidence: number;
   enabled: boolean;
+  source?: string | null;
   created_at: string;
   updated_at: string;
 };

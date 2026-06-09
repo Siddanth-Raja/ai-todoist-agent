@@ -126,11 +126,16 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         self.assertEqual(updated["confidence"], 0.7)
 
         activity = main.activity_index(authorization=self.authorization)
-        self.assertIn("memory_added", {item["action_type"] for item in activity})
+        activity_types = {item["type"] for item in activity}
+        self.assertIn("memory_added", activity_types)
+        self.assertIn("memory_disabled", activity_types)
+        self.assertTrue(all("metadata" in item and "source" in item for item in activity))
 
         deleted = main.memory_delete(memory["id"], authorization=self.authorization)
         self.assertTrue(deleted["deleted"])
         self.assertEqual(len(main.memory_index(authorization=self.authorization)), initial_count)
+        activity = main.activity_index(authorization=self.authorization)
+        self.assertIn("memory_deleted", {item["type"] for item in activity})
 
     def test_habit_definitions_and_checkins(self):
         default_names = [
@@ -512,6 +517,18 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                         "content": "Buy socks",
                         "section_name": "Personal",
                     },
+                },
+                {
+                    "type": "update_calendar_event",
+                    "status": "success",
+                    "event": {
+                        "title": "Gym",
+                        "start": "2026-06-05T14:45:00-05:00",
+                    },
+                    "previous_event": {
+                        "title": "Gym",
+                        "start": "2026-06-05T14:30:00-05:00",
+                    },
                 }
             ],
             "needs_confirmation": True,
@@ -536,11 +553,42 @@ class AppSurfaceEndpointTests(unittest.TestCase):
             )
 
         self.assertEqual(response["intent"], "capture_task")
-        activity_types = {
-            item["action_type"] for item in main.activity_index(authorization=self.authorization)
-        }
+        activity = main.activity_index(authorization=self.authorization)
+        activity_types = {item["type"] for item in activity}
         self.assertIn("task_created", activity_types)
+        self.assertIn("calendar_event_updated", activity_types)
         self.assertIn("confirmation_requested", activity_types)
+        self.assertTrue(all(item["type"] == item["action_type"] for item in activity))
+
+    def test_confirmation_lifecycle_activity(self):
+        confirm_payload = {
+            "answer": "Updated it.",
+            "intent": "replan",
+            "actions_taken": [],
+            "needs_confirmation": False,
+            "confirmation_prompt": None,
+            "pending_action": None,
+            "free_block": None,
+            "recommended_tasks": [],
+            "calendar_events": [],
+            "mode": "ai_agent",
+            "errors": [],
+        }
+        pending_action = {"type": "update_calendar_event", "details": {"event_id": "event-gym"}}
+        with patch("app.main.confirm_pending_action", return_value=confirm_payload):
+            main.confirm(
+                main.ConfirmRequest(session_id="test-session", pending_action=pending_action),
+                authorization=self.authorization,
+            )
+
+        main.confirm_cancel(
+            main.ConfirmCancelRequest(session_id="test-session", pending_action=pending_action),
+            authorization=self.authorization,
+        )
+
+        activity_types = {item["type"] for item in main.activity_index(authorization=self.authorization)}
+        self.assertIn("confirmation_completed", activity_types)
+        self.assertIn("confirmation_cancelled", activity_types)
 
     def _calendar_event(
         self,

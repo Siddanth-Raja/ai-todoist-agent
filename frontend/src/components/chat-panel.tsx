@@ -662,12 +662,29 @@ export function ChatPanel() {
     }
   }
 
-  function handleCancel(itemId: string) {
+  async function handleCancel(itemId: string, response: ChatResponse) {
     setItems((current) =>
       current.map((item) =>
         item.id === itemId ? { ...item, confirmationStatus: "cancelled" } : item,
       ),
     );
+
+    const settings = readAgentSettings();
+    if (!settings.apiKey || !response.pending_action) {
+      return;
+    }
+
+    await fetch(`${settings.backendUrl}/confirm-cancel`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${settings.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        session_id: sessionIdRef.current,
+        pending_action: response.pending_action,
+      }),
+    }).catch(() => null);
   }
 
   function handleModify(response: ChatResponse) {
@@ -710,7 +727,7 @@ export function ChatPanel() {
                   disabled={isSending}
                   confirming={confirmingItemId === item.id}
                   onConfirm={() => void handleConfirm(item.id, item.response as ChatResponse)}
-                  onCancel={() => handleCancel(item.id)}
+                  onCancel={() => void handleCancel(item.id, item.response as ChatResponse)}
                   onModify={() => handleModify(item.response as ChatResponse)}
                 />
                 <ResponseErrorCards errors={item.response.errors ?? []} />

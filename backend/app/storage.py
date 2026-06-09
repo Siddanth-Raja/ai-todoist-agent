@@ -203,10 +203,12 @@ def ensure_database() -> None:
                     title TEXT NOT NULL,
                     detail TEXT,
                     payload TEXT,
+                    source TEXT NOT NULL DEFAULT 'app',
                     created_at TEXT NOT NULL
                 );
                 """
             )
+            _ensure_activity_columns(connection)
             _seed_default_habits(connection)
             _seed_default_memories(connection)
 
@@ -267,8 +269,25 @@ def _habit_from_row(row: sqlite3.Row) -> dict[str, Any]:
 def _activity_from_row(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     payload = item.get("payload")
-    item["payload"] = json.loads(payload) if payload else None
+    metadata = json.loads(payload) if payload else None
+    action_type = item.get("action_type")
+    detail = item.get("detail")
+    source = item.get("source") or "app"
+    item["payload"] = metadata
+    item["metadata"] = metadata
+    item["type"] = action_type
+    item["description"] = detail
+    item["source"] = source
     return item
+
+
+def _ensure_activity_columns(connection: sqlite3.Connection) -> None:
+    columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(activity_logs)").fetchall()
+    }
+    if "source" not in columns:
+        connection.execute("ALTER TABLE activity_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'app'")
 
 
 def list_memory_entries() -> list[dict[str, Any]]:
@@ -539,7 +558,7 @@ def list_activity(limit: int = 30) -> list[dict[str, Any]]:
     with _connect() as connection:
         rows = connection.execute(
             """
-            SELECT id, action_type, title, detail, payload, created_at
+            SELECT id, action_type, title, detail, payload, source, created_at
             FROM activity_logs
             ORDER BY created_at DESC
             LIMIT ?
@@ -551,28 +570,37 @@ def list_activity(limit: int = 30) -> list[dict[str, Any]]:
 
 def log_activity(
     *,
-    action_type: str,
+    action_type: str | None = None,
+    type: str | None = None,
     title: str,
     detail: str | None = None,
+    description: str | None = None,
     payload: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    source: str = "app",
     created_at: str | None = None,
 ) -> dict[str, Any]:
     ensure_database()
     activity_id = str(uuid.uuid4())
+    activity_type = action_type or type
+    if not activity_type:
+        raise ValueError("activity type is required")
+    activity_detail = detail if detail is not None else description
+    activity_payload = payload if payload is not None else metadata
     happened_at = created_at or _utc_now()
-    payload_text = json.dumps(payload, ensure_ascii=False) if payload is not None else None
+    payload_text = json.dumps(activity_payload, ensure_ascii=False) if activity_payload is not None else None
     with _connect() as connection:
         connection.execute(
             """
             INSERT INTO activity_logs
-                (id, action_type, title, detail, payload, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (id, action_type, title, detail, payload, source, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (activity_id, action_type, title, detail, payload_text, happened_at),
+            (activity_id, activity_type, title, activity_detail, payload_text, source, happened_at),
         )
         row = connection.execute(
             """
-            SELECT id, action_type, title, detail, payload, created_at
+            SELECT id, action_type, title, detail, payload, source, created_at
             FROM activity_logs
             WHERE id = ?
             """,

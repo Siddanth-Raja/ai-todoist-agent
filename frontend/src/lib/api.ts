@@ -129,9 +129,13 @@ export type TodayRecommendation = {
 
 export type ActivityEntry = {
   id: string;
+  type: string;
   action_type: string;
   title: string;
+  description: string | null;
   detail: string | null;
+  source: string;
+  metadata: Record<string, unknown> | null;
   payload: Record<string, unknown> | null;
   created_at: string;
 };

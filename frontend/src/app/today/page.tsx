@@ -61,10 +61,16 @@ function iconForActivity(value: string): LucideIcon {
   if (value === "task_created") {
     return CheckCircle2;
   }
-  if (value === "calendar_event_created" || value === "confirmation_requested") {
+  if (
+    value === "calendar_event_created" ||
+    value === "calendar_event_updated" ||
+    value === "confirmation_requested" ||
+    value === "confirmation_completed" ||
+    value === "confirmation_cancelled"
+  ) {
     return CalendarClock;
   }
-  if (value === "habit_logged") {
+  if (value === "habit_logged" || value.startsWith("memory_")) {
     return HeartHandshake;
   }
   return Activity;
@@ -191,10 +197,12 @@ export default function TodayPage() {
     () =>
       activityEntries.map((entry) => ({
         id: entry.id,
-        label: formatActionType(entry.action_type),
+        label: formatActionType(entry.type || entry.action_type),
         value: entry.title,
-        detail: entry.detail || formatDateTime(entry.created_at),
-        icon: iconForActivity(entry.action_type),
+        detail: [entry.source, entry.description || entry.detail || formatDateTime(entry.created_at)]
+          .filter(Boolean)
+          .join(" - "),
+        icon: iconForActivity(entry.type || entry.action_type),
       })),
     [activityEntries],
   );

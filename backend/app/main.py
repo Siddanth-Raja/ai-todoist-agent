@@ -16,6 +16,7 @@ from .storage import (
     create_memory_entry,
     delete_habit,
     delete_memory_entry,
+    get_memory_entry,
     list_activity,
     list_habit_checkins,
     list_habits,
@@ -145,19 +146,32 @@ class HabitCheckIn(BaseModel):
 
 
 class ActivityCreate(BaseModel):
-    action_type: str = Field(..., min_length=1, max_length=80)
+    type: str | None = Field(default=None, min_length=1, max_length=80)
+    action_type: str | None = Field(default=None, min_length=1, max_length=80)
     title: str = Field(..., min_length=1, max_length=160)
+    description: str | None = Field(default=None, max_length=1000)
     detail: str | None = Field(default=None, max_length=1000)
+    source: str = Field(default="manual", min_length=1, max_length=80)
+    metadata: dict[str, Any] | None = None
     payload: dict[str, Any] | None = None
 
 
 class ActivityEntry(BaseModel):
     id: str
+    type: str
     action_type: str
     title: str
+    description: str | None
     detail: str | None
+    source: str
+    metadata: dict[str, Any] | None
     payload: dict[str, Any] | None
     created_at: datetime
+
+
+class ConfirmCancelRequest(BaseModel):
+    session_id: str | None = None
+    pending_action: dict[str, Any] | None = None
 
 
 class TaskItem(BaseModel):
@@ -332,7 +346,36 @@ def confirm(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     _log_chat_activity(response)
+    log_activity(
+        action_type="confirmation_completed",
+        title="Confirmation completed",
+        detail=response.get("answer"),
+        source="confirmation",
+        payload={
+            "session_id": request.session_id,
+            "pending_action": request.pending_action,
+            "actions_taken": response.get("actions_taken") or [],
+        },
+    )
     return response
+
+
+@app.post("/confirm-cancel", response_model=ActivityEntry)
+def confirm_cancel(
+    request: ConfirmCancelRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_agent_api_key(authorization)
+    return log_activity(
+        action_type="confirmation_cancelled",
+        title="Confirmation cancelled",
+        detail=(request.pending_action or {}).get("confirmation_prompt"),
+        source="confirmation",
+        payload={
+            "session_id": request.session_id,
+            "pending_action": request.pending_action,
+        },
+    )
 
 
 @app.get("/memory", response_model=list[MemoryEntry])
@@ -352,6 +395,7 @@ def memory_create(
         action_type="memory_added",
         title=f"Memory added: {memory['title']}",
         detail=memory["content"],
+        source="memory",
         payload=memory,
     )
     return memory
@@ -367,6 +411,14 @@ def memory_update(
     memory = update_memory_entry(memory_id, _model_dump(request, exclude_unset=True))
     if memory is None:
         raise HTTPException(status_code=404, detail="Memory entry not found")
+    activity_type = "memory_disabled" if memory.get("enabled") is False else "memory_edited"
+    log_activity(
+        action_type=activity_type,
+        title=f"Memory {'disabled' if activity_type == 'memory_disabled' else 'edited'}: {memory['title']}",
+        detail=memory["content"],
+        source="memory",
+        payload=memory,
+    )
     return memory
 
 
@@ -376,8 +428,16 @@ def memory_delete(
     authorization: str | None = Header(default=None),
 ) -> dict[str, bool]:
     require_agent_api_key(authorization)
+    memory = get_memory_entry(memory_id)
     if not delete_memory_entry(memory_id):
         raise HTTPException(status_code=404, detail="Memory entry not found")
+    log_activity(
+        action_type="memory_deleted",
+        title=f"Memory deleted: {(memory or {}).get('title') or memory_id}",
+        detail=(memory or {}).get("content"),
+        source="memory",
+        payload=memory or {"id": memory_id},
+    )
     return {"deleted": True}
 
 
@@ -452,6 +512,7 @@ def habit_checkins_create(
         action_type="habit_logged",
         title=f"Habit logged: {checkin['habit']}",
         detail=activity_detail,
+        source="habit",
         payload=checkin,
     )
     return checkin
@@ -757,7 +818,14 @@ def activity_create(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     require_agent_api_key(authorization)
-    return log_activity(**_model_dump(request))
+    payload = _model_dump(request)
+    return log_activity(
+        action_type=payload.get("action_type") or payload.get("type"),
+        title=payload["title"],
+        detail=payload.get("detail") or payload.get("description"),
+        source=payload.get("source") or "manual",
+        payload=payload.get("payload") or payload.get("metadata"),
+    )
 
 
 def _task_section_for(task: dict[str, Any]) -> str:
@@ -921,6 +989,7 @@ def _log_chat_activity(response: dict[str, Any]) -> None:
                     action_type="task_created",
                     title=f"Task created: {task.get('content') or 'Todoist task'}",
                     detail=task.get("section_name") or task.get("project_category"),
+                    source="todoist",
                     payload=action,
                 )
             elif action_type == "create_calendar_event":
@@ -929,6 +998,17 @@ def _log_chat_activity(response: dict[str, Any]) -> None:
                     action_type="calendar_event_created",
                     title=f"Calendar event created: {event.get('title') or 'Calendar event'}",
                     detail=event.get("start"),
+                    source="google_calendar",
+                    payload=action,
+                )
+            elif action_type == "update_calendar_event":
+                event = action.get("event") or {}
+                previous_event = action.get("previous_event") or {}
+                log_activity(
+                    action_type="calendar_event_updated",
+                    title=f"Calendar event updated: {event.get('title') or previous_event.get('title') or 'Calendar event'}",
+                    detail=event.get("start"),
+                    source="google_calendar",
                     payload=action,
                 )
 
@@ -937,6 +1017,7 @@ def _log_chat_activity(response: dict[str, Any]) -> None:
                 action_type="confirmation_requested",
                 title="Confirmation requested",
                 detail=response.get("confirmation_prompt"),
+                source="confirmation",
                 payload=response.get("pending_action"),
             )
     except Exception:

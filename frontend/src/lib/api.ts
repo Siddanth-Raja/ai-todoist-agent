@@ -49,6 +49,7 @@ export type TaskItem = {
   due_status?: string | null;
   priority?: number | null;
   todoist_priority?: number | null;
+  created_at?: string | null;
   completed: boolean;
   labels: string[];
   url?: string | null;

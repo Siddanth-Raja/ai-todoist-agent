@@ -190,6 +190,7 @@ class TaskItem(BaseModel):
     due_status: str | None = None
     priority: int | None = None
     todoist_priority: int | None = None
+    created_at: str | None = None
     completed: bool
     labels: list[str] = Field(default_factory=list)
     url: str | None = None

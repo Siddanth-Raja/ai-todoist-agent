@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowUpRight,
   CalendarDays,
+  ChevronDown,
+  ChevronUp,
   CheckCircle2,
   Circle,
   ExternalLink,
@@ -17,8 +19,36 @@ import { apiRequest, type TaskItem, type TaskSection, type TasksResponse } from 
 type TaskView = "today" | "upcoming" | "life-area";
 type TaskFilter = "all" | "today" | "overdue" | "high";
 type LifeArea = "A&M" | "XO" | "Nebulo" | "Freelance" | "Personal" | "Misc";
+type FocusRecommendation = {
+  area: LifeArea;
+  sectionName: string;
+  task: TaskItem | null;
+  reason: string;
+  taskCount: number;
+  tasks: TaskItem[];
+};
+type RecommendationScore = {
+  priority: number;
+  age: number;
+  unblocking: number;
+  momentum: number;
+  due: number;
+};
+type RecommendationSnapshot = {
+  area: LifeArea;
+  taskId: string | null;
+  taskContent: string | null;
+  score: RecommendationScore | null;
+};
+type RecommendationChange = {
+  area: LifeArea;
+  previous: string;
+  current: string;
+  reason: string;
+};
 
 const lifeAreas: LifeArea[] = ["A&M", "XO", "Nebulo", "Freelance", "Personal", "Misc"];
+const recommendationStorageKey = "pcos.taskRecommendations.v1";
 
 const sectionToLifeArea: Record<string, LifeArea> = {
   "A&M": "A&M",
@@ -116,9 +146,12 @@ function priorityLabel(priority?: number | null) {
   return priority ? `P${priority}` : "P?";
 }
 
+function todoistPriorityValue(task: TaskItem) {
+  return Number(task.todoist_priority ?? (task.priority ? 5 - task.priority : 0));
+}
+
 function isHighPriority(task: TaskItem) {
-  const todoistPriority = Number(task.todoist_priority ?? task.priority ?? 0);
-  return todoistPriority >= 4;
+  return todoistPriorityValue(task) >= 4;
 }
 
 function dueStateLabel(task: TaskItem) {
@@ -180,6 +213,327 @@ function sortTasks(tasks: TaskItem[]) {
   });
 }
 
+function taskKey(task: TaskItem) {
+  return task.id ?? `${task.content}-${taskSectionName(task)}`;
+}
+
+function normalizedTaskText(task: TaskItem) {
+  return `${task.content} ${task.description ?? ""} ${(task.labels ?? []).join(" ")}`.toLowerCase();
+}
+
+function dueUrgencyScore(task: TaskItem) {
+  if (task.due_status === "overdue") {
+    return 5;
+  }
+  if (task.due_status === "today") {
+    return 4;
+  }
+  if (task.due_status === "tomorrow") {
+    return 3;
+  }
+  if (task.due_status === "this_week") {
+    return 2;
+  }
+  if (task.due_status === "later" || dueDateValue(task)) {
+    return 1;
+  }
+  return 0;
+}
+
+function ageScore(task: TaskItem) {
+  const createdAt = createdAtTime(task);
+  if (!createdAt) {
+    return 0;
+  }
+
+  const ageDays = Math.max(0, Math.floor((Date.now() - createdAt) / 86_400_000));
+  return Math.min(ageDays, 30);
+}
+
+function unblockingScore(task: TaskItem) {
+  const text = normalizedTaskText(task);
+  let score = 0;
+
+  if (/\bbuild\b/.test(text)) {
+    score += 2;
+  }
+  if (/\bsetup\b|\bset up\b/.test(text)) {
+    score += 2;
+  }
+  if (text.includes("create system")) {
+    score += 3;
+  }
+  if (/\bfoundation\b|\bfoundational\b/.test(text)) {
+    score += 3;
+  }
+  if (/\btool\b|\btemplate\b|\bworkflow\b|\baccount\b/.test(text)) {
+    score += 1;
+  }
+
+  return score;
+}
+
+function projectMomentumScore(task: TaskItem, areaTasks: TaskItem[]) {
+  const text = normalizedTaskText(task);
+  let score = 0;
+
+  if (/\bdemo\b|\bclient\b|\boutreach\b|\bproposal\b|\bship\b|\blaunch\b|\bpublish\b|\bsend\b/.test(text)) {
+    return 3;
+  }
+
+  const siblingTasks = areaTasks.filter((candidate) => taskKey(candidate) !== taskKey(task));
+  if (task.project_name && siblingTasks.some((candidate) => candidate.project_name === task.project_name)) {
+    score += 1;
+  }
+  if (task.labels?.length && siblingTasks.some((candidate) => candidate.labels?.some((label) => task.labels.includes(label)))) {
+    score += 1;
+  }
+
+  return score;
+}
+
+function createdAtTime(task: TaskItem) {
+  if (!task.created_at) {
+    return 0;
+  }
+  const parsed = new Date(task.created_at).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function recommendationScore(task: TaskItem, areaTasks: TaskItem[]): RecommendationScore {
+  return {
+    priority: todoistPriorityValue(task),
+    age: ageScore(task),
+    unblocking: unblockingScore(task),
+    momentum: projectMomentumScore(task, areaTasks),
+    due: dueUrgencyScore(task),
+  };
+}
+
+function compareRecommendationScores(first: RecommendationScore, second: RecommendationScore) {
+  const priorityDelta = second.priority - first.priority;
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+
+  const ageDelta = second.age - first.age;
+  if (ageDelta !== 0) {
+    return ageDelta;
+  }
+
+  const unblockingDelta = second.unblocking - first.unblocking;
+  if (unblockingDelta !== 0) {
+    return unblockingDelta;
+  }
+
+  const momentumDelta = second.momentum - first.momentum;
+  if (momentumDelta !== 0) {
+    return momentumDelta;
+  }
+
+  const dueDelta = second.due - first.due;
+  if (dueDelta !== 0) {
+    return dueDelta;
+  }
+
+  return 0;
+}
+
+function rankRecommendedTasks(tasks: TaskItem[]) {
+  return [...tasks].sort((first, second) => {
+    const scoreDelta = compareRecommendationScores(recommendationScore(first, tasks), recommendationScore(second, tasks));
+
+    if (scoreDelta !== 0) {
+      return scoreDelta;
+    }
+
+    const firstDate = dueDateValue(first) ?? "9999-12-31";
+    const secondDate = dueDateValue(second) ?? "9999-12-31";
+    const dueDateDelta = firstDate.localeCompare(secondDate);
+    if (dueDateDelta !== 0) {
+      return dueDateDelta;
+    }
+
+    return first.content.localeCompare(second.content);
+  });
+}
+
+function focusReason(area: LifeArea, task: TaskItem, areaTasks: TaskItem[]) {
+  const score = recommendationScore(task, areaTasks);
+  const text = normalizedTaskText(task);
+
+  if (area === "Freelance" && /\bbuild\b/.test(text) && /\b(scrap\w*|outreach|client|tool)\b/.test(text)) {
+    return "This unlocks future client outreach.";
+  }
+  if (area === "Nebulo" && /\bdemo\b/.test(text)) {
+    return "Closest task to external progress.";
+  }
+  if (area === "Personal" && /\b(invest\w*|account|setup|set up)\b/.test(text)) {
+    return "One-time setup with long-term benefit.";
+  }
+  if (areaTasks.length === 1) {
+    return `Only active ${area} task`;
+  }
+  if (score.priority >= 4 && score.unblocking > 0) {
+    return "High-priority foundation task that unlocks later work.";
+  }
+  if (score.unblocking > 0) {
+    return "Foundation task that unlocks follow-on work.";
+  }
+  if (score.momentum > 0) {
+    return "Closest task to visible project progress.";
+  }
+  if (task.due_status === "overdue") {
+    return `Overdue task in ${area}.`;
+  }
+  if (todoistPriorityValue(task) === Math.max(...areaTasks.map(todoistPriorityValue))) {
+    return `Highest Todoist priority in ${area}.`;
+  }
+  if (score.age >= 14) {
+    return "Older task with enough weight to clear next.";
+  }
+  if (task.due_status === "today") {
+    return `Due today in ${area}.`;
+  }
+  return `Best next task in ${area}.`;
+}
+
+function recommendedByLifeArea(tasks: TaskItem[]): FocusRecommendation[] {
+  return lifeAreas.map((area) => {
+    const areaTasks = tasks.filter((task) => taskLifeArea(task) === area);
+    const rankedTasks = rankRecommendedTasks(areaTasks);
+    const task = rankedTasks[0] ?? null;
+    return {
+      area,
+      sectionName: lifeAreaToSection[area],
+      task,
+      reason: task ? focusReason(area, task, areaTasks) : `No active ${area} tasks`,
+      taskCount: areaTasks.length,
+      tasks: rankedTasks,
+    };
+  });
+}
+
+function recommendationSnapshots(recommendations: FocusRecommendation[]): RecommendationSnapshot[] {
+  return recommendations.map((recommendation) => ({
+    area: recommendation.area,
+    taskId: recommendation.task?.id ?? null,
+    taskContent: recommendation.task?.content ?? null,
+    score: recommendation.task ? recommendationScore(recommendation.task, recommendation.tasks) : null,
+  }));
+}
+
+function readStoredRecommendationState(): { updatedAt: string | null; snapshots: RecommendationSnapshot[] } {
+  if (typeof window === "undefined") {
+    return { updatedAt: null, snapshots: [] };
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(recommendationStorageKey);
+    if (!rawValue) {
+      return { updatedAt: null, snapshots: [] };
+    }
+
+    const parsed = JSON.parse(rawValue) as Partial<{ updatedAt: string | null; snapshots: RecommendationSnapshot[] }>;
+    return {
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : null,
+      snapshots: Array.isArray(parsed.snapshots) ? parsed.snapshots : [],
+    };
+  } catch {
+    return { updatedAt: null, snapshots: [] };
+  }
+}
+
+function writeStoredRecommendationState(updatedAt: string, snapshots: RecommendationSnapshot[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(recommendationStorageKey, JSON.stringify({ updatedAt, snapshots }));
+}
+
+function recommendationChanged(previous: RecommendationSnapshot, current: RecommendationSnapshot) {
+  if (previous.taskId && current.taskId) {
+    return previous.taskId !== current.taskId;
+  }
+  return previous.taskContent !== current.taskContent;
+}
+
+function changeReason(previous: RecommendationSnapshot, current: RecommendationSnapshot) {
+  if (!previous.taskContent) {
+    return "New recommendation after refresh.";
+  }
+  if (!current.score || !previous.score) {
+    return "Recommendation changed after refresh.";
+  }
+  if (current.score.priority > previous.score.priority) {
+    return "Higher-priority task added.";
+  }
+  if (current.score.age > previous.score.age) {
+    return "Older task now needs attention.";
+  }
+  if (current.score.unblocking > previous.score.unblocking) {
+    return "Current task unlocks more follow-on work.";
+  }
+  if (current.score.momentum > previous.score.momentum) {
+    return "Current task is closer to external progress.";
+  }
+  if (current.score.due > previous.score.due) {
+    return "Due date became more urgent.";
+  }
+  return "Recommendation changed after refresh.";
+}
+
+function recommendationChanges(
+  previousSnapshots: RecommendationSnapshot[],
+  currentSnapshots: RecommendationSnapshot[],
+): RecommendationChange[] {
+  return currentSnapshots.flatMap((current) => {
+    const previous = previousSnapshots.find((snapshot) => snapshot.area === current.area);
+    if (!previous || !current.taskContent || !recommendationChanged(previous, current)) {
+      return [];
+    }
+
+    return [
+      {
+        area: current.area,
+        previous: previous.taskContent ?? "No recommendation",
+        current: current.taskContent,
+        reason: changeReason(previous, current),
+      },
+    ];
+  });
+}
+
+function formatUpdatedAgo(updatedAt: string | null, nowMs: number) {
+  if (!updatedAt) {
+    return "Not refreshed yet";
+  }
+
+  const updatedMs = new Date(updatedAt).getTime();
+  if (!Number.isFinite(updatedMs)) {
+    return "Updated recently";
+  }
+
+  const elapsedSeconds = Math.max(0, Math.floor((nowMs - updatedMs) / 1000));
+  if (elapsedSeconds < 60) {
+    return "Updated just now";
+  }
+
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) {
+    return `Updated ${elapsedMinutes} minute${elapsedMinutes === 1 ? "" : "s"} ago`;
+  }
+
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) {
+    return `Updated ${elapsedHours} hour${elapsedHours === 1 ? "" : "s"} ago`;
+  }
+
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  return `Updated ${elapsedDays} day${elapsedDays === 1 ? "" : "s"} ago`;
+}
+
 function filterTasks(tasks: TaskItem[], filter: TaskFilter) {
   if (filter === "today") {
     return tasks.filter((task) => task.due_status === "today");
@@ -203,7 +557,7 @@ function flattenSections(sections: TaskSection[]) {
   );
 }
 
-function TaskCard({ task }: { task: TaskItem }) {
+function TaskCard({ task, reason }: { task: TaskItem; reason?: string }) {
   const area = taskLifeArea(task);
   const styles = areaStyles[area];
   const sectionName = taskSectionName(task);
@@ -221,6 +575,11 @@ function TaskCard({ task }: { task: TaskItem }) {
 
         <div className="min-w-0 flex-1">
           <p className="break-words text-sm font-semibold leading-5 text-pearl">{task.content}</p>
+          {reason ? (
+            <p className="mt-2 inline-flex rounded-full border border-gold/30 bg-gold/10 px-2 py-1 text-[11px] font-medium text-gold">
+              {reason}
+            </p>
+          ) : null}
           {task.description ? (
             <p className="mt-2 break-words text-xs leading-5 text-stone-500">{task.description}</p>
           ) : null}
@@ -272,9 +631,115 @@ function TaskList({ tasks, emptyLabel }: { tasks: TaskItem[]; emptyLabel: string
   return (
     <div className="space-y-3">
       {tasks.map((task) => (
-        <TaskCard key={task.id ?? task.content} task={task} />
+        <TaskCard key={taskKey(task)} task={task} />
       ))}
     </div>
+  );
+}
+
+function FocusByArea({
+  recommendations,
+  changesByArea,
+  isLoading,
+  onRefresh,
+  updatedLabel,
+}: {
+  recommendations: FocusRecommendation[];
+  changesByArea: Partial<Record<LifeArea, RecommendationChange>>;
+  isLoading: boolean;
+  onRefresh: () => void;
+  updatedLabel: string;
+}) {
+  const [expandedAreas, setExpandedAreas] = useState<Partial<Record<LifeArea, boolean>>>({});
+
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs uppercase tracking-[0.18em] text-stone-500">Focus by Life Area</p>
+          <h3 className="mt-1 text-xl font-semibold text-pearl">Best next task in each section</h3>
+          <p className="mt-1 text-xs text-stone-500">{updatedLabel}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-gold/30 bg-gold/10 px-3 text-sm font-medium text-gold transition hover:bg-gold/15"
+        >
+          <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} aria-hidden="true" />
+          Refresh recommendation
+        </button>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {recommendations.map((item) => {
+          const isExpanded = Boolean(expandedAreas[item.area]);
+          const visibleTasks = isExpanded ? item.tasks : item.task ? [item.task] : [];
+          const change = changesByArea[item.area];
+
+          return (
+            <section key={item.area} className={`min-w-0 rounded-lg border p-4 shadow-card ${areaStyles[item.area].panel}`}>
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className={`h-2.5 w-2.5 rounded-full ${areaStyles[item.area].dot}`} />
+                    <h4 className="text-base font-semibold text-pearl">{item.area}</h4>
+                  </div>
+                  <p className="mt-1 text-xs text-stone-500">Todoist section: {item.sectionName}</p>
+                </div>
+                <span className={`rounded-full border px-2 py-1 text-xs ${areaStyles[item.area].chip}`}>
+                  {item.taskCount}
+                </span>
+              </div>
+
+              {visibleTasks.length ? (
+                <div className="space-y-3">
+                  {visibleTasks.map((task) => {
+                    const isRecommendedTask = item.task ? taskKey(task) === taskKey(item.task) : false;
+
+                    return (
+                      <TaskCard
+                        key={taskKey(task)}
+                        task={task}
+                        reason={isRecommendedTask ? item.reason : undefined}
+                      />
+                    );
+                  })}
+                </div>
+              ) : (
+                <EmptyState label={item.reason} />
+              )}
+
+              {change ? (
+                <div className="mt-3 rounded-lg border border-gold/25 bg-gold/10 p-3 text-xs leading-5 text-gold">
+                  <p className="font-semibold text-pearl">Recommendation changed</p>
+                  <p className="mt-2">
+                    <span className="text-stone-400">Previous:</span> {change.previous}
+                  </p>
+                  <p>
+                    <span className="text-stone-400">Current:</span> {change.current}
+                  </p>
+                  <p>
+                    <span className="text-stone-400">Reason:</span> {change.reason}
+                  </p>
+                </div>
+              ) : null}
+
+              {item.taskCount > 1 ? (
+                <button
+                  type="button"
+                  aria-expanded={isExpanded}
+                  onClick={() => setExpandedAreas((current) => ({ ...current, [item.area]: !isExpanded }))}
+                  className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 text-xs font-medium text-stone-300 transition hover:bg-white/[0.06] hover:text-pearl"
+                >
+                  {isExpanded ? <ChevronUp className="h-4 w-4" aria-hidden="true" /> : <ChevronDown className="h-4 w-4" aria-hidden="true" />}
+                  {isExpanded ? "Collapse" : "Expand"}
+                </button>
+              ) : null}
+            </section>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -284,6 +749,10 @@ export default function TasksPage() {
   const [filter, setFilter] = useState<TaskFilter>("all");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [recommendationUpdatedAt, setRecommendationUpdatedAt] = useState<string | null>(null);
+  const [recommendationChangeList, setRecommendationChangeList] = useState<RecommendationChange[]>([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const recommendationSnapshotsRef = useRef<RecommendationSnapshot[] | null>(null);
 
   const tasks = useMemo(() => sortTasks(flattenSections(data?.sections ?? [])), [data]);
   const filteredTasks = useMemo(() => filterTasks(tasks, filter), [filter, tasks]);
@@ -294,6 +763,24 @@ export default function TasksPage() {
   const upcomingTasks = useMemo(
     () => filteredTasks.filter((task) => ["tomorrow", "this_week", "later"].includes(task.due_status ?? "")),
     [filteredTasks],
+  );
+  const focusRecommendations = useMemo(() => recommendedByLifeArea(tasks), [tasks]);
+  const recommendationChangesByArea = useMemo(
+    () =>
+      recommendationChangeList.reduce<Partial<Record<LifeArea, RecommendationChange>>>((changes, change) => {
+        changes[change.area] = change;
+        return changes;
+      }, {}),
+    [recommendationChangeList],
+  );
+  const updatedLabel = useMemo(() => formatUpdatedAgo(recommendationUpdatedAt, nowMs), [nowMs, recommendationUpdatedAt]);
+  const areaCounts = useMemo(
+    () =>
+      lifeAreas.reduce<Record<LifeArea, number>>((counts, area) => {
+        counts[area] = tasks.filter((task) => taskLifeArea(task) === area).length;
+        return counts;
+      }, {} as Record<LifeArea, number>),
+    [tasks],
   );
   const groupedByArea = useMemo(
     () =>
@@ -315,20 +802,40 @@ export default function TasksPage() {
     [tasks],
   );
 
-  async function loadTasks() {
+  const loadTasks = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      setData(await apiRequest<TasksResponse>("/tasks"));
+      const nextData = await apiRequest<TasksResponse>("/tasks");
+      const refreshedTasks = sortTasks(flattenSections(nextData.sections));
+      const nextRecommendations = recommendedByLifeArea(refreshedTasks);
+      const nextSnapshots = recommendationSnapshots(nextRecommendations);
+      const storedState = readStoredRecommendationState();
+      const previousSnapshots = recommendationSnapshotsRef.current ?? storedState.snapshots;
+      const updatedAt = new Date().toISOString();
+
+      recommendationSnapshotsRef.current = nextSnapshots;
+      setData(nextData);
+      setRecommendationUpdatedAt(updatedAt);
+      setRecommendationChangeList(recommendationChanges(previousSnapshots, nextSnapshots));
+      writeStoredRecommendationState(updatedAt, nextSnapshots);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Unable to load tasks.");
     } finally {
       setIsLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
+    const storedState = readStoredRecommendationState();
+    recommendationSnapshotsRef.current = storedState.snapshots.length ? storedState.snapshots : null;
+    setRecommendationUpdatedAt(storedState.updatedAt);
     void loadTasks();
+  }, [loadTasks]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(interval);
   }, []);
 
   return (
@@ -423,14 +930,32 @@ export default function TasksPage() {
               <div className="space-y-4">
                 <div className="flex items-center gap-2">
                   <CalendarDays className="h-4 w-4 text-gold" aria-hidden="true" />
-                  <h3 className="text-xl font-semibold text-pearl">Today Focus</h3>
+                  <h3 className="text-xl font-semibold text-pearl">Recommended Focus</h3>
                 </div>
-                <TaskList tasks={todayTasks} emptyLabel="No overdue or due-today tasks match this filter." />
+                {todayTasks.length === 0 && filter === "all" ? (
+                  <div className="rounded-lg border border-gold/25 bg-gold/10 p-4 text-sm text-gold">
+                    Nothing due today. Here are the best next tasks by area.
+                  </div>
+                ) : null}
+                <FocusByArea
+                  recommendations={focusRecommendations}
+                  changesByArea={recommendationChangesByArea}
+                  isLoading={isLoading}
+                  onRefresh={() => void loadTasks()}
+                  updatedLabel={updatedLabel}
+                />
+
+                <section className="space-y-3 pt-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <h4 className="text-base font-semibold text-pearl">Due-date queue</h4>
+                    <span className="text-xs text-stone-500">Filters still apply here</span>
+                  </div>
+                  <TaskList tasks={todayTasks} emptyLabel="No overdue or due-today tasks match this filter." />
+                </section>
               </div>
 
               <aside className="space-y-3">
                 {lifeAreas.map((area) => {
-                  const areaTasks = todayTasks.filter((task) => taskLifeArea(task) === area);
                   return (
                     <div key={area} className={`rounded-lg border p-4 ${areaStyles[area].panel}`}>
                       <div className="flex items-center justify-between gap-3">
@@ -438,7 +963,7 @@ export default function TasksPage() {
                           <span className={`h-2.5 w-2.5 rounded-full ${areaStyles[area].dot}`} />
                           <span className="text-sm font-medium text-pearl">{area}</span>
                         </div>
-                        <span className="text-sm text-stone-400">{areaTasks.length}</span>
+                        <span className="text-sm text-stone-400">{areaCounts[area]}</span>
                       </div>
                     </div>
                   );

@@ -568,7 +568,7 @@ class AgentExampleTests(unittest.TestCase):
         self.assertEqual(response["actions_taken"][0]["type"], "create_calendar_event")
         self.assertNotIn("Ashwin", response["answer"])
 
-    def test_tomorrow_event_conflict_detection_still_uses_tomorrow_events(self):
+    def test_tomorrow_event_conflict_detection_requests_confirmation_before_write(self):
         tomorrow_meeting = {
             "id": "event-tomorrow-meeting",
             "title": "Nebulo — Meeting with Brandon",
@@ -603,13 +603,52 @@ class AgentExampleTests(unittest.TestCase):
             side_effect=fake_decision,
         ), patch(
             "app.agent.create_calendar_event",
-            return_value=CalendarWriteResult(error="Calendar event conflicts with existing event: Nebulo — Meeting with Brandon."),
         ) as create_event_mock:
             response = handle_chat("I want to go gym tomorrow at 2:30", self.now)
 
-        self.assertEqual(create_event_mock.call_args.kwargs["existing_events"], [tomorrow_meeting])
+        create_event_mock.assert_not_called()
         self.assertEqual(response["actions_taken"], [])
-        self.assertIn("conflicts with existing event", response["errors"][0])
+        self.assertTrue(response["needs_confirmation"])
+        self.assertEqual(response["pending_action"]["type"], "create_calendar_event")
+        self.assertEqual(response["pending_action"]["calendar_event"]["start"], "2026-06-05T15:30:00-05:00")
+        self.assertIn("Recommended: move Gym", response["answer"])
+
+    def test_new_hard_event_overlapping_flexible_event_suggests_update_pending_action(self):
+        tomorrow_gym = {
+            "id": "event-gym",
+            "title": "Gym",
+            "start": "2026-06-05T14:15:00-05:00",
+            "end": "2026-06-05T15:15:00-05:00",
+            "busy": True,
+            "event_type": "flexible",
+            "event_category": "flexible",
+        }
+
+        with patch("app.agent.list_upcoming_events", return_value=CalendarReadResult(events=[tomorrow_gym])), patch(
+            "app.agent._get_llm_decision",
+            return_value=(
+                self._decision(
+                    answer="I can put that on your calendar.",
+                    intent="schedule_event",
+                    action_type="create_calendar_event",
+                    calendar_event={
+                        "title": "Client meeting",
+                        "start": "2026-06-05T14:00:00-05:00",
+                        "end": "2026-06-05T14:30:00-05:00",
+                        "description": None,
+                    },
+                ),
+                None,
+            ),
+        ), patch("app.agent.create_calendar_event") as create_event_mock:
+            response = handle_chat("Schedule a client meeting tomorrow at 2", self.now)
+
+        create_event_mock.assert_not_called()
+        self.assertTrue(response["needs_confirmation"])
+        self.assertEqual(response["pending_action"]["type"], "update_calendar_event")
+        self.assertEqual(response["pending_action"]["details"]["event_id"], "event-gym")
+        self.assertEqual(response["pending_action"]["details"]["new_start"], "2026-06-05T15:00:00-05:00")
+        self.assertIn("This overlaps with Gym", response["answer"])
 
     def test_am_roommates_resolve_to_am_context(self):
         event = {

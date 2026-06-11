@@ -344,6 +344,8 @@ def categories_conflict(first_category: str, second_category: str) -> bool:
     categories = {first_category, second_category}
     if "informational" in categories:
         return False
+    if categories == {"hard", "social"}:
+        return True
     return "hard" in categories
 
 
@@ -484,7 +486,7 @@ def _parse_google_time(value: dict[str, Any], local_tz) -> tuple[datetime, bool]
 
 def _event_category(event: dict[str, Any]) -> str:
     category = event.get("event_category") or event.get("event_type")
-    if category in {"hard", "flexible", "informational"}:
+    if category in {"hard", "flexible", "informational", "social"}:
         return str(category)
     if category == "soft":
         return "informational"
@@ -531,11 +533,21 @@ def infer_event_category(title: str, attendees: list[dict[str, Any]]) -> str:
         "errands",
         "focus block",
     )
+    social_keywords = (
+        "party",
+        "parties",
+        "hangout",
+        "hang out",
+        "dinner",
+        "family visit",
+    )
 
     if any(keyword in text for keyword in informational_keywords):
         return "informational"
     if attendees or any(keyword in text for keyword in hard_keywords):
         return "hard"
+    if any(keyword in text for keyword in social_keywords):
+        return "social"
     if any(keyword in text for keyword in flexible_keywords):
         return "flexible"
     return "flexible"

@@ -5,6 +5,7 @@ from typing import Any
 
 import requests
 
+from .calendar_intelligence import CalendarAnalysis, analyze_calendar_change
 from .calendar_tools import (
     create_calendar_event,
     list_todays_events,
@@ -264,6 +265,11 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
     decision = _apply_memory_resolution(decision, resolved_memory)
     decision = _apply_calendar_update_override(
         cleaned_message,
+        decision,
+        upcoming_calendar_result.events or calendar_result.events,
+        local_now,
+    )
+    decision = _apply_calendar_intelligence_confirmation(
         decision,
         upcoming_calendar_result.events or calendar_result.events,
         local_now,
@@ -1564,6 +1570,163 @@ def _todoist_content_for_calendar_event(title: str, project: str | None) -> str:
     if project:
         return re.sub(rf"^{re.escape(project)}\s+[—-]\s+", "", title).strip()
     return title
+
+
+def _apply_calendar_intelligence_confirmation(
+    decision: dict[str, Any],
+    calendar_events: list[dict[str, Any]],
+    local_now: datetime,
+) -> dict[str, Any]:
+    if decision.get("action_type") != "create_calendar_event" or decision.get("intent") != "schedule_event":
+        return decision
+    if decision.get("allow_conflicts"):
+        return decision
+
+    event = decision.get("calendar_event") if isinstance(decision.get("calendar_event"), dict) else {}
+    title = str(event.get("title") or "").strip()
+    start = _parse_llm_datetime(event.get("start"), local_now)
+    end = _parse_llm_datetime(event.get("end"), local_now)
+    if not title or not start or not end:
+        return decision
+
+    target_date_events = _events_for_datetime_target(calendar_events, start)
+    analysis = analyze_calendar_change(
+        {
+            "title": title,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "description": event.get("description"),
+            "busy": True,
+            "all_day": bool(event.get("all_day")),
+            "event_category": event.get("event_category") or event.get("event_type"),
+        },
+        target_date_events,
+        {"now": local_now.isoformat()},
+    )
+
+    if analysis.severity == "none":
+        informational = next((issue for issue in analysis.issues if issue.type == "informational_overlap"), None)
+        if informational:
+            decision["answer"] = f"{informational.message} {decision['answer']}".strip()
+        return decision
+
+    if analysis.severity not in {"medium", "high"}:
+        return decision
+
+    pending_action = _pending_action_for_calendar_analysis(
+        decision=decision,
+        event=event,
+        title=title,
+        start=start,
+        end=end,
+        calendar_events=target_date_events,
+        analysis=analysis,
+    )
+    confirmation_prompt = _calendar_analysis_confirmation_prompt(title, analysis)
+
+    decision["answer"] = confirmation_prompt
+    decision["action_type"] = "none"
+    decision["needs_confirmation"] = True
+    decision["confirmation_prompt"] = confirmation_prompt
+    decision["pending_action"] = pending_action
+    return decision
+
+
+def _pending_action_for_calendar_analysis(
+    *,
+    decision: dict[str, Any],
+    event: dict[str, Any],
+    title: str,
+    start: datetime,
+    end: datetime,
+    calendar_events: list[dict[str, Any]],
+    analysis: CalendarAnalysis,
+) -> dict[str, Any]:
+    fix = analysis.suggested_fix
+    if fix and fix.action == "move_existing_event" and fix.event_id:
+        affected_event = _event_by_id(calendar_events, fix.event_id)
+        if affected_event and fix.new_start and fix.new_end:
+            return {
+                "type": "update_calendar_event",
+                "action_type": "update_calendar_event",
+                "intent": "replan",
+                "confirmation_prompt": _calendar_analysis_confirmation_prompt(title, analysis),
+                "resolved_project": decision.get("resolved_project"),
+                "details": {
+                    "event_id": fix.event_id,
+                    "title": str(affected_event.get("title") or "Event"),
+                    "old_start": str(affected_event.get("start") or ""),
+                    "old_end": str(affected_event.get("end") or ""),
+                    "new_start": fix.new_start,
+                    "new_end": fix.new_end,
+                },
+            }
+
+    pending_event = dict(event)
+    if fix and fix.action == "move_new_event" and fix.new_start and fix.new_end:
+        pending_event["start"] = fix.new_start
+        pending_event["end"] = fix.new_end
+    else:
+        pending_event["start"] = start.isoformat()
+        pending_event["end"] = end.isoformat()
+    pending_event["title"] = title
+
+    return {
+        "type": "create_calendar_event",
+        "action_type": "create_calendar_event",
+        "intent": "schedule_event",
+        "confirmation_prompt": _calendar_analysis_confirmation_prompt(title, analysis),
+        "resolved_project": decision.get("resolved_project"),
+        "calendar_event": pending_event,
+        "details": {
+            "conflict": _primary_calendar_issue_message(analysis),
+            "options": [],
+            "suggested_change": fix.reason if fix else None,
+            "affected_event": _primary_affected_event_title(analysis),
+            "requested_decision": "Confirm the calendar event.",
+        },
+    }
+
+
+def _calendar_analysis_confirmation_prompt(title: str, analysis: CalendarAnalysis) -> str:
+    issue_message = _primary_calendar_issue_message(analysis)
+    fix = analysis.suggested_fix
+    if fix and fix.action == "move_existing_event":
+        return f"{issue_message} Recommended: move {_primary_affected_event_title(analysis) or 'the flexible event'} to {_format_iso_time(fix.new_start)}."
+    if fix and fix.action == "move_new_event":
+        return f"{issue_message} Recommended: move {title} to {_format_iso_time(fix.new_start)}."
+    if fix and fix.action in {"add_travel_buffer", "add_prep_block"}:
+        return f"{issue_message} Recommended: add a prep/travel buffer before this event. Create it anyway?"
+    return f"{issue_message} Create it anyway?"
+
+
+def _primary_calendar_issue_message(analysis: CalendarAnalysis) -> str:
+    if analysis.issues:
+        return analysis.issues[0].message
+    return "This calendar change may need attention."
+
+
+def _primary_affected_event_title(analysis: CalendarAnalysis) -> str | None:
+    for issue in analysis.issues:
+        if issue.affected_event_title:
+            return issue.affected_event_title
+    return None
+
+
+def _event_by_id(events: list[dict[str, Any]], event_id: str) -> dict[str, Any] | None:
+    for event in events:
+        if str(event.get("id") or "") == event_id:
+            return event
+    return None
+
+
+def _format_iso_time(value: str | None) -> str:
+    if not value:
+        return "the suggested time"
+    try:
+        return _format_time(datetime.fromisoformat(value))
+    except ValueError:
+        return value
 
 
 def _execute_allowed_action(

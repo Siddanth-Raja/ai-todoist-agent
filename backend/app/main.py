@@ -1,13 +1,14 @@
 from datetime import datetime, time, timedelta
 from typing import Any, Literal
 
+import requests
 from fastapi import FastAPI
 from fastapi import Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .agent import MODE, confirm_pending_action, handle_chat
-from .calendar_tools import categories_conflict, list_remaining_today_events, list_upcoming_events
+from .calendar_tools import check_google_auth, categories_conflict, list_remaining_today_events, list_upcoming_events
 from .config import get_settings
 from .planner import enrich_task, rank_tasks
 from .storage import (
@@ -26,7 +27,7 @@ from .storage import (
     update_memory_entry,
 )
 from .todoist_tools import list_active_tasks
-from .todoist_tools import LIFE_AREA_TO_TODOIST_SECTION, TODOIST_SECTION_TO_LIFE_AREA, life_area_for_todoist_section
+from .todoist_tools import LIFE_AREA_TO_TODOIST_SECTION, TODOIST_SECTION_TO_LIFE_AREA, life_area_for_todoist_section, list_todoist_sections
 
 
 app = FastAPI(
@@ -43,8 +44,13 @@ app.add_middleware(
 )
 
 
+OPENAI_MODELS_BASE_URL = "https://api.openai.com/v1/models"
+PROVIDER_HEALTH_TIMEOUT_SECONDS = 10
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
+    session_id: str | None = None
     current_time: datetime | None = None
 
 
@@ -58,6 +64,7 @@ class ChatResponse(BaseModel):
     free_block: dict[str, Any] | None
     recommended_tasks: list[dict[str, Any]]
     calendar_events: list[dict[str, Any]]
+    conversation_state: dict[str, Any] | None = None
     mode: str
     errors: list[str | dict[str, Any]] = Field(default_factory=list)
 
@@ -300,6 +307,19 @@ def health() -> dict[str, str]:
     }
 
 
+@app.get("/settings/health")
+def settings_health(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    require_agent_api_key(authorization)
+    settings = get_settings()
+    return {
+        "checks": {
+            "todoist": _todoist_health(settings),
+            "google_calendar": _google_calendar_health(settings),
+            "openai": _openai_health(settings),
+        },
+    }
+
+
 def require_agent_api_key(authorization: str | None = Header(default=None)) -> None:
     settings = get_settings()
     expected_key = settings.agent_api_key
@@ -309,6 +329,100 @@ def require_agent_api_key(authorization: str | None = Header(default=None)) -> N
     expected_header = f"Bearer {expected_key}"
     if authorization != expected_header:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
+def _health_payload(
+    *,
+    status: Literal["ok", "warning", "error"],
+    message: str,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "message": message,
+        "details": details or {},
+    }
+
+
+def _todoist_health(settings) -> dict[str, Any]:
+    if settings.missing_todoist:
+        return _health_payload(
+            status="error",
+            message="TODOIST_API_TOKEN is missing. Add it to backend/.env, then restart ./start.sh.",
+        )
+
+    result = list_todoist_sections(settings)
+    if result.error:
+        return _health_payload(status="error", message=result.error)
+
+    return _health_payload(
+        status="ok",
+        message=f"Connected to Todoist. Found {len(result.sections)} sections in the To-Do project.",
+    )
+
+
+def _google_calendar_health(settings) -> dict[str, Any]:
+    diagnostics = check_google_auth(settings)
+    errors = diagnostics.get("errors") or []
+    missing_config = any(error.get("type") == "missing_config" for error in errors if isinstance(error, dict))
+
+    if missing_config:
+        return _health_payload(
+            status="error",
+            message="Google Calendar OAuth is not configured. Add the missing Google fields to backend/.env, then restart ./start.sh.",
+            details=diagnostics,
+        )
+
+    token_ok = bool(diagnostics.get("token_refresh_succeeds"))
+    read_ok = bool(diagnostics.get("calendar_read_succeeds"))
+    write_ok = diagnostics.get("write_permission_status") == "ok"
+    if token_ok and read_ok and write_ok:
+        return _health_payload(
+            status="ok",
+            message="Connected to Google Calendar with read and write access.",
+            details=diagnostics,
+        )
+
+    return _health_payload(
+        status="error",
+        message=(
+            "Google Calendar auth failed. Reconnect by running "
+            "`cd backend && .venv/bin/python scripts/google_oauth_setup.py`, then restart ./start.sh."
+        ),
+        details=diagnostics,
+    )
+
+
+def _openai_health(settings) -> dict[str, Any]:
+    if not settings.openai_api_key:
+        return _health_payload(
+            status="error",
+            message="OPENAI_API_KEY is missing. Add it to backend/.env, then restart ./start.sh.",
+        )
+
+    try:
+        response = requests.get(
+            f"{OPENAI_MODELS_BASE_URL}/{settings.openai_model}",
+            headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+            timeout=PROVIDER_HEALTH_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else "unknown"
+        return _health_payload(
+            status="error",
+            message=f"OpenAI rejected the configured key or model with HTTP {status_code}.",
+        )
+    except requests.RequestException as exc:
+        return _health_payload(
+            status="error",
+            message=f"Could not reach OpenAI: {exc.__class__.__name__}.",
+        )
+
+    return _health_payload(
+        status="ok",
+        message=f"Connected to OpenAI model {settings.openai_model}.",
+    )
 
 
 def _model_dump(model: BaseModel, *, exclude_unset: bool = False) -> dict[str, Any]:
@@ -327,7 +441,7 @@ def chat(
     if not message:
         raise HTTPException(status_code=400, detail="message cannot be blank")
 
-    response = handle_chat(message=message, current_time=request.current_time)
+    response = handle_chat(message=message, current_time=request.current_time, session_id=request.session_id)
     _log_chat_activity(response)
     return response
 

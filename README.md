@@ -2,6 +2,29 @@
 
 AI-assisted planning MVP with a FastAPI backend and a mobile-first Next.js frontend.
 
+## Quickstart
+
+Create `backend/.env` before running the app. See [backend/README.md](backend/README.md) for the full Todoist, Google Calendar, OpenAI, and `AGENT_API_KEY` setup.
+
+```bash
+./start.sh
+```
+
+Open [http://localhost:3010](http://localhost:3010).
+
+In the app, go to Settings and save:
+
+- Backend URL: `http://127.0.0.1:8000`
+- API key: the same value as `AGENT_API_KEY` in `backend/.env`
+
+Settings includes health checks for the backend, Todoist, Google Calendar, and OpenAI. If Google Calendar auth fails, follow the reconnect command shown in Settings.
+
+Stop both servers:
+
+```bash
+./stop.sh
+```
+
 ## Backend
 
 ```bash
@@ -14,7 +37,7 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 Create `backend/.env` before running the server. See [backend/README.md](backend/README.md) for the full Todoist, Google Calendar, OpenAI, and `AGENT_API_KEY` setup.
 
-## Frontend
+## Frontend Only
 
 ```bash
 cd frontend
@@ -22,7 +45,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3010](http://localhost:3010).
 
 In the app, go to Settings and save:
 
@@ -44,7 +67,7 @@ Copy the HTTPS forwarding URL, then save it in the frontend Settings as the Back
 If you expose the frontend too, run a second tunnel:
 
 ```bash
-ngrok http 3000
+ngrok http 3010
 ```
 
 The backend includes CORS defaults for localhost development and `*.ngrok-free.app` origins.

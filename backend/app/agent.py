@@ -153,25 +153,52 @@ ALLOWED_INTENTS = {
 AFFIRMATIVE_CONFIRMATION_REPLIES = {
     "yes",
     "yes please",
+    "yeah",
+    "yep",
     "sure",
     "do it",
+    "do that",
+    "it is",
+    "make it calendar",
     "sounds good",
     "add it",
     "confirm",
 }
+NEGATIVE_CONFIRMATION_REPLIES = {
+    "no",
+    "nope",
+    "nah",
+    "it is not",
+    "it isn't",
+}
 PENDING_ACTION: dict[str, Any] | None = None
+CONVERSATION_STATES: dict[str, dict[str, Any]] = {}
 EXECUTABLE_PENDING_ACTION_TYPES = {
     "create_calendar_event",
     "create_todoist_task",
     "update_calendar_event",
 }
+CALENDAR_LOOKUP_TERMS = {
+    "interview": ("interview", "recruiter", "hiring", "career", "phone screen"),
+    "meeting": ("meeting", "meet", "sync", "call"),
+    "appointment": ("appointment", "doctor", "dentist"),
+    "party": ("party", "parties"),
+    "gym": ("gym", "workout"),
+    "class": ("class", "lecture", "seminar"),
+}
 
 
-def handle_chat(message: str, current_time: datetime | None = None) -> dict[str, Any]:
+def handle_chat(
+    message: str,
+    current_time: datetime | None = None,
+    session_id: str | None = None,
+) -> dict[str, Any]:
     global PENDING_ACTION
 
     settings = get_settings()
     cleaned_message = message.strip()
+    session_key = _session_key(session_id)
+    conversation_state = _conversation_state(session_key)
     active_pending_action = PENDING_ACTION
 
     todoist_result = list_active_tasks(settings)
@@ -210,7 +237,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
         errors.extend(action_errors)
         PENDING_ACTION = None
         answer = _answer_with_actions(decision, actions_taken, action_errors)
-        return {
+        return _with_conversation_state(session_key, {
             "answer": answer,
             "intent": decision["intent"],
             "actions_taken": actions_taken,
@@ -222,7 +249,32 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
             "calendar_events": _summarize_calendar_events(calendar_result.events),
             "mode": MODE,
             "errors": errors,
-        }
+        })
+
+    followup_response = _handle_conversation_followup(
+        message=cleaned_message,
+        state=conversation_state,
+        plan=plan,
+        calendar_events=upcoming_calendar_result.events or calendar_result.events,
+        visible_calendar_events=calendar_result.events,
+        local_now=local_now,
+        errors=errors,
+    )
+    if followup_response:
+        response, next_state = followup_response
+        return _with_conversation_state(session_key, response, next_state)
+
+    calendar_question_response = _handle_calendar_event_question(
+        message=cleaned_message,
+        plan=plan,
+        calendar_events=upcoming_calendar_result.events or calendar_result.events,
+        visible_calendar_events=calendar_result.events,
+        local_now=local_now,
+        errors=errors,
+    )
+    if calendar_question_response:
+        response, next_state = calendar_question_response
+        return _with_conversation_state(session_key, response, next_state)
 
     if not settings.openai_api_key:
         fallback = _fallback_response(
@@ -233,7 +285,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
             calendar_events=calendar_result.events,
             errors=[*errors, "OPENAI_API_KEY is missing. Used deterministic planner fallback."],
         )
-        return fallback
+        return _with_conversation_state(session_key, fallback)
 
     context = _build_llm_context(
         message=cleaned_message,
@@ -258,7 +310,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
             calendar_events=calendar_result.events,
             errors=[*errors, llm_error or "OpenAI decision was empty. Used deterministic planner fallback."],
         )
-        return fallback
+        return _with_conversation_state(session_key, fallback)
 
     decision = _sanitize_decision(decision)
     decision = _apply_capture_override(cleaned_message, decision, local_now, enabled_memories)
@@ -290,7 +342,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
 
     answer = _answer_with_actions(decision, actions_taken, action_errors)
 
-    return {
+    return _with_conversation_state(session_key, {
         "answer": answer,
         "intent": decision["intent"],
         "actions_taken": actions_taken,
@@ -302,7 +354,7 @@ def handle_chat(message: str, current_time: datetime | None = None) -> dict[str,
         "calendar_events": _summarize_calendar_events(calendar_result.events),
         "mode": MODE,
         "errors": errors,
-    }
+    })
 
 
 def confirm_pending_action(
@@ -361,6 +413,545 @@ def confirm_pending_action(
         "mode": MODE,
         "errors": errors,
     }
+
+
+def _session_key(session_id: str | None) -> str:
+    return str(session_id or "default").strip() or "default"
+
+
+def _conversation_state(session_key: str) -> dict[str, Any]:
+    state = CONVERSATION_STATES.get(session_key)
+    if isinstance(state, dict):
+        return {
+            "last_question": state.get("last_question"),
+            "awaiting": state.get("awaiting"),
+            "context": state.get("context") if isinstance(state.get("context"), dict) else {},
+        }
+    return {"last_question": None, "awaiting": None, "context": {}}
+
+
+def _with_conversation_state(
+    session_key: str,
+    response: dict[str, Any],
+    next_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    state = next_state if next_state is not None else _state_from_response(response)
+    CONVERSATION_STATES[session_key] = state
+    response["conversation_state"] = state
+    return response
+
+
+def _state_from_response(response: dict[str, Any]) -> dict[str, Any]:
+    last_question = _last_question(response.get("confirmation_prompt") or response.get("answer"))
+    if response.get("needs_confirmation"):
+        return {
+            "last_question": last_question,
+            "awaiting": "action_confirmation",
+            "context": {"pending_action": response.get("pending_action")},
+        }
+    return {
+        "last_question": last_question,
+        "awaiting": None,
+        "context": {},
+    }
+
+
+def _last_question(text: Any) -> str | None:
+    if not isinstance(text, str) or "?" not in text:
+        return None
+    matches = re.findall(r"([^?]*\?)", text)
+    if not matches:
+        return None
+    return matches[-1].strip()
+
+
+def _handle_calendar_event_question(
+    *,
+    message: str,
+    plan: dict[str, Any],
+    calendar_events: list[dict[str, Any]],
+    visible_calendar_events: list[dict[str, Any]],
+    local_now: datetime,
+    errors: list[str | dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    lookup = _calendar_lookup_request(message, local_now)
+    if not lookup:
+        return None
+
+    return _calendar_lookup_result(
+        lookup=lookup,
+        plan=plan,
+        calendar_events=calendar_events,
+        visible_calendar_events=visible_calendar_events,
+        local_now=local_now,
+        errors=errors,
+    )
+
+
+def _handle_conversation_followup(
+    *,
+    message: str,
+    state: dict[str, Any],
+    plan: dict[str, Any],
+    calendar_events: list[dict[str, Any]],
+    visible_calendar_events: list[dict[str, Any]],
+    local_now: datetime,
+    errors: list[str | dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    awaiting = state.get("awaiting")
+    context = state.get("context") if isinstance(state.get("context"), dict) else {}
+    if awaiting == "calendar_lookup_confirmation":
+        if _is_affirmative_confirmation(message):
+            return _calendar_lookup_followup(
+                context=context,
+                plan=plan,
+                calendar_events=calendar_events,
+                visible_calendar_events=visible_calendar_events,
+                local_now=local_now,
+                errors=errors,
+            )
+        if _is_negative_confirmation(message):
+            answer = "What time is the interview?"
+            next_state = {
+                "last_question": answer,
+                "awaiting": "event_detail",
+                "context": context,
+            }
+            return (
+                _conversation_answer(
+                    answer=answer,
+                    intent="question",
+                    plan=plan,
+                    calendar_events=visible_calendar_events,
+                    errors=errors,
+                ),
+                next_state,
+            )
+
+    if awaiting == "event_detail":
+        event_time = _extract_followup_time(message, local_now, context)
+        if event_time:
+            answer = _answer_interview_wakeup_from_time(event_time)
+            next_state = {"last_question": None, "awaiting": None, "context": {}}
+            return (
+                _conversation_answer(
+                    answer=answer,
+                    intent="question",
+                    plan=plan,
+                    calendar_events=visible_calendar_events,
+                    errors=errors,
+                ),
+                next_state,
+            )
+
+    return None
+
+
+def _calendar_lookup_followup(
+    *,
+    context: dict[str, Any],
+    plan: dict[str, Any],
+    calendar_events: list[dict[str, Any]],
+    visible_calendar_events: list[dict[str, Any]],
+    local_now: datetime,
+    errors: list[str | dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    lookup = {
+        "kind": str(context.get("kind") or context.get("topic") or "event"),
+        "target_date": _date_from_context(context, local_now),
+        "search_terms": tuple(context.get("search_terms") or ()),
+        "is_interview_wakeup": bool(context.get("is_interview_wakeup")),
+    }
+    return _calendar_lookup_result(
+        lookup=lookup,
+        plan=plan,
+        calendar_events=calendar_events,
+        visible_calendar_events=visible_calendar_events,
+        local_now=local_now,
+        errors=errors,
+    )
+
+
+def _calendar_lookup_result(
+    *,
+    lookup: dict[str, Any],
+    plan: dict[str, Any],
+    calendar_events: list[dict[str, Any]],
+    visible_calendar_events: list[dict[str, Any]],
+    local_now: datetime,
+    errors: list[str | dict[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    target_date = lookup["target_date"]
+    kind = str(lookup.get("kind") or "event")
+    matches = _calendar_events_for_date_matching(
+        calendar_events,
+        target_date,
+        tuple(lookup.get("search_terms") or (kind,)),
+    )
+    if matches:
+        if len(matches) > 1:
+            answer = _multiple_calendar_matches_answer(kind, target_date, matches, local_now)
+            next_state = {
+                "last_question": "Which one do you mean?",
+                "awaiting": "event_detail",
+                "context": _calendar_lookup_context(lookup),
+            }
+            return (
+                _conversation_answer(
+                    answer=answer,
+                    intent="question",
+                    plan=plan,
+                    calendar_events=visible_calendar_events,
+                    errors=errors,
+                ),
+                next_state,
+            )
+
+        answer = _answer_calendar_event_lookup(matches[0], lookup, local_now)
+        next_state = {"last_question": None, "awaiting": None, "context": {}}
+        return (
+            _conversation_answer(
+                answer=answer,
+                intent="question",
+                plan=plan,
+                calendar_events=visible_calendar_events,
+                errors=errors,
+            ),
+            next_state,
+        )
+
+    day_label = _day_context_label(target_date, local_now)
+    answer = f"I could not find {_event_kind_phrase(kind)} {day_label}. What time is it?"
+    next_state = {
+        "last_question": "What time is it?",
+        "awaiting": "event_detail",
+        "context": _calendar_lookup_context(lookup),
+    }
+    return (
+        _conversation_answer(
+            answer=answer,
+            intent="question",
+            plan=plan,
+            calendar_events=visible_calendar_events,
+            errors=errors,
+        ),
+        next_state,
+    )
+
+
+def _conversation_answer(
+    *,
+    answer: str,
+    intent: str,
+    plan: dict[str, Any],
+    calendar_events: list[dict[str, Any]],
+    errors: list[str | dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "answer": answer,
+        "intent": intent,
+        "actions_taken": [],
+        "needs_confirmation": False,
+        "confirmation_prompt": None,
+        "pending_action": None,
+        "free_block": plan["free_block"],
+        "recommended_tasks": plan["recommended_tasks"],
+        "calendar_events": _summarize_calendar_events(calendar_events),
+        "mode": MODE,
+        "errors": errors,
+    }
+
+
+def _looks_like_interview_wakeup_question(message: str) -> bool:
+    text = message.lower()
+    return "interview" in text and "tomorrow" in text and ("wake up" in text or "early" in text)
+
+
+def _calendar_lookup_request(message: str, local_now: datetime) -> dict[str, Any] | None:
+    text = message.lower()
+    if _looks_like_calendar_write_request(text):
+        return None
+    if "missed" in text or "what should" in text:
+        return None
+
+    kind = next((name for name, terms in CALENDAR_LOOKUP_TERMS.items() if any(term in text for term in terms)), None)
+    if not kind:
+        return None
+
+    asks_calendar_question = (
+        "?" in message
+        or "what time" in text
+        or "when" in text
+        or "do i need" in text
+        or "do i have" in text
+        or "is there" in text
+        or "wake up" in text
+        or "early" in text
+    )
+    asks_for_event_details = (
+        "what time" in text
+        or "when" in text
+        or "do i need" in text
+        or "do i have" in text
+        or "is there" in text
+        or "wake up" in text
+        or "early" in text
+    )
+    if not asks_calendar_question or not asks_for_event_details:
+        return None
+
+    target_date = _extract_temporal_date(message, local_now) or local_now.date()
+    return {
+        "kind": kind,
+        "target_date": target_date,
+        "search_terms": CALENDAR_LOOKUP_TERMS[kind],
+        "is_interview_wakeup": kind == "interview" and ("wake up" in text or "early" in text),
+    }
+
+
+def _looks_like_calendar_write_request(text: str) -> bool:
+    return any(
+        text.startswith(prefix)
+        for prefix in (
+            "add ",
+            "create ",
+            "schedule ",
+            "move ",
+            "reschedule ",
+            "put ",
+            "book ",
+        )
+    )
+
+
+def _calendar_lookup_context(lookup: dict[str, Any]) -> dict[str, Any]:
+    target_date = lookup.get("target_date")
+    return {
+        "topic": "calendar_event_lookup",
+        "kind": lookup.get("kind"),
+        "target_date": target_date.isoformat() if hasattr(target_date, "isoformat") else target_date,
+        "search_terms": list(lookup.get("search_terms") or []),
+        "is_interview_wakeup": bool(lookup.get("is_interview_wakeup")),
+    }
+
+
+def _calendar_events_for_date_matching(
+    events: list[dict[str, Any]],
+    target_date,
+    search_terms: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    matches = []
+    for event in _events_on_date(events, target_date):
+        text = " ".join(
+            [
+                str(event.get("title") or ""),
+                str(event.get("description") or ""),
+                str(event.get("location") or ""),
+            ]
+        ).lower()
+        if any(term in text for term in search_terms):
+            matches.append(event)
+    matches.sort(key=lambda event: str(event.get("start") or ""))
+    return matches
+
+
+def _answer_calendar_event_lookup(
+    event: dict[str, Any],
+    lookup: dict[str, Any],
+    local_now: datetime,
+) -> str:
+    if lookup.get("kind") == "interview":
+        return _answer_interview_lookup_from_event(event, local_now)
+    return _answer_generic_calendar_lookup(event, lookup, local_now)
+
+
+def _answer_interview_lookup_from_event(event: dict[str, Any], local_now: datetime) -> str:
+    start = _parse_followup_event_datetime(event.get("start"))
+    title = str(event.get("title") or "your interview")
+    if not start:
+        return f"I found {title} on your calendar, but I could not read the start time."
+    return _answer_interview_wakeup(title, start, _parse_followup_event_datetime(event.get("end")), event, local_now)
+
+
+def _answer_interview_wakeup_from_time(start: datetime) -> str:
+    return _answer_interview_wakeup("your interview", start, None, {}, None)
+
+
+def _answer_interview_wakeup(
+    title: str,
+    start: datetime,
+    end: datetime | None,
+    event: dict[str, Any],
+    local_now: datetime | None,
+) -> str:
+    time_text = _format_followup_time(start)
+    end_text = f" - {_format_followup_time(end)}" if end else ""
+    day_context = _event_day_context(start, local_now)
+    title_phrase = _possessive_event_title(title)
+    wake_time = start - timedelta(hours=3)
+    ready_time = start - timedelta(minutes=90)
+    location = str(event.get("location") or "").strip()
+    if location:
+        leave_time = start - timedelta(minutes=45)
+        location_text = f" Since it is at {location}, I would leave around {_format_followup_time(leave_time)}."
+    else:
+        location_text = " I do not see a location, so use a safe buffer for travel or setup."
+
+    if start.hour < 10:
+        return (
+            f"{title_phrase} is {day_context} at {time_text}{end_text}. "
+            f"Yes, I would wake up by around {_format_followup_time(wake_time)} so you have time to eat, "
+            f"get ready around {_format_followup_time(ready_time)}, and leave with buffer.{location_text}"
+        )
+    return (
+        f"{title_phrase} is {day_context} at {time_text}{end_text}. "
+        f"You probably don't need to wake up extremely early, but I'd wake up by around "
+        f"{_format_followup_time(wake_time)} so you have time to eat, start getting ready around "
+        f"{_format_followup_time(ready_time)}, and leave with buffer."
+        f"{location_text}"
+    )
+
+
+def _possessive_event_title(title: str) -> str:
+    clean_title = title.strip()
+    if clean_title.lower().startswith("your "):
+        return clean_title[:1].upper() + clean_title[1:]
+    return f"Your {clean_title}"
+
+
+def _answer_generic_calendar_lookup(
+    event: dict[str, Any],
+    lookup: dict[str, Any],
+    local_now: datetime,
+) -> str:
+    title = str(event.get("title") or "your event")
+    start = _parse_followup_event_datetime(event.get("start"))
+    end = _parse_followup_event_datetime(event.get("end"))
+    if not start:
+        return f"I found {title} on your calendar, but I could not read the start time."
+
+    end_text = f" - {_format_followup_time(end)}" if end else ""
+    kind = str(lookup.get("kind") or "event")
+    return (
+        f"Your {title} is {_event_day_context(start, local_now)} at {_format_followup_time(start)}{end_text}. "
+        f"Practical recommendation: give yourself a buffer before the {kind} so you are not rushing."
+    )
+
+
+def _multiple_calendar_matches_answer(
+    kind: str,
+    target_date,
+    matches: list[dict[str, Any]],
+    local_now: datetime,
+) -> str:
+    day_label = _day_context_label(target_date, local_now)
+    items = []
+    for event in matches:
+        title = str(event.get("title") or "Untitled event")
+        start = _parse_followup_event_datetime(event.get("start"))
+        end = _parse_followup_event_datetime(event.get("end"))
+        if start and end:
+            items.append(f"{title} ({_format_followup_time(start)} - {_format_followup_time(end)})")
+        elif start:
+            items.append(f"{title} ({_format_followup_time(start)})")
+        else:
+            items.append(title)
+    return f"I found multiple {kind} events {day_label}: {', '.join(items)}. Which one do you mean?"
+
+
+def _event_day_context(start: datetime, local_now: datetime | None) -> str:
+    if not local_now:
+        return "scheduled"
+    day_label = _day_context_label(start.date(), local_now)
+    time_until = _format_time_until(start, local_now)
+    return f"{day_label}{f' ({time_until})' if time_until else ''}"
+
+
+def _day_context_label(target_date, local_now: datetime) -> str:
+    if target_date == local_now.date():
+        return "today"
+    if target_date == (local_now.date() + timedelta(days=1)):
+        return "tomorrow"
+    return f"on {target_date.strftime('%A, %b %-d')}"
+
+
+def _event_kind_phrase(kind: str) -> str:
+    article = "an" if kind[:1].lower() in {"a", "e", "i", "o", "u"} else "a"
+    return f"{article} {kind}"
+
+
+def _format_time_until(start: datetime, local_now: datetime) -> str:
+    delta_minutes = int((start - local_now).total_seconds() // 60)
+    if delta_minutes < 0:
+        return ""
+    if delta_minutes < 60:
+        return f"in {delta_minutes} minutes"
+    hours = delta_minutes // 60
+    minutes = delta_minutes % 60
+    if hours < 24:
+        return f"in about {hours} hour{'s' if hours != 1 else ''}{f' {minutes} minutes' if minutes else ''}"
+    days = hours // 24
+    remaining_hours = hours % 24
+    return f"in about {days} day{'s' if days != 1 else ''}{f' {remaining_hours} hours' if remaining_hours else ''}"
+
+
+def _date_from_context(context: dict[str, Any], local_now: datetime):
+    value = context.get("target_date")
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(f"{value}T00:00:00").date()
+        except ValueError:
+            pass
+    return local_now.date() + timedelta(days=1)
+
+
+def _extract_followup_time(
+    message: str,
+    local_now: datetime,
+    context: dict[str, Any],
+) -> datetime | None:
+    target_date = _date_from_context(context, local_now)
+    text = message.lower().strip()
+    match = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", text)
+    if not match:
+        return None
+
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    meridiem = match.group(3)
+    if meridiem == "pm" and hour != 12:
+        hour += 12
+    if meridiem == "am" and hour == 12:
+        hour = 0
+    if meridiem is None and 1 <= hour <= 7:
+        hour += 12
+    if hour > 23 or minute > 59:
+        return None
+    return datetime.combine(target_date, datetime.min.time(), tzinfo=local_now.tzinfo).replace(
+        hour=hour,
+        minute=minute,
+    )
+
+
+def _format_followup_time(value: datetime) -> str:
+    return value.strftime("%I:%M %p").lstrip("0")
+
+
+def _parse_followup_event_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _is_negative_confirmation(message: str) -> bool:
+    normalized = re.sub(r"[^a-z\s]", "", message.lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized in NEGATIVE_CONFIRMATION_REPLIES
 
 
 def is_executable_pending_action(pending_action: dict[str, Any] | None) -> bool:

@@ -211,6 +211,7 @@ MEMORIES = [
 class AgentExampleTests(unittest.TestCase):
     def setUp(self):
         agent.PENDING_ACTION = None
+        agent.CONVERSATION_STATES.clear()
         self.addCleanup(self._clear_pending_action)
         self.now = datetime(2026, 6, 4, 14, 0, tzinfo=ZoneInfo("America/Chicago"))
         self.base_patches = [
@@ -231,6 +232,7 @@ class AgentExampleTests(unittest.TestCase):
 
     def _clear_pending_action(self):
         agent.PENDING_ACTION = None
+        agent.CONVERSATION_STATES.clear()
 
     def test_plan_now(self):
         with patch("app.agent._get_llm_decision", return_value=(
@@ -520,6 +522,141 @@ class AgentExampleTests(unittest.TestCase):
 
         create_task_mock.assert_not_called()
         self.assertEqual([action["type"] for action in response["actions_taken"]], ["create_calendar_event"])
+
+    def test_exact_interview_event_found_uses_calendar_details(self):
+        interview = {
+            "id": "event-interview",
+            "title": "Shake Shack Interview",
+            "start": "2026-06-05T14:00:00-05:00",
+            "end": "2026-06-05T14:30:00-05:00",
+            "duration_minutes": 30,
+            "all_day": False,
+            "busy": True,
+            "event_type": "hard",
+            "event_category": "hard",
+        }
+
+        with patch("app.agent.list_upcoming_events", return_value=CalendarReadResult(events=[interview])), patch(
+            "app.agent._get_llm_decision"
+        ) as llm_mock:
+            response = handle_chat(
+                "Do I need to wake up early for my interview tomorrow?",
+                self.now,
+                session_id="interview-session",
+            )
+
+        llm_mock.assert_not_called()
+        self.assertIn("Shake Shack Interview", response["answer"])
+        self.assertIn("2:00 PM", response["answer"])
+        self.assertIn("2:30 PM", response["answer"])
+        self.assertIn("11:00 AM", response["answer"])
+        self.assertIn("You probably don't need to wake up extremely early", response["answer"])
+        self.assertNotIn("check your schedule", response["answer"].lower())
+        self.assertIsNone(response["conversation_state"]["awaiting"])
+
+    def test_multiple_interviews_lists_matches_and_asks_which_one(self):
+        interviews = [
+            {
+                "id": "event-first",
+                "title": "Shake Shack Interview",
+                "start": "2026-06-05T14:00:00-05:00",
+                "end": "2026-06-05T14:30:00-05:00",
+                "duration_minutes": 30,
+                "all_day": False,
+                "busy": True,
+                "event_type": "hard",
+                "event_category": "hard",
+            },
+            {
+                "id": "event-second",
+                "title": "Recruiter Interview",
+                "start": "2026-06-05T16:00:00-05:00",
+                "end": "2026-06-05T16:30:00-05:00",
+                "duration_minutes": 30,
+                "all_day": False,
+                "busy": True,
+                "event_type": "hard",
+                "event_category": "hard",
+            },
+        ]
+
+        with patch("app.agent.list_upcoming_events", return_value=CalendarReadResult(events=interviews)), patch(
+            "app.agent._get_llm_decision"
+        ) as llm_mock:
+            response = handle_chat(
+                "Do I need to wake up early for my interview tomorrow?",
+                self.now,
+                session_id="multiple-interviews",
+            )
+
+        llm_mock.assert_not_called()
+        self.assertIn("multiple interview events", response["answer"])
+        self.assertIn("Shake Shack Interview", response["answer"])
+        self.assertIn("Recruiter Interview", response["answer"])
+        self.assertIn("Which one do you mean?", response["answer"])
+        self.assertEqual(response["conversation_state"]["awaiting"], "event_detail")
+
+    def test_no_interview_found_asks_for_event_details(self):
+        with patch("app.agent._get_llm_decision") as llm_mock:
+            response = handle_chat(
+                "Do I need to wake up early for my interview tomorrow?",
+                self.now,
+                session_id="no-interview",
+            )
+
+        llm_mock.assert_not_called()
+        self.assertIn("I could not find an interview tomorrow", response["answer"])
+        self.assertIn("What time is it?", response["answer"])
+        self.assertEqual(response["conversation_state"]["awaiting"], "event_detail")
+
+    def test_time_after_no_interview_found_is_used_as_event_detail(self):
+        handle_chat(
+            "Do I need to wake up early for my interview tomorrow?",
+            self.now,
+            session_id="interview-time",
+        )
+
+        with patch("app.agent._get_llm_decision") as llm_mock:
+            response = handle_chat("6pm", self.now, session_id="interview-time")
+
+        llm_mock.assert_not_called()
+        self.assertIn("6:00 PM", response["answer"])
+        self.assertIn("You probably don't need to wake up extremely early", response["answer"])
+        self.assertNotIn("Your your interview", response["answer"])
+        self.assertIsNone(response["conversation_state"]["awaiting"])
+
+    def test_vague_yes_after_calendar_lookup_question_searches_calendar(self):
+        interview = {
+            "id": "event-interview",
+            "title": "Shake Shack Interview",
+            "start": "2026-06-05T14:00:00-05:00",
+            "end": "2026-06-05T14:30:00-05:00",
+            "duration_minutes": 30,
+            "all_day": False,
+            "busy": True,
+            "event_type": "hard",
+            "event_category": "hard",
+        }
+        agent.CONVERSATION_STATES["calendar-yes"] = {
+            "last_question": "Do you have that in your calendar?",
+            "awaiting": "calendar_lookup_confirmation",
+            "context": {
+                "kind": "interview",
+                "target_date": "2026-06-05",
+                "search_terms": ["interview", "recruiter", "hiring", "career", "phone screen"],
+                "is_interview_wakeup": True,
+            },
+        }
+
+        with patch("app.agent.list_upcoming_events", return_value=CalendarReadResult(events=[interview])), patch(
+            "app.agent._get_llm_decision"
+        ) as llm_mock:
+            response = handle_chat("yes", self.now, session_id="calendar-yes")
+
+        llm_mock.assert_not_called()
+        self.assertIn("Shake Shack Interview", response["answer"])
+        self.assertIn("2:00 PM", response["answer"])
+        self.assertIsNone(response["conversation_state"]["awaiting"])
 
     def test_today_meeting_does_not_affect_tomorrow_gym_scheduling(self):
         today_meeting = {

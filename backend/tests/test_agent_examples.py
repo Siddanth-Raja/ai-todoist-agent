@@ -19,7 +19,11 @@ from app.todoist_tools import (  # noqa: E402
     TodoistReadResult,
     TodoistSectionResult,
     TodoistWriteResult,
+    TodoistBulkWriteResult,
     create_task,
+    create_many_subtasks,
+    create_subtask,
+    find_task_by_name,
     list_todoist_sections,
 )
 
@@ -77,6 +81,51 @@ TASKS = [
         "url": "https://app.todoist.com/app/task/task-2",
     },
 ]
+
+ROADMAP_PARENT_TASK = {
+    "id": "task-roadmap-parent",
+    "content": "ai todoist agent",
+    "project_id": "project-todo",
+    "project_name": "To-Do",
+    "section_id": "section-personal",
+    "section_name": "Personal",
+    "parent_id": None,
+    "due": None,
+    "priority": 2,
+    "todoist_priority": 3,
+    "labels": [],
+    "url": "https://app.todoist.com/app/task/task-roadmap-parent",
+}
+
+ROADMAP_CHILD_TASK = {
+    "id": "task-roadmap-child",
+    "content": "Fix confirmation execution",
+    "project_id": "project-todo",
+    "project_name": "To-Do",
+    "section_id": "section-personal",
+    "section_name": "Personal",
+    "parent_id": "task-roadmap-parent",
+    "due": None,
+    "priority": 2,
+    "todoist_priority": 3,
+    "labels": [],
+    "url": "https://app.todoist.com/app/task/task-roadmap-child",
+}
+
+NEBULO_DEMO_PARENT_TASK = {
+    "id": "task-nebulo-demo-1",
+    "content": "Demo 1",
+    "project_id": "project-todo",
+    "project_name": "To-Do",
+    "section_id": "section-nebulo",
+    "section_name": "Nebulo",
+    "parent_id": None,
+    "due": None,
+    "priority": 2,
+    "todoist_priority": 3,
+    "labels": [],
+    "url": "https://app.todoist.com/app/task/task-nebulo-demo-1",
+}
 
 EVENTS = [
     {
@@ -345,6 +394,311 @@ class AgentExampleTests(unittest.TestCase):
         self.assertEqual(create_task_kwargs["section_id"], "section-personal")
         self.assertEqual(response["actions_taken"][0]["task"]["project_category"], "Personal")
         self.assertEqual(response["actions_taken"][0]["task"]["todoist_section_id"], "section-personal")
+
+    def test_roadmap_under_parent_requests_bulk_subtask_confirmation(self):
+        roadmap_tasks = [*TASKS, ROADMAP_PARENT_TASK]
+        message = """Take this roadmap and add it under Personal -> ai todoist agent as subtasks:
+- Fix confirmation execution
+- Calendar Intelligence V1
+- Project Workspaces
+- Package as Mac app"""
+        with patch("app.agent.list_active_tasks", return_value=TodoistReadResult(tasks=roadmap_tasks)), patch(
+            "app.agent.find_task_by_name", return_value=ROADMAP_PARENT_TASK
+        ):
+            response = handle_chat(message, self.now)
+
+        self.assertTrue(response["needs_confirmation"])
+        self.assertEqual(response["pending_action"]["type"], "create_many_todoist_subtasks")
+        self.assertEqual(response["pending_action"]["details"]["project_name"], "To-Do")
+        self.assertEqual(response["pending_action"]["details"]["section_name"], "Personal")
+        self.assertEqual(response["pending_action"]["details"]["parent_task_title"], "ai todoist agent")
+        self.assertEqual(response["pending_action"]["details"]["parent_task_id"], "task-roadmap-parent")
+        self.assertEqual(len(response["pending_action"]["details"]["tasks"]), 4)
+
+    def test_numbered_roadmap_under_nebulo_parent_requests_bulk_subtask_confirmation(self):
+        roadmap_tasks = [*TASKS, NEBULO_DEMO_PARENT_TASK]
+        message = """Add these under Nebulo -> Demo 1 as subtasks:
+1. Merge/verify provider extraction
+2. Implement Google Drive read-only provider
+3. Mount Drive into existing storage API
+4. Add basic Nebulo Search indexing
+5. Update Nebulo Search app
+6. Update Claude/MCP access
+7. Phone result view
+8. Demo polish"""
+        with patch("app.agent.list_active_tasks", return_value=TodoistReadResult(tasks=roadmap_tasks)), patch(
+            "app.agent.find_task_by_name", return_value=NEBULO_DEMO_PARENT_TASK
+        ), patch("app.agent.create_task") as create_task_mock, self.assertLogs("app.agent", level="INFO") as logs:
+            response = handle_chat(message, self.now)
+
+        create_task_mock.assert_not_called()
+        self.assertTrue(response["needs_confirmation"])
+        self.assertEqual(response["pending_action"]["type"], "create_many_todoist_subtasks")
+        self.assertEqual(response["pending_action"]["details"]["section_name"], "Nebulo")
+        self.assertEqual(response["pending_action"]["details"]["parent_task_title"], "Demo 1")
+        self.assertEqual(response["pending_action"]["details"]["parent_task_id"], "task-nebulo-demo-1")
+        self.assertEqual(len(response["pending_action"]["details"]["tasks"]), 8)
+        self.assertEqual(
+            response["pending_action"]["details"]["tasks"][0]["content"],
+            "Merge/verify provider extraction",
+        )
+        self.assertTrue(
+            any("bulk_subtask_confirmation_ready" in log and "create_many_todoist_subtasks" in log for log in logs.output)
+        )
+
+    def test_natural_roadmap_parser_supported_parent_formats(self):
+        cases = [
+            (
+                "Add these under Nebulo -> Demo 1:\n1.\tMerge/verify provider extraction\n2.\tDemo polish",
+                "Nebulo",
+                "Demo 1",
+            ),
+            (
+                "Put these in Demo 1:\n- Merge/verify provider extraction\n- Demo polish",
+                None,
+                "Demo 1",
+            ),
+            (
+                "These are subtasks for Demo 1:\n- Merge/verify provider extraction\n- Demo polish",
+                None,
+                "Demo 1",
+            ),
+            (
+                "Here's the roadmap for Demo 1:\n- Merge/verify provider extraction\n- Demo polish",
+                None,
+                "Demo 1",
+            ),
+            (
+                "Create these under Personal -> ai todoist agent:\n- Fix confirmation execution\n- Calendar Intelligence V1",
+                "Personal",
+                "ai todoist agent",
+            ),
+            (
+                "Add these under Nebulo / Demo 1:\n- Merge/verify provider extraction\n- Demo polish",
+                "Nebulo",
+                "Demo 1",
+            ),
+            (
+                "Add these inside Demo 1:\n- Merge/verify provider extraction\n- Demo polish",
+                None,
+                "Demo 1",
+            ),
+        ]
+
+        for message, section_name, parent_title in cases:
+            with self.subTest(message=message):
+                parsed, reason, attempted = agent._parse_bulk_subtask_request(message)
+
+            self.assertTrue(attempted)
+            self.assertEqual(reason, "parsed")
+            self.assertIsNotNone(parsed)
+            self.assertEqual(parsed["section_name"], section_name)
+            self.assertEqual(parsed["parent_task_title"], parent_title)
+            self.assertEqual(len(parsed["tasks"]), 2)
+
+    def test_natural_roadmap_parser_supported_list_markers(self):
+        message = """Add these under Nebulo -> Demo 1:
+- [ ] Merge/verify provider extraction
+
+* Implement Google Drive read-only provider
++ Mount Drive into existing storage API
+1) Add basic Nebulo Search indexing
+\uFFFC Update Nebulo Search app"""
+
+        parsed, reason, attempted = agent._parse_bulk_subtask_request(message)
+
+        self.assertTrue(attempted)
+        self.assertEqual(reason, "parsed")
+        self.assertEqual(parsed["parent_task_title"], "Demo 1")
+        self.assertEqual(
+            [task["content"] for task in parsed["tasks"]],
+            [
+                "Merge/verify provider extraction",
+                "Implement Google Drive read-only provider",
+                "Mount Drive into existing storage API",
+                "Add basic Nebulo Search indexing",
+                "Update Nebulo Search app",
+            ],
+        )
+
+    def test_roadmap_with_multiple_items_but_no_parent_asks_clarification_without_create_task(self):
+        message = """Break this into subtasks:
+- Merge/verify provider extraction
+- Demo polish"""
+        with patch("app.agent.create_task") as create_task_mock, patch(
+            "app.agent._get_llm_decision"
+        ) as llm_mock, self.assertLogs("app.agent", level="INFO") as logs:
+            response = handle_chat(message, self.now)
+
+        create_task_mock.assert_not_called()
+        llm_mock.assert_not_called()
+        self.assertFalse(response["needs_confirmation"])
+        self.assertIsNone(response["pending_action"])
+        self.assertIn("Which parent Todoist task", response["answer"])
+        self.assertTrue(any("selected_action=clarify_parent_task" in log for log in logs.output))
+
+    def test_parent_only_roadmap_resolves_section_from_todoist_parent_task(self):
+        roadmap_tasks = [*TASKS, NEBULO_DEMO_PARENT_TASK]
+        message = """Put these in Demo 1:
+- Merge/verify provider extraction
+- Demo polish"""
+        with patch("app.agent.list_active_tasks", return_value=TodoistReadResult(tasks=roadmap_tasks)), patch(
+            "app.agent.find_task_by_name", return_value=NEBULO_DEMO_PARENT_TASK
+        ):
+            response = handle_chat(message, self.now)
+
+        self.assertTrue(response["needs_confirmation"])
+        self.assertEqual(response["pending_action"]["type"], "create_many_todoist_subtasks")
+        self.assertEqual(response["pending_action"]["details"]["section_name"], "Nebulo")
+        self.assertEqual(response["pending_action"]["details"]["parent_task_title"], "Demo 1")
+
+    def test_roadmap_parser_logs_failure_reason_before_fallback(self):
+        plan = {"free_block": None, "recommended_tasks": []}
+        with self.assertLogs("app.agent", level="INFO") as logs:
+            response = agent._build_bulk_subtask_confirmation(
+                message="Add these under Nebulo -> Demo 1 as subtasks:",
+                settings=FakeSettings(),
+                tasks=[],
+                plan=plan,
+                calendar_events=[],
+                errors=[],
+                session_key="test-session",
+            )
+
+        self.assertIsNone(response)
+        self.assertTrue(any("no_numbered_or_bulleted_items_found" in log for log in logs.output))
+        self.assertTrue(any("selected_action=fallback" in log for log in logs.output))
+
+    def test_bulk_subtask_confirmation_creates_multiple_subtasks(self):
+        pending_action = {
+            "type": "create_many_todoist_subtasks",
+            "action_type": "create_many_todoist_subtasks",
+            "intent": "capture_task",
+            "details": {
+                "project_name": "To-Do",
+                "section_name": "Personal",
+                "parent_task_title": "ai todoist agent",
+                "parent_task_id": "task-roadmap-parent",
+                "tasks": [
+                    {"content": "Calendar Intelligence V1", "priority": 3},
+                    {"content": "Project Workspaces", "priority": 3},
+                ],
+            },
+        }
+        created = [
+            {**ROADMAP_CHILD_TASK, "id": "task-calendar", "content": "Calendar Intelligence V1"},
+            {**ROADMAP_CHILD_TASK, "id": "task-workspaces", "content": "Project Workspaces"},
+        ]
+        with patch("app.agent.list_active_tasks", return_value=TodoistReadResult(tasks=[*TASKS, ROADMAP_PARENT_TASK])), patch(
+            "app.agent.create_many_subtasks",
+            return_value=TodoistBulkWriteResult(tasks=created, skipped=[]),
+        ) as create_many_subtasks_mock:
+            response = confirm_pending_action(pending_action, self.now)
+
+        create_many_subtasks_mock.assert_called_once()
+        self.assertEqual(response["actions_taken"][0]["type"], "create_many_todoist_subtasks")
+        self.assertEqual(response["actions_taken"][0]["task_count"], 2)
+        self.assertEqual(response["answer"], "Created 2 subtasks under ai todoist agent.")
+
+    def test_bulk_subtask_confirmation_reports_duplicate_skips(self):
+        pending_action = {
+            "type": "create_many_todoist_subtasks",
+            "action_type": "create_many_todoist_subtasks",
+            "intent": "capture_task",
+            "details": {
+                "project_name": "To-Do",
+                "section_name": "Personal",
+                "parent_task_title": "ai todoist agent",
+                "parent_task_id": "task-roadmap-parent",
+                "tasks": [
+                    {"content": "Fix confirmation execution", "priority": 3},
+                    {"content": "Calendar Intelligence V1", "priority": 3},
+                ],
+            },
+        }
+        created = [{**ROADMAP_CHILD_TASK, "id": "task-calendar", "content": "Calendar Intelligence V1"}]
+        with patch("app.agent.list_active_tasks", return_value=TodoistReadResult(tasks=[*TASKS, ROADMAP_PARENT_TASK, ROADMAP_CHILD_TASK])), patch(
+            "app.agent.create_many_subtasks",
+            return_value=TodoistBulkWriteResult(
+                tasks=created,
+                skipped=[{"content": "Fix confirmation execution", "reason": "duplicate"}],
+            ),
+        ):
+            response = confirm_pending_action(pending_action, self.now)
+
+        self.assertEqual(response["actions_taken"][0]["task_count"], 1)
+        self.assertEqual(len(response["actions_taken"][0]["skipped"]), 1)
+        self.assertIn("Skipped 1 duplicate", response["answer"])
+
+    def test_missing_parent_asks_to_create_parent_first(self):
+        message = """Take this roadmap and add it under Personal -> ai todoist agent as subtasks:
+- Fix confirmation execution
+- Calendar Intelligence V1"""
+        with patch("app.agent.find_task_by_name", return_value=None):
+            response = handle_chat(message, self.now)
+
+        self.assertTrue(response["needs_confirmation"])
+        self.assertEqual(response["pending_action"]["type"], "create_todoist_task")
+        self.assertEqual(response["pending_action"]["task"]["content"], "ai todoist agent")
+        self.assertIn("Create that parent task first", response["answer"])
+
+    def test_find_parent_task_in_personal_section(self):
+        with patch("app.todoist_tools.list_active_tasks", return_value=TodoistReadResult(tasks=[ROADMAP_PARENT_TASK])):
+            task = find_task_by_name(FakeSettings(), "AI TODOIST AGENT", section_name="Personal")
+
+        self.assertIsNotNone(task)
+        self.assertEqual(task["id"], "task-roadmap-parent")
+
+    def test_create_one_subtask_under_parent(self):
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "id": "task-subtask",
+                    "content": "Calendar Intelligence V1",
+                    "project_id": "project-todo",
+                    "section_id": "section-personal",
+                    "parent_id": "task-roadmap-parent",
+                    "priority": 3,
+                    "labels": [],
+                }
+
+        with patch("app.todoist_tools._fetch_projects", return_value={"project-todo": "To-Do"}), patch(
+            "app.todoist_tools._fetch_sections", return_value={"section-personal": "Personal"}
+        ), patch("app.todoist_tools.requests.post", return_value=FakeResponse()) as post_mock:
+            result = create_subtask(
+                settings=FakeSettings(),
+                parent_id="task-roadmap-parent",
+                content="Calendar Intelligence V1",
+                priority=3,
+            )
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.task["parent_id"], "task-roadmap-parent")
+        self.assertEqual(post_mock.call_args.kwargs["json"]["parent_id"], "task-roadmap-parent")
+
+    def test_create_many_subtasks_skips_duplicate_title_under_parent(self):
+        with patch(
+            "app.todoist_tools.create_subtask",
+            return_value=TodoistWriteResult(
+                task={**ROADMAP_CHILD_TASK, "id": "task-calendar", "content": "Calendar Intelligence V1"}
+            ),
+        ) as create_subtask_mock:
+            result = create_many_subtasks(
+                settings=FakeSettings(),
+                parent_id="task-roadmap-parent",
+                tasks=[
+                    {"content": "Fix confirmation execution", "priority": 3},
+                    {"content": "Calendar Intelligence V1", "priority": 3},
+                ],
+                existing_tasks=[ROADMAP_CHILD_TASK],
+            )
+
+        self.assertEqual(len(result.tasks), 1)
+        self.assertEqual(result.skipped, [{"content": "Fix confirmation execution", "reason": "duplicate"}])
+        create_subtask_mock.assert_called_once()
 
     def test_brandon_memory_hint_maps_meeting_to_nebulo_context(self):
         def fake_decision(settings, context):
@@ -1340,12 +1694,27 @@ class AgentExampleTests(unittest.TestCase):
         action_enum = schema["properties"]["action_type"]["enum"]
         self.assertEqual(
             action_enum,
-            ["none", "create_todoist_task", "create_calendar_event", "update_calendar_event"],
+            [
+                "none",
+                "create_todoist_task",
+                "create_todoist_subtask",
+                "create_many_todoist_tasks",
+                "create_many_todoist_subtasks",
+                "create_calendar_event",
+                "update_calendar_event",
+            ],
         )
         self.assertIn("pending_action", schema["required"])
         self.assertEqual(
             schema["properties"]["pending_action"]["properties"]["type"]["enum"],
-            ["resolve_calendar_conflict", "update_calendar_event"],
+            [
+                "resolve_calendar_conflict",
+                "update_calendar_event",
+                "create_todoist_task",
+                "create_todoist_subtask",
+                "create_many_todoist_tasks",
+                "create_many_todoist_subtasks",
+            ],
         )
 
     def test_structured_output_schema_objects_are_strict(self):

@@ -76,6 +76,15 @@ function getNumber(value: unknown, key: string): number | null {
   return typeof nested === "number" && Number.isFinite(nested) ? nested : null;
 }
 
+function getArray(value: unknown, key: string): unknown[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  const nested = value[key];
+  return Array.isArray(nested) ? nested : [];
+}
+
 function formatObject(value: unknown): string {
   if (typeof value === "string") {
     return value;
@@ -258,6 +267,28 @@ function TodoistActionCard({ action }: { action: ChatAction }) {
   );
 }
 
+function BulkTodoistSubtasksActionCard({ action }: { action: ChatAction }) {
+  const parentTitle = getString(action, "parent_task_title") || "parent task";
+  const section = getString(action, "section_name");
+  const count = getNumber(action, "task_count") ?? getArray(action, "tasks").length;
+  const skipped = getArray(action, "skipped");
+
+  return (
+    <div className="rounded-lg border border-moss/30 bg-moss/10 p-4">
+      <div className="mb-3 flex items-center gap-2 text-sm font-medium text-moss">
+        <ListTodo className="h-4 w-4" aria-hidden="true" />
+        Subtasks created
+      </div>
+      <dl className="space-y-2">
+        <FieldRow label="Parent" value={parentTitle} />
+        <FieldRow label="Section" value={section} />
+        <FieldRow label="Created" value={count} />
+        <FieldRow label="Skipped" value={skipped.length || null} />
+      </dl>
+    </div>
+  );
+}
+
 function ActionCards({ actions }: { actions: ChatAction[] }) {
   if (!actions.length) {
     return null;
@@ -275,6 +306,9 @@ function ActionCards({ actions }: { actions: ChatAction[] }) {
         }
         if (type === "create_todoist_task") {
           return <TodoistActionCard key={index} action={action} />;
+        }
+        if (type === "create_many_todoist_subtasks") {
+          return <BulkTodoistSubtasksActionCard key={index} action={action} />;
         }
 
         return (
@@ -328,6 +362,11 @@ function confirmationUpdateDetails(response: ChatResponse): JsonRecord | null {
   return getRecord(pendingAction, "details");
 }
 
+function confirmationDetails(response: ChatResponse): JsonRecord | null {
+  const pendingAction = response.pending_action;
+  return getRecord(pendingAction, "details");
+}
+
 function confirmationProject(response: ChatResponse): string | null {
   const pendingAction = response.pending_action;
   const event = confirmationEvent(response);
@@ -374,16 +413,25 @@ function ConfirmationCard({
     getString(response.pending_action, "action_type") || getString(response.pending_action, "type");
   const event = confirmationEvent(response);
   const updateDetails = confirmationUpdateDetails(response);
+  const details = confirmationDetails(response);
   const project = confirmationProject(response);
   const isExecutable = pendingType
-    ? ["create_calendar_event", "create_todoist_task", "update_calendar_event"].includes(pendingType)
+    ? [
+        "create_calendar_event",
+        "create_todoist_task",
+        "update_calendar_event",
+        "create_many_todoist_subtasks",
+      ].includes(pendingType)
     : false;
+  const bulkTasks = pendingType === "create_many_todoist_subtasks" ? getArray(details, "tasks") : [];
+  const parentTitle = getString(details, "parent_task_title");
+  const sectionName = getString(details, "section_name");
 
   return (
     <div className="rounded-lg border border-gold/35 bg-gold/10 p-4">
       <div className="mb-2 flex items-center gap-2 text-sm font-medium text-gold">
         <ShieldQuestion className="h-4 w-4" aria-hidden="true" />
-        Confirmation needed
+        {pendingType === "create_many_todoist_subtasks" ? "Create subtasks?" : "Confirmation needed"}
       </div>
       <p className="text-sm leading-6 text-stone-200">
         {response.confirmation_prompt || "Review this pending action before it runs."}
@@ -418,6 +466,24 @@ function ConfirmationCard({
         </dl>
       ) : null}
 
+      {pendingType === "create_many_todoist_subtasks" && details ? (
+        <div className="mt-3 space-y-3 rounded-lg border border-white/10 bg-black/20 p-3">
+          <dl className="space-y-2">
+            <FieldRow label="Parent" value={parentTitle} />
+            <FieldRow label="Section" value={sectionName} />
+            <FieldRow label="Task count" value={bulkTasks.length} />
+          </dl>
+          <ul className="max-h-44 space-y-2 overflow-y-auto pr-1 text-xs leading-5 text-stone-200">
+            {bulkTasks.slice(0, 20).map((task, index) => (
+              <li key={index} className="flex gap-2">
+                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-gold" aria-hidden="true" />
+                <span className="min-w-0 break-words">{getString(task, "content") || "Untitled task"}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       {!isExecutable ? (
         <p className="mt-3 rounded-lg border border-white/10 bg-black/20 p-3 text-xs leading-5 text-stone-300">
           I can suggest this, but calendar editing for this action is not implemented yet.
@@ -437,7 +503,11 @@ function ConfirmationCard({
             ) : (
               <Check className="h-3.5 w-3.5" aria-hidden="true" />
             )}
-            {confirming ? "Confirming" : "Confirm"}
+            {confirming
+              ? "Confirming"
+              : pendingType === "create_many_todoist_subtasks"
+                ? "Create subtasks"
+                : "Confirm"}
           </button>
         ) : null}
         <button
@@ -630,10 +700,7 @@ export function ChatPanel() {
           item.id === itemId
             ? {
                 ...item,
-                response: {
-                  ...(payload as ChatResponse),
-                  answer: item.response?.answer ?? (payload as ChatResponse).answer,
-                },
+                response: payload as ChatResponse,
                 error: undefined,
                 confirmationStatus: undefined,
               }
@@ -688,6 +755,14 @@ export function ChatPanel() {
   }
 
   function handleModify(response: ChatResponse) {
+    const details = confirmationDetails(response);
+    const parentTitle = getString(details, "parent_task_title");
+    if (parentTitle) {
+      setInput(`Modify subtasks under ${parentTitle}: `);
+      window.setTimeout(() => inputRef.current?.focus(), 0);
+      return;
+    }
+
     const event = confirmationEvent(response);
     const title = getString(event, "title");
     const draft = title ? `Modify ${title}: ` : "Modify: ";

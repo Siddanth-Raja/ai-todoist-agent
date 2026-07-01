@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 import json
+import logging
 import re
 from typing import Any
 
@@ -18,12 +19,16 @@ from .storage import list_memory_entries
 from .todoist_tools import (
     LIFE_AREA_TO_TODOIST_SECTION,
     TODOIST_INBOX_PROJECT_NAME,
+    create_many_tasks,
+    create_many_subtasks,
     create_task,
+    find_task_by_name,
     list_active_tasks,
     list_todoist_sections,
 )
 
 
+logger = logging.getLogger(__name__)
 MODE = "ai_agent"
 FALLBACK_MODE = "planning_deterministic_fallback"
 READ_ONLY_NOTE = "No changes were made."
@@ -175,7 +180,10 @@ PENDING_ACTION: dict[str, Any] | None = None
 CONVERSATION_STATES: dict[str, dict[str, Any]] = {}
 EXECUTABLE_PENDING_ACTION_TYPES = {
     "create_calendar_event",
+    "create_many_todoist_tasks",
+    "create_many_todoist_subtasks",
     "create_todoist_task",
+    "create_todoist_subtask",
     "update_calendar_event",
 }
 CALENDAR_LOOKUP_TERMS = {
@@ -250,6 +258,18 @@ def handle_chat(
             "mode": MODE,
             "errors": errors,
         })
+
+    roadmap_response = _build_bulk_subtask_confirmation(
+        message=cleaned_message,
+        settings=settings,
+        tasks=todoist_result.tasks,
+        plan=plan,
+        calendar_events=calendar_result.events,
+        errors=errors,
+        session_key=session_key,
+    )
+    if roadmap_response:
+        return roadmap_response
 
     followup_response = _handle_conversation_followup(
         message=cleaned_message,
@@ -966,7 +986,300 @@ def is_executable_pending_action(pending_action: dict[str, Any] | None) -> bool:
         details = pending_action.get("details") if isinstance(pending_action.get("details"), dict) else {}
         return _calendar_update_details(details) is not None
 
+    if action_type == "create_many_todoist_subtasks":
+        details = pending_action.get("details") if isinstance(pending_action.get("details"), dict) else {}
+        parent_id = str(details.get("parent_task_id") or "").strip()
+        tasks = details.get("tasks")
+        return bool(parent_id and isinstance(tasks, list) and tasks)
+
     return True
+
+
+def _build_bulk_subtask_confirmation(
+    *,
+    message: str,
+    settings,
+    tasks: list[dict[str, Any]],
+    plan: dict[str, Any],
+    calendar_events: list[dict[str, Any]],
+    errors: list[str],
+    session_key: str,
+) -> dict[str, Any] | None:
+    global PENDING_ACTION
+
+    parsed, parse_reason, parse_attempted = _parse_bulk_subtask_request(message)
+    logger.info(
+        "roadmap_subtask_parser attempted=%s success=%s reason=%s selected_action=%s",
+        parse_attempted,
+        parsed is not None,
+        parse_reason,
+        "pending" if parsed else "fallback",
+    )
+    if not parsed:
+        if parse_attempted and parse_reason != "no_numbered_or_bulleted_items_found":
+            clarification = (
+                "I found multiple roadmap items. Which parent Todoist task should I put these under?"
+            )
+            logger.info(
+                "roadmap_subtask_parser attempted=%s success=%s reason=%s selected_action=%s",
+                parse_attempted,
+                False,
+                parse_reason,
+                "clarify_parent_task",
+            )
+            return _with_conversation_state(session_key, {
+                "answer": clarification,
+                "intent": "capture_task",
+                "actions_taken": [],
+                "needs_confirmation": False,
+                "confirmation_prompt": None,
+                "pending_action": None,
+                "free_block": plan["free_block"],
+                "recommended_tasks": plan["recommended_tasks"],
+                "calendar_events": _summarize_calendar_events(calendar_events),
+                "mode": MODE,
+                "errors": errors,
+            })
+        return None
+
+    section_name = parsed["section_name"]
+    parent_title = parsed["parent_task_title"]
+    parent_task = find_task_by_name(settings, parent_title, section_name=section_name)
+    if parent_task and not section_name:
+        section_name = parent_task.get("todoist_section_name") or parent_task.get("section_name")
+    if not parent_task:
+        logger.info(
+            "roadmap_subtask_parser attempted=%s success=%s reason=%s section=%s parent=%s selected_action=%s",
+            parse_attempted,
+            True,
+            "parent_task_not_found",
+            section_name,
+            parent_title,
+            "create_todoist_task",
+        )
+        pending_action = {
+            "type": "create_todoist_task",
+            "action_type": "create_todoist_task",
+            "intent": "capture_task",
+            "confirmation_prompt": _missing_parent_prompt(parent_title, section_name),
+            "resolved_project": section_name if section_name in PROJECT_CATEGORIES else None,
+            "task": {
+                "content": parent_title,
+                "project_category": section_name if section_name in PROJECT_CATEGORIES else None,
+                "due_string": None,
+                "due_date": None,
+                "labels": [],
+                "priority": 4,
+                "project_name": TODOIST_INBOX_PROJECT_NAME,
+                "section_name": section_name,
+                "todoist_section_name": section_name,
+            },
+            "details": {
+                "project_name": TODOIST_INBOX_PROJECT_NAME,
+                "section_name": section_name,
+                "parent_task_title": parent_title,
+            },
+        }
+        PENDING_ACTION = pending_action
+        return _with_conversation_state(session_key, {
+            "answer": _missing_parent_prompt(parent_title, section_name),
+            "intent": "capture_task",
+            "actions_taken": [],
+            "needs_confirmation": True,
+            "confirmation_prompt": pending_action["confirmation_prompt"],
+            "pending_action": pending_action,
+            "free_block": plan["free_block"],
+            "recommended_tasks": plan["recommended_tasks"],
+            "calendar_events": _summarize_calendar_events(calendar_events),
+            "mode": MODE,
+            "errors": errors,
+        })
+
+    requested_tasks = parsed["tasks"]
+    existing_titles = {
+        _normalize_text(task.get("content"))
+        for task in tasks
+        if str(task.get("parent_id") or "") == str(parent_task.get("id") or "")
+    }
+    preview_tasks = [
+        {"content": item["content"], "priority": item.get("priority", 3)}
+        for item in requested_tasks
+    ]
+    duplicate_count = sum(1 for item in preview_tasks if _normalize_text(item["content"]) in existing_titles)
+    task_count = len(preview_tasks)
+    large_batch_warning = " This is a large batch, so please review it carefully." if task_count > 20 else ""
+    duplicate_note = f" I found {duplicate_count} duplicate title(s) that will be skipped." if duplicate_count else ""
+    confirmation_prompt = (
+        _bulk_subtask_confirmation_prompt(task_count, parent_title, section_name)
+        + large_batch_warning
+        + duplicate_note
+    )
+    logger.info(
+        "roadmap_subtask_parser attempted=%s success=%s reason=%s section=%s parent=%s task_count=%s selected_action=%s",
+        parse_attempted,
+        True,
+        "bulk_subtask_confirmation_ready",
+        section_name,
+        parent_title,
+        task_count,
+        "create_many_todoist_subtasks",
+    )
+    pending_action = {
+        "type": "create_many_todoist_subtasks",
+        "action_type": "create_many_todoist_subtasks",
+        "intent": "capture_task",
+        "confirmation_prompt": confirmation_prompt,
+        "resolved_project": section_name if section_name in PROJECT_CATEGORIES else None,
+        "details": {
+            "project_name": TODOIST_INBOX_PROJECT_NAME,
+            "section_name": section_name,
+            "parent_task_title": parent_title,
+            "parent_task_id": parent_task.get("id"),
+            "tasks": preview_tasks,
+        },
+    }
+    PENDING_ACTION = pending_action
+    return _with_conversation_state(session_key, {
+        "answer": confirmation_prompt,
+        "intent": "capture_task",
+        "actions_taken": [],
+        "needs_confirmation": True,
+        "confirmation_prompt": confirmation_prompt,
+        "pending_action": pending_action,
+        "free_block": plan["free_block"],
+        "recommended_tasks": plan["recommended_tasks"],
+        "calendar_events": _summarize_calendar_events(calendar_events),
+        "mode": MODE,
+        "errors": errors,
+    })
+
+
+def _parse_bulk_subtask_request(message: str) -> tuple[dict[str, Any] | None, str, bool]:
+    bullet_tasks = _extract_roadmap_items(message)
+    multiple_items_detected = len(bullet_tasks) > 1
+    parse_attempted = multiple_items_detected or bool(
+        re.search(r"\b(roadmap|subtasks?|under|inside|for|break this into)\b", message, flags=re.IGNORECASE)
+        or re.search(r"(?:->|→|/)", message)
+    )
+
+    if not multiple_items_detected:
+        return None, "no_numbered_or_bulleted_items_found", parse_attempted
+
+    header = _roadmap_header(message)
+    section_name, parent_title, reason = _extract_roadmap_target(header)
+    if not parent_title:
+        return None, reason, True
+
+    return {
+        "project_name": TODOIST_INBOX_PROJECT_NAME,
+        "section_name": section_name,
+        "parent_task_title": parent_title,
+        "tasks": bullet_tasks,
+    }, "parsed", True
+
+
+def _extract_roadmap_items(message: str) -> list[dict[str, Any]]:
+    tasks: list[dict[str, Any]] = []
+    for line in message.splitlines():
+        content = _roadmap_item_content(line)
+        if content:
+            tasks.append({"content": content, "priority": 3})
+    return tasks
+
+
+def _roadmap_item_content(line: str) -> str | None:
+    match = re.match(
+        r"^\s*(?:[-*+]\s+\[[ xX]\]|[-*+]|\d+[.)]|\uFFFC)\s*(.+?)\s*$",
+        line,
+    )
+    if not match:
+        return None
+    content = re.sub(r"\s+", " ", match.group(1).strip())
+    return content or None
+
+
+def _roadmap_header(message: str) -> str:
+    return "\n".join(line for line in message.splitlines() if not _roadmap_item_content(line)).strip()
+
+
+def _extract_roadmap_target(header: str) -> tuple[str | None, str | None, str]:
+    cleaned_header = _clean_roadmap_target(header)
+    if not cleaned_header:
+        return None, None, "header_missing_parent_context"
+
+    arrow_target = re.search(
+        r"(?:under|inside|in|for)?\s*(?P<section>[A-Za-z0-9& _-]+?)\s*(?:->|→|/)\s*(?P<parent>[^:\n]+)",
+        cleaned_header,
+        flags=re.IGNORECASE,
+    )
+    if arrow_target:
+        section_name = _clean_route_part(arrow_target.group("section"))
+        parent_title = _clean_route_part(arrow_target.group("parent"))
+        return section_name, parent_title, "parsed_route_with_section"
+
+    phrase_target = re.search(
+        r"\b(?:under|inside|in|for)\s+(?P<target>[^:\n]+)",
+        cleaned_header,
+        flags=re.IGNORECASE,
+    )
+    if phrase_target:
+        target = _clean_roadmap_target(phrase_target.group("target"))
+        section_name, parent_title = _split_section_parent_from_target(target)
+        return section_name, parent_title, "parsed_phrase_target"
+
+    roadmap_target = re.search(
+        r"\broadmap\s*(?:for)?\s+(?P<target>[^:\n]+)",
+        cleaned_header,
+        flags=re.IGNORECASE,
+    )
+    if roadmap_target:
+        target = _clean_roadmap_target(roadmap_target.group("target"))
+        section_name, parent_title = _split_section_parent_from_target(target)
+        return section_name, parent_title, "parsed_roadmap_target"
+
+    return None, None, "parent_task_not_detected"
+
+
+def _split_section_parent_from_target(target: str) -> tuple[str | None, str | None]:
+    route_match = re.search(r"(?P<section>.+?)\s*(?:->|→|/)\s*(?P<parent>.+)", target)
+    if route_match:
+        return (
+            _clean_route_part(route_match.group("section")),
+            _clean_route_part(route_match.group("parent")),
+        )
+
+    return None, _clean_roadmap_target(target)
+
+
+def _clean_roadmap_target(value: Any) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    text = re.sub(
+        r"\b(?:as\s+subtasks?|subtasks?|tasks?|roadmap|these|this|create|add|put|break\s+this\s+into)\b",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text.strip(" :-\t")
+
+
+def _clean_route_part(value: Any) -> str:
+    text = _clean_roadmap_target(value)
+    text = re.sub(r"\b(?:under|inside|in|for|here'?s|the|take|and|it)\b", "", text, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", text).strip(" :-\t")
+
+
+def _bulk_subtask_confirmation_prompt(task_count: int, parent_title: str, section_name: str | None) -> str:
+    location = f" under {section_name}" if section_name else ""
+    return f"I found {task_count} subtasks for {parent_title}{location}. Create them?"
+
+
+def _missing_parent_prompt(parent_title: str, section_name: str | None) -> str:
+    location = f" in {section_name}" if section_name else ""
+    return f"I could not find '{parent_title}'{location}. Create that parent task first?"
+
+
+def _normalize_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
 
 
 def _fallback_response(
@@ -1034,6 +1347,9 @@ def _build_llm_context(
             "allowed_automatic_actions": [
                 "none: answer only; use for planning, replanning, reminders that need confirmation, questions, and unknown requests",
                 "create_todoist_task: create one simple Todoist task only when the user explicitly asks to capture/create/add a task",
+                "create_todoist_subtask: create one Todoist subtask under an existing parent task; requires confirmation",
+                "create_many_todoist_tasks: create multiple Todoist tasks; always requires confirmation",
+                "create_many_todoist_subtasks: create multiple Todoist subtasks under an existing parent task; always requires confirmation",
                 "create_calendar_event: create one simple Google Calendar event only when the user explicitly asks to schedule an event and no busy conflict exists",
                 "update_calendar_event: update one existing Google Calendar event only after explicit confirmation of event_id, old time, and new time",
             ],
@@ -1050,6 +1366,7 @@ def _build_llm_context(
                 "If the answer asks the user to choose, approve, confirm, or decide before an action can happen, set needs_confirmation=true.",
                 "When needs_confirmation=true, set confirmation_prompt to the exact decision requested.",
                 "For supported task or calendar create actions that only need approval, keep action_type and the task/calendar fields populated so the backend can execute after a yes reply.",
+                "Bulk task creation always needs confirmation. Include the parent task and task list in pending_action.details for create_many_todoist_subtasks.",
                 "When a reschedule is specific and executable, include pending_action.type='update_calendar_event' with event_id, title, old_start, old_end, new_start, and new_end.",
                 "When a calendar conflict or reschedule choice needs a decision but is not yet executable, include pending_action.type='resolve_calendar_conflict'.",
                 "If pending_action is present in context, interpret the next user message as an attempt to resolve it.",
@@ -1358,6 +1675,9 @@ Classify intent as one of: plan, capture_task, schedule_event, replan, reminder,
 You may propose exactly one backend action:
 - none: answer only. Use this for planning questions, replanning, questions, reminders, and anything that does not explicitly ask to create something.
 - create_todoist_task: create one simple Todoist task. Use only when the user explicitly asks to capture/create/add a task.
+- create_todoist_subtask: create one Todoist subtask under an existing parent task. This always needs confirmation.
+- create_many_todoist_tasks: create multiple Todoist tasks. This always needs confirmation.
+- create_many_todoist_subtasks: create multiple Todoist subtasks under an existing parent task. This always needs confirmation.
 - create_calendar_event: create one simple calendar event with a title, start, and end. Use only when the user explicitly asks to schedule an event.
 - update_calendar_event: update one existing calendar event after the user explicitly confirms the exact event and new time.
 
@@ -1368,6 +1688,7 @@ If a supported task or calendar create action only needs user approval, keep act
 If your answer asks the user to choose, approve, confirm, or decide before an action can happen, needs_confirmation must be true.
 When needs_confirmation is true, confirmation_prompt must contain the decision being requested.
 When a calendar conflict or reschedule can be executed, pending_action must be {"type":"update_calendar_event","details":{"event_id":"...","title":"...","old_start":"...","old_end":"...","new_start":"...","new_end":"..."}}.
+When creating multiple subtasks, pending_action must be {"type":"create_many_todoist_subtasks","details":{"project_name":"To-Do","section_name":"...","parent_task_title":"...","parent_task_id":"...","tasks":[{"content":"...","priority":3}]}}.
 When a calendar conflict or reschedule still needs a choice, pending_action must be {"type":"resolve_calendar_conflict","details":{...}}.
 If pending_action is provided in context, treat the user message as a possible resolution of that pending action and answer accordingly.
 For planning questions like "I feel lazy, what is one small useful thing I can do?", action_type must be none.
@@ -1400,8 +1721,16 @@ def _decision_schema() -> dict[str, Any]:
             },
             "action_type": {
                 "type": "string",
-                "enum": ["none", "create_todoist_task", "create_calendar_event", "update_calendar_event"],
-                "description": "Allowed actions. Use none for planning/replanning/questions. Use create_todoist_task only for explicit task capture. Use create_calendar_event only for explicit scheduling. Use update_calendar_event only after explicit reschedule confirmation.",
+                "enum": [
+                    "none",
+                    "create_todoist_task",
+                    "create_todoist_subtask",
+                    "create_many_todoist_tasks",
+                    "create_many_todoist_subtasks",
+                    "create_calendar_event",
+                    "update_calendar_event",
+                ],
+                "description": "Allowed actions. Bulk task/subtask actions always require confirmation.",
             },
             "task": {
                 "type": "object",
@@ -1466,7 +1795,14 @@ def _decision_schema() -> dict[str, Any]:
                 "properties": {
                     "type": {
                         "type": "string",
-                        "enum": ["resolve_calendar_conflict", "update_calendar_event"],
+                        "enum": [
+                            "resolve_calendar_conflict",
+                            "update_calendar_event",
+                            "create_todoist_task",
+                            "create_todoist_subtask",
+                            "create_many_todoist_tasks",
+                            "create_many_todoist_subtasks",
+                        ],
                     },
                     "details": {
                         "type": "object",
@@ -1483,6 +1819,14 @@ def _decision_schema() -> dict[str, Any]:
                             "old_end",
                             "new_start",
                             "new_end",
+                            "project_name",
+                            "section_name",
+                            "parent_task_title",
+                            "parent_task_id",
+                            "content",
+                            "due_string",
+                            "priority",
+                            "tasks",
                         ],
                         "properties": {
                             "conflict": {"type": ["string", "null"]},
@@ -1499,6 +1843,26 @@ def _decision_schema() -> dict[str, Any]:
                             "old_end": {"type": ["string", "null"], "description": "ISO 8601 datetime with timezone."},
                             "new_start": {"type": ["string", "null"], "description": "ISO 8601 datetime with timezone."},
                             "new_end": {"type": ["string", "null"], "description": "ISO 8601 datetime with timezone."},
+                            "project_name": {"type": ["string", "null"]},
+                            "section_name": {"type": ["string", "null"]},
+                            "parent_task_title": {"type": ["string", "null"]},
+                            "parent_task_id": {"type": ["string", "null"]},
+                            "content": {"type": ["string", "null"]},
+                            "due_string": {"type": ["string", "null"]},
+                            "priority": {"type": ["integer", "null"], "minimum": 1, "maximum": 4},
+                            "tasks": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "required": ["content", "due_string", "priority"],
+                                    "properties": {
+                                        "content": {"type": "string"},
+                                        "due_string": {"type": ["string", "null"]},
+                                        "priority": {"type": ["integer", "null"], "minimum": 1, "maximum": 4},
+                                    },
+                                },
+                            },
                         },
                     },
                 },
@@ -1520,7 +1884,15 @@ def _sanitize_decision(decision: dict[str, Any]) -> dict[str, Any]:
 
     if intent not in ALLOWED_INTENTS:
         intent = "unknown"
-    if action_type not in {"none", "create_todoist_task", "create_calendar_event", "update_calendar_event"}:
+    if action_type not in {
+        "none",
+        "create_todoist_task",
+        "create_todoist_subtask",
+        "create_many_todoist_tasks",
+        "create_many_todoist_subtasks",
+        "create_calendar_event",
+        "update_calendar_event",
+    }:
         action_type = "none"
 
     if needs_confirmation or intent in {"plan", "replan", "question", "reminder", "unknown"}:
@@ -1572,7 +1944,13 @@ def _executable_pending_action(
 
     pending_type = pending.get("type")
     executable_update = pending_type == "update_calendar_event" and _calendar_update_details(details)
-    if proposed_action_type in {"create_todoist_task", "create_calendar_event"} or executable_update:
+    if proposed_action_type in {
+        "create_todoist_task",
+        "create_todoist_subtask",
+        "create_many_todoist_tasks",
+        "create_many_todoist_subtasks",
+        "create_calendar_event",
+    } or executable_update:
         if executable_update:
             proposed_action_type = "update_calendar_event"
         pending["intent"] = intent
@@ -1682,7 +2060,7 @@ def _is_affirmative_confirmation(message: str) -> bool:
 
 def _decision_from_pending_action(pending_action: dict[str, Any]) -> dict[str, Any]:
     action_type = pending_action.get("action_type") or pending_action.get("type")
-    if action_type not in {"create_todoist_task", "create_calendar_event", "update_calendar_event"}:
+    if action_type not in EXECUTABLE_PENDING_ACTION_TYPES:
         return {
             "answer": "I can suggest this, but calendar editing for this action is not implemented yet.",
             "intent": str(pending_action.get("intent") or "unknown"),
@@ -1697,7 +2075,12 @@ def _decision_from_pending_action(pending_action: dict[str, Any]) -> dict[str, A
 
     intent = pending_action.get("intent")
     if intent not in ALLOWED_INTENTS:
-        if action_type == "create_todoist_task":
+        if action_type in {
+            "create_todoist_task",
+            "create_todoist_subtask",
+            "create_many_todoist_tasks",
+            "create_many_todoist_subtasks",
+        }:
             intent = "capture_task"
         elif action_type == "update_calendar_event":
             intent = "replan"
@@ -1715,6 +2098,9 @@ def _decision_from_pending_action(pending_action: dict[str, Any]) -> dict[str, A
             else {}
         ),
         "calendar_event_update": (
+            pending_action.get("details") if isinstance(pending_action.get("details"), dict) else {}
+        ),
+        "todoist_bulk_details": (
             pending_action.get("details") if isinstance(pending_action.get("details"), dict) else {}
         ),
         "resolved_project": _valid_project_category(pending_action.get("resolved_project")),
@@ -2373,6 +2759,99 @@ def _execute_allowed_action(
             }
         ], []
 
+    if action_type == "create_many_todoist_subtasks" and decision["intent"] == "capture_task":
+        details = decision.get("todoist_bulk_details") if isinstance(
+            decision.get("todoist_bulk_details"), dict
+        ) else {}
+        parent_id = str(details.get("parent_task_id") or "").strip()
+        parent_title = str(details.get("parent_task_title") or "").strip()
+        requested_tasks = details.get("tasks") if isinstance(details.get("tasks"), list) else []
+        if not parent_id or not requested_tasks:
+            return [], ["Bulk subtask creation requires a parent_task_id and at least one task."]
+
+        result = create_many_subtasks(
+            settings=settings,
+            parent_id=parent_id,
+            tasks=[
+                {
+                    "content": str(task.get("content") or "").strip(),
+                    "due_string": task.get("due_string") or task.get("due_date"),
+                    "priority": task.get("priority"),
+                }
+                for task in requested_tasks
+                if isinstance(task, dict)
+            ],
+            existing_tasks=tasks,
+        )
+        if result.error:
+            return [], [result.error]
+        return [
+            {
+                "type": "create_many_todoist_subtasks",
+                "status": "success",
+                "parent_task_id": parent_id,
+                "parent_task_title": parent_title,
+                "section_name": details.get("section_name"),
+                "task_count": len(result.tasks),
+                "requested_count": len(requested_tasks),
+                "tasks": result.tasks,
+                "skipped": result.skipped,
+            }
+        ], []
+
+    if action_type == "create_todoist_subtask" and decision["intent"] == "capture_task":
+        details = decision.get("todoist_bulk_details") if isinstance(
+            decision.get("todoist_bulk_details"), dict
+        ) else {}
+        parent_id = str(details.get("parent_task_id") or "").strip()
+        content = str(details.get("content") or "").strip()
+        if not parent_id or not content:
+            return [], ["Subtask creation requires parent_task_id and content."]
+
+        result = create_many_subtasks(
+            settings=settings,
+            parent_id=parent_id,
+            tasks=[{"content": content, "due_string": details.get("due_string"), "priority": details.get("priority")}],
+            existing_tasks=tasks,
+        )
+        if result.error:
+            return [], [result.error]
+        return [
+            {
+                "type": "create_todoist_subtask",
+                "status": "success",
+                "parent_task_id": parent_id,
+                "parent_task_title": details.get("parent_task_title"),
+                "task": result.tasks[0] if result.tasks else None,
+                "skipped": result.skipped,
+            }
+        ], []
+
+    if action_type == "create_many_todoist_tasks" and decision["intent"] == "capture_task":
+        details = decision.get("todoist_bulk_details") if isinstance(
+            decision.get("todoist_bulk_details"), dict
+        ) else {}
+        requested_tasks = details.get("tasks") if isinstance(details.get("tasks"), list) else []
+        if not requested_tasks:
+            return [], ["Bulk task creation requires at least one task."]
+
+        result = create_many_tasks(
+            settings=settings,
+            tasks=[task for task in requested_tasks if isinstance(task, dict)],
+        )
+        if result.error:
+            return [], [result.error]
+        return [
+            {
+                "type": "create_many_todoist_tasks",
+                "status": "success",
+                "task_count": len(result.tasks),
+                "requested_count": len(requested_tasks),
+                "tasks": result.tasks,
+                "skipped": result.skipped,
+            }
+        ], []
+
     if action_type == "create_calendar_event" and decision["intent"] == "schedule_event":
         event = decision.get("calendar_event") or {}
         title = (event.get("title") or "").strip()
@@ -2517,6 +2996,22 @@ def _answer_with_actions(
     if action["type"] == "create_todoist_task":
         task = action.get("task") or {}
         return f"{decision['answer']} Added Todoist task: {task.get('content')}."
+    if action["type"] == "create_many_todoist_subtasks":
+        parent_title = action.get("parent_task_title") or "the parent task"
+        count = action.get("task_count") or 0
+        skipped = action.get("skipped") or []
+        skipped_text = f" Skipped {len(skipped)} duplicate or invalid item(s)." if skipped else ""
+        return f"Created {count} subtasks under {parent_title}.{skipped_text}"
+    if action["type"] == "create_todoist_subtask":
+        parent_title = action.get("parent_task_title") or "the parent task"
+        if action.get("task"):
+            return f"Created 1 subtask under {parent_title}."
+        return f"No new subtask was created under {parent_title}."
+    if action["type"] == "create_many_todoist_tasks":
+        count = action.get("task_count") or 0
+        skipped = action.get("skipped") or []
+        skipped_text = f" Skipped {len(skipped)} invalid item(s)." if skipped else ""
+        return f"Created {count} Todoist tasks.{skipped_text}"
     if action["type"] == "create_calendar_event":
         event = action.get("event") or {}
         return f"{decision['answer']} Added calendar event: {event.get('title')}."
@@ -2532,6 +3027,7 @@ def _compact_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "id": task.get("id"),
             "content": task.get("content"),
             "project_id": task.get("project_id"),
+            "parent_id": task.get("parent_id"),
             "project_name": task.get("project_name"),
             "category": task.get("category"),
             "due_date": task.get("due_date"),

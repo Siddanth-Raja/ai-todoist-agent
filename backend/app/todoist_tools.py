@@ -42,6 +42,13 @@ class TodoistWriteResult:
     error: str | None = None
 
 
+@dataclass
+class TodoistBulkWriteResult:
+    tasks: list[dict[str, Any]]
+    skipped: list[dict[str, Any]]
+    error: str | None = None
+
+
 def list_active_tasks(settings: Settings) -> TodoistReadResult:
     """Read active Todoist tasks and normalize fields used by the planner."""
     if settings.missing_todoist:
@@ -182,6 +189,150 @@ def create_task(
     return TodoistWriteResult(task=_normalize_task(response.json(), projects, sections))
 
 
+def find_task_by_name(
+    settings: Settings,
+    content: str,
+    section_name: str | None = None,
+    category: str | None = None,
+) -> dict[str, Any] | None:
+    """Find an active Todoist task by exact title, optionally scoped to a section/category."""
+    normalized_content = _normalize_title(content)
+    if not normalized_content:
+        return None
+
+    canonical_section_name = canonical_todoist_section_name(section_name or category)
+    result = list_active_tasks(settings)
+    for task in result.tasks:
+        if _normalize_title(task.get("content")) != normalized_content:
+            continue
+        if canonical_section_name:
+            task_section = canonical_todoist_section_name(
+                task.get("todoist_section_name") or task.get("section_name") or task.get("category")
+            )
+            if task_section != canonical_section_name:
+                continue
+        return task
+
+    return None
+
+
+def create_subtask(
+    settings: Settings,
+    parent_id: str,
+    content: str,
+    due_string: str | None = None,
+    priority: int | None = None,
+) -> TodoistWriteResult:
+    """Create one Todoist subtask under an existing parent task."""
+    if settings.missing_todoist:
+        return TodoistWriteResult(
+            error="TODOIST_API_TOKEN is missing. Add it to backend/.env to create Todoist subtasks.",
+        )
+
+    try:
+        projects = _fetch_projects(settings)
+        sections = _fetch_sections(settings)
+        payload: dict[str, Any] = {"content": content, "parent_id": parent_id}
+        if due_string:
+            payload["due_string"] = due_string
+        if priority:
+            payload["priority"] = max(1, min(4, priority))
+
+        response = requests.post(
+            f"{TODOIST_API_BASE_URL}/tasks",
+            headers={
+                **_auth_headers(settings),
+                "Content-Type": "application/json",
+                "X-Request-Id": str(uuid.uuid4()),
+            },
+            json=payload,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        status_code = exc.response.status_code if exc.response is not None else "unknown"
+        return TodoistWriteResult(
+            error=f"Could not create Todoist subtask. Todoist returned HTTP {status_code}.",
+        )
+    except requests.RequestException as exc:
+        return TodoistWriteResult(
+            error=f"Could not create Todoist subtask: {exc.__class__.__name__}.",
+        )
+
+    return TodoistWriteResult(task=_normalize_task(response.json(), projects, sections))
+
+
+def create_many_tasks(settings: Settings, tasks: list[dict[str, Any]]) -> TodoistBulkWriteResult:
+    """Create multiple top-level Todoist tasks sequentially."""
+    created: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for task in tasks:
+        content = str(task.get("content") or "").strip()
+        if not content:
+            skipped.append({"content": content, "reason": "missing_content"})
+            continue
+
+        result = create_task(
+            settings=settings,
+            content=content,
+            project_id=task.get("project_id"),
+            project_name=task.get("project_name"),
+            section_id=task.get("section_id") or task.get("todoist_section_id"),
+            section_name=task.get("section_name") or task.get("todoist_section_name"),
+            due_string=task.get("due_string") or task.get("due_date"),
+            labels=task.get("labels") if isinstance(task.get("labels"), list) else [],
+            priority=task.get("priority"),
+        )
+        if result.error:
+            return TodoistBulkWriteResult(tasks=created, skipped=skipped, error=result.error)
+        if result.task:
+            created.append(result.task)
+
+    return TodoistBulkWriteResult(tasks=created, skipped=skipped)
+
+
+def create_many_subtasks(
+    settings: Settings,
+    parent_id: str,
+    tasks: list[dict[str, Any]],
+    existing_tasks: list[dict[str, Any]] | None = None,
+) -> TodoistBulkWriteResult:
+    """Create multiple subtasks, skipping duplicate titles already under the parent."""
+    task_snapshot = existing_tasks if existing_tasks is not None else list_active_tasks(settings).tasks
+    existing_titles = {
+        _normalize_title(task.get("content"))
+        for task in task_snapshot
+        if str(task.get("parent_id") or "") == str(parent_id)
+    }
+
+    created: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for task in tasks:
+        content = str(task.get("content") or "").strip()
+        normalized_content = _normalize_title(content)
+        if not normalized_content:
+            skipped.append({"content": content, "reason": "missing_content"})
+            continue
+        if normalized_content in existing_titles:
+            skipped.append({"content": content, "reason": "duplicate"})
+            continue
+
+        result = create_subtask(
+            settings=settings,
+            parent_id=parent_id,
+            content=content,
+            due_string=task.get("due_string") or task.get("due_date"),
+            priority=task.get("priority"),
+        )
+        if result.error:
+            return TodoistBulkWriteResult(tasks=created, skipped=skipped, error=result.error)
+        if result.task:
+            created.append(result.task)
+            existing_titles.add(normalized_content)
+
+    return TodoistBulkWriteResult(tasks=created, skipped=skipped)
+
+
 def canonical_todoist_section_name(section_name_or_life_area: str | None) -> str | None:
     if not section_name_or_life_area:
         return None
@@ -236,6 +387,10 @@ def _find_id_by_name(items: dict[str, str], name: str) -> str | None:
             return item_id
 
     return None
+
+
+def _normalize_title(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
 
 
 def _fetch_paginated(
@@ -294,6 +449,8 @@ def _normalize_task(
     section_id = task.get("section_id")
     section_id_text = str(section_id) if section_id is not None else None
     task_id = str(task.get("id")) if task.get("id") is not None else None
+    parent_id = task.get("parent_id")
+    parent_id_text = str(parent_id) if parent_id is not None else None
 
     labels = task.get("labels") or []
     if not isinstance(labels, list):
@@ -313,6 +470,7 @@ def _normalize_task(
         "project_id": project_id_text,
         "project_name": projects.get(project_id_text) if project_id_text else None,
         "section_id": section_id_text,
+        "parent_id": parent_id_text,
         "section_name": section_name,
         "category": category or "Misc",
         "project_category": category or "Misc",

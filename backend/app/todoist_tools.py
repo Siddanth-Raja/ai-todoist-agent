@@ -22,6 +22,25 @@ LIFE_AREA_TO_TODOIST_SECTION = {
 TODOIST_SECTION_TO_LIFE_AREA = {
     section_name: life_area for life_area, section_name in LIFE_AREA_TO_TODOIST_SECTION.items()
 }
+TODOIST_SECTION_ALIASES = {
+    "misc": "Misc",
+    "miscellaneous": "Misc",
+    "other": "Misc",
+    "uncategorized": "Misc",
+    "personal": "Personal",
+    "life admin": "Personal",
+    "errands": "Personal",
+    "shopping": "Personal",
+    "xo": "XO Collective",
+    "xo collective": "XO Collective",
+    "freelance": "Freelance Web Design",
+    "freelance web design": "Freelance Web Design",
+    "nebulo": "Nebulo",
+    "a&m": "A&M",
+    "am": "A&M",
+    "tamu": "A&M",
+    "college": "A&M",
+}
 
 
 @dataclass
@@ -344,6 +363,10 @@ def canonical_todoist_section_name(section_name_or_life_area: str | None) -> str
         return value
 
     normalized = value.lower()
+    normalized = " ".join(normalized.split())
+    alias = TODOIST_SECTION_ALIASES.get(normalized)
+    if alias:
+        return alias
     for life_area, section_name in LIFE_AREA_TO_TODOIST_SECTION.items():
         if normalized in {life_area.lower(), section_name.lower()}:
             return section_name

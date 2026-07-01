@@ -1332,6 +1332,98 @@ class AgentExampleTests(unittest.TestCase):
             self.assertEqual(metadata["project_category"], expected_category)
             self.assertEqual(metadata["due_date"], expected_due_date)
 
+    def test_todoist_task_extraction_strips_command_section_and_date_phrases(self):
+        cases = [
+            (
+                "add a todoist task cancel apple news+ free trial for sep 20th",
+                "Cancel Apple News+ free trial",
+                "Personal",
+                "2026-09-20",
+            ),
+            (
+                "add task cancel walmart+ by Wednesday",
+                "Cancel Walmart+",
+                "Personal",
+                "2026-06-10",
+            ),
+            (
+                "put cancel apple news in misc due sep 20",
+                "Cancel apple news",
+                "Misc",
+                "2026-09-20",
+            ),
+            (
+                "add task buy water bottle from Target",
+                "Buy water bottle from Target",
+                "Personal",
+                None,
+            ),
+            (
+                "add task contact dentist website lead in Freelance",
+                "Contact dentist website lead",
+                "Freelance",
+                None,
+            ),
+        ]
+
+        for message, expected_content, expected_category, expected_due_date in cases:
+            with self.subTest(message=message):
+                metadata = agent._extract_capture_metadata(message, {}, self.now)
+
+            self.assertEqual(metadata["content"], expected_content)
+            self.assertEqual(metadata["project_category"], expected_category)
+            self.assertEqual(metadata["section_name"], agent.LIFE_AREA_TO_TODOIST_SECTION[expected_category])
+            self.assertEqual(metadata["due_date"], expected_due_date)
+
+    def test_todoist_task_creation_uses_clean_content_section_alias_and_due_date(self):
+        created_task = {
+            **TASKS[0],
+            "id": "task-cancel-apple-news",
+            "content": "Cancel Apple News+ free trial",
+            "project_name": "To-Do",
+            "section_name": "Personal",
+        }
+        with patch("app.agent._get_llm_decision", return_value=(
+            self._decision(
+                answer="I can add that.",
+                intent="plan",
+                action_type="none",
+            ),
+            None,
+        )), patch("app.agent.create_task", return_value=TodoistWriteResult(task=created_task)) as create_task_mock:
+            response = handle_chat(
+                "add a todoist task cancel apple news+ free trial for sep 20th",
+                self.now,
+            )
+
+        create_task_kwargs = create_task_mock.call_args.kwargs
+        self.assertEqual(create_task_kwargs["content"], "Cancel Apple News+ free trial")
+        self.assertEqual(create_task_kwargs["section_name"], "Personal")
+        self.assertEqual(create_task_kwargs["section_id"], "section-personal")
+        self.assertEqual(create_task_kwargs["due_string"], "2026-09-20")
+        self.assertNotIn("todoist task", response["actions_taken"][0]["task"]["content"].lower())
+        self.assertNotIn("sep 20", response["actions_taken"][0]["task"]["content"].lower())
+
+    def test_section_alias_resolution_maps_user_aliases_to_real_todoist_sections(self):
+        cases = [
+            ("Miscellaneous", "Misc"),
+            ("Other", "Misc"),
+            ("Uncategorized", "Misc"),
+            ("life admin", "Personal"),
+            ("errands", "Personal"),
+            ("shopping", "Personal"),
+            ("XO", "XO Collective"),
+            ("Freelance", "Freelance Web Design"),
+            ("TAMU", "A&M"),
+            ("college", "A&M"),
+        ]
+
+        from app.todoist_tools import canonical_todoist_section_name
+
+        for alias, expected_section in cases:
+            with self.subTest(alias=alias):
+                self.assertEqual(canonical_todoist_section_name(alias), expected_section)
+
     def test_task_creation_uses_real_todoist_sections(self):
         cases = [
             ("call Ashwin and Charlie", "XO Collective", "section-xo", "XO", "memory"),

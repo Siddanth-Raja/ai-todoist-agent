@@ -69,10 +69,58 @@ PERSONAL_CAPTURE_KEYWORDS = {
     "life admin",
     "water bottle",
     "socks",
+    "free trial",
+    "subscription",
+    "cancel",
     "grad",
     "graduation",
     "commencement",
     "speech",
+}
+SECTION_ALIAS_TO_CATEGORY = {
+    "misc": "Misc",
+    "miscellaneous": "Misc",
+    "other": "Misc",
+    "uncategorized": "Misc",
+    "personal": "Personal",
+    "life admin": "Personal",
+    "errands": "Personal",
+    "shopping": "Personal",
+    "xo": "XO",
+    "xo collective": "XO",
+    "freelance": "Freelance",
+    "freelance web design": "Freelance",
+    "nebulo": "Nebulo",
+    "a&m": "A&M",
+    "am": "A&M",
+    "tamu": "A&M",
+    "college": "A&M",
+}
+MONTH_NAME_TO_NUMBER = {
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
+    "may": 5,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
 }
 CALENDAR_ONLY_EVENT_KEYWORDS = {
     "gym",
@@ -2295,7 +2343,11 @@ def _extract_capture_metadata(
     task_content = _capture_task_content(message)
     existing_content = str(task.get("content") or "").strip()
     content = task_content or existing_content
-    category, classification_source = _infer_capture_category(" ".join([content, message]), memory_entries or [])
+    explicit_category = _explicit_capture_category(message)
+    if explicit_category:
+        category, classification_source = explicit_category, "explicit_section"
+    else:
+        category, classification_source = _infer_capture_category(" ".join([content, message]), memory_entries or [])
     due_date = _extract_due_date_from_message(message, local_now)
     due_date_text = due_date.isoformat() if due_date else None
     section_name = LIFE_AREA_TO_TODOIST_SECTION.get(category)
@@ -2321,8 +2373,13 @@ def _is_clear_capture_request(message: str) -> bool:
         "i need to ",
         "i need ",
         "add ",
+        "create task ",
+        "create a task ",
+        "add task ",
+        "add a task ",
         "remind me to ",
         "todoist ",
+        "put ",
     )
     capture_verbs = (
         "buy ",
@@ -2356,22 +2413,10 @@ def _is_clear_capture_request(message: str) -> bool:
 
 
 def _capture_task_content(message: str) -> str:
-    text = message.strip()
-    lowered = text.lower()
-    prefixes = [
-        "i need to ",
-        "i need ",
-        "add ",
-        "remind me to ",
-        "todoist ",
-    ]
-    for prefix in prefixes:
-        if lowered.startswith(prefix):
-            text = text[len(prefix) :]
-            break
-
+    text = _strip_capture_command_phrase(message)
     text = re.split(r"\bbefore\b", text, maxsplit=1, flags=re.IGNORECASE)[0]
     text = _remove_due_phrase(text)
+    text = _remove_explicit_section_phrase(text)
     text = re.sub(r"\bfor my\b", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"\b(my|the|a|an)\b", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"\s+", " ", text).strip(" .,:;-")
@@ -2380,7 +2425,73 @@ def _capture_task_content(message: str) -> str:
         if any(word in text.lower() for word in ("target", "water bottle", "socks", "groceries")):
             text = f"Buy {text}"
 
-    return text[:1].upper() + text[1:] if text else text
+    return _polish_capture_content(text)
+
+
+def _polish_capture_content(text: str) -> str:
+    if not text:
+        return text
+    text = text[:1].upper() + text[1:]
+    replacements = {
+        r"\bapple news\+": "Apple News+",
+        r"\bwalmart\+": "Walmart+",
+    }
+    for pattern, replacement in replacements.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text
+
+
+def _strip_capture_command_phrase(message: str) -> str:
+    text = message.strip()
+    command_patterns = (
+        r"^\s*add\s+(?:a\s+)?todoist\s+task\s+",
+        r"^\s*add\s+(?:a\s+)?task\s+",
+        r"^\s*create\s+(?:a\s+)?(?:todoist\s+)?task\s+",
+        r"^\s*put\s+this\s+in\s+todoist\s+",
+        r"^\s*put\s+",
+        r"^\s*todoist\s+task\s+",
+        r"^\s*todoist\s+",
+        r"^\s*i\s+need\s+to\s+",
+        r"^\s*i\s+need\s+",
+        r"^\s*remind\s+me\s+to\s+",
+        r"^\s*add\s+",
+    )
+    for pattern in command_patterns:
+        next_text = re.sub(pattern, "", text, count=1, flags=re.IGNORECASE)
+        if next_text != text:
+            return next_text
+    return text
+
+
+def _explicit_capture_category(message: str) -> str | None:
+    section_aliases = sorted(SECTION_ALIAS_TO_CATEGORY, key=len, reverse=True)
+    alias_pattern = "|".join(re.escape(alias) for alias in section_aliases)
+    match = re.search(
+        rf"\b(?:in|under|to)\s+(?P<section>{alias_pattern})\b",
+        message,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return _category_for_section_alias(match.group("section"))
+
+
+def _category_for_section_alias(value: str | None) -> str | None:
+    if not value:
+        return None
+    normalized = re.sub(r"\s+", " ", value.strip().lower())
+    return SECTION_ALIAS_TO_CATEGORY.get(normalized)
+
+
+def _remove_explicit_section_phrase(text: str) -> str:
+    section_aliases = sorted(SECTION_ALIAS_TO_CATEGORY, key=len, reverse=True)
+    alias_pattern = "|".join(re.escape(alias) for alias in section_aliases)
+    return re.sub(
+        rf"\s+\b(?:in|under|to)\s+(?:{alias_pattern})\b\s*",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 def _infer_capture_category(
@@ -2434,7 +2545,37 @@ def _extract_due_date_from_message(message: str, local_now: datetime):
         if event_date:
             return event_date - timedelta(days=BEFORE_EVENT_LEAD_DAYS)
 
+    explicit_date = _extract_explicit_due_date(text, local_now)
+    if explicit_date:
+        return explicit_date
+
     return _extract_temporal_date(text, local_now)
+
+
+def _extract_explicit_due_date(text: str, local_now: datetime):
+    month_pattern = "|".join(MONTH_NAME_TO_NUMBER.keys())
+    match = re.search(
+        rf"\b(?:for|due|by|on)?\s*(?P<month>{month_pattern})\.?\s+(?P<day>\d{{1,2}})(?:st|nd|rd|th)?\b",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+
+    month = MONTH_NAME_TO_NUMBER.get(match.group("month").lower().rstrip("."))
+    day = int(match.group("day"))
+    if not month:
+        return None
+    try:
+        candidate = local_now.date().replace(month=month, day=day)
+    except ValueError:
+        return None
+    if candidate < local_now.date():
+        try:
+            candidate = candidate.replace(year=candidate.year + 1)
+        except ValueError:
+            return None
+    return candidate
 
 
 def _extract_temporal_date(text: str, local_now: datetime):
@@ -2463,8 +2604,9 @@ def _extract_temporal_date(text: str, local_now: datetime):
 
 def _remove_due_phrase(text: str) -> str:
     temporal_words = "|".join(WEEKDAY_TO_INDEX.keys())
+    month_pattern = "|".join(MONTH_NAME_TO_NUMBER.keys())
     return re.sub(
-        rf"\b(by|on|due|for)\s+(today|tomorrow|next week|next\s+(?:{temporal_words})|{temporal_words})\b.*$|\b(today|tomorrow|next week)\b.*$",
+        rf"\b(by|on|due|for)\s+(today|tomorrow|next week|next\s+(?:{temporal_words})|{temporal_words}|(?:{month_pattern})\.?\s+\d{{1,2}}(?:st|nd|rd|th)?)\b.*$|\b(today|tomorrow|next week)\b.*$",
         "",
         text,
         flags=re.IGNORECASE,

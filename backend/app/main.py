@@ -167,6 +167,15 @@ PROJECT_DEFINITIONS = (
         ),
         "people": ("Sam", "Jai", "Krrish"),
     },
+    {
+        "key": "needs-classification",
+        "name": "Needs Classification",
+        "description": "Unclassified Todoist work that needs a project decision before it can be safely hidden or routed.",
+        "life_area": "Misc",
+        "keywords": (),
+        "people": (),
+        "classification_bucket": True,
+    },
 )
 PROJECT_ALIASES = {
     "pcos": "pcos-ai-todoist-agent",
@@ -181,6 +190,9 @@ PROJECT_ALIASES = {
     "a and m": "am",
     "tamu": "am",
     "college": "am",
+    "uncategorized": "needs-classification",
+    "needs-classification": "needs-classification",
+    "needs classification": "needs-classification",
 }
 BLOCKER_WORDS = ("blocked", "blocking", "waiting", "review", "feedback")
 FOLLOW_UP_WORDS = ("follow up", "follow-up", "waiting", "pending", "review", "feedback")
@@ -285,6 +297,7 @@ class TaskItem(BaseModel):
     content: str
     description: str | None = None
     section: str
+    parent_id: str | None = None
     project_name: str | None = None
     section_name: str | None = None
     category: str | None = None
@@ -406,14 +419,33 @@ class ProjectBlocker(BaseModel):
     source_id: str | None = None
 
 
+class ProjectTaskDiagnostic(BaseModel):
+    task_title: str
+    parent_title: str | None = None
+    todoist_section: str | None = None
+    resolved_project: str
+    priority: int | None = None
+    included: bool
+    reason: str
+
+
+class ProjectTaskGroup(BaseModel):
+    parent_task: TaskItem
+    subtasks: list[TaskItem] = Field(default_factory=list)
+    is_container: bool = False
+
+
 class ProjectBrain(BaseModel):
     key: str
     name: str
     description: str
     status: str
+    task_count: int
     next_recommendation: str
     blockers: list[ProjectBlocker] = Field(default_factory=list)
     tasks: list[TaskItem] = Field(default_factory=list)
+    task_groups: list[ProjectTaskGroup] = Field(default_factory=list)
+    classification_diagnostics: list[ProjectTaskDiagnostic] = Field(default_factory=list)
     upcoming_events: list[CalendarEvent] = Field(default_factory=list)
     people: list[str] = Field(default_factory=list)
     memories: list[MemoryEntry] = Field(default_factory=list)
@@ -904,14 +936,21 @@ def _project_brain(
     activity: list[dict[str, Any]],
     now: datetime,
 ) -> dict[str, Any]:
-    project_tasks = [task for task in tasks if _task_matches_project(task, project)]
+    task_lookup = {str(task.get("id")): task for task in tasks if task.get("id")}
+    active_tasks = [task for task in tasks if not _task_completed(task)]
+    active_children_by_parent = _children_by_parent(active_tasks)
+    project_tasks = [
+        task for task in active_tasks if _task_matches_project(task, project, task_lookup)
+    ]
     project_events = [event for event in events if _event_matches_project(event, project)]
     project_memories = [memory for memory in memories if _memory_matches_project(memory, project)]
     project_activity = [entry for entry in activity if _activity_matches_project(entry, project)]
     people = _project_people(project, project_memories)
+    task_groups = _project_task_groups(project_tasks, task_lookup, active_children_by_parent)
+    leaf_tasks = _project_leaf_tasks(project_tasks, active_children_by_parent)
 
     ranked_tasks = rank_tasks(
-        project_tasks,
+        [_project_rankable_task(task) for task in leaf_tasks],
         free_block=None,
         user_energy="medium",
         focus_category=project.get("life_area"),
@@ -931,6 +970,7 @@ def _project_brain(
         "key": project["key"],
         "name": project["name"],
         "description": project["description"],
+        "task_count": len(sorted_tasks),
         "status": _project_status(blockers=blockers, tasks=sorted_tasks, events=sorted_events),
         "next_recommendation": _project_next_recommendation(
             blockers=blockers,
@@ -942,6 +982,13 @@ def _project_brain(
         "tasks": [
             _task_item(task, _todoist_task_section_for(task)) for task in sorted_tasks[:12]
         ],
+        "task_groups": task_groups[:12],
+        "classification_diagnostics": _project_task_diagnostics(
+            project=project,
+            tasks=tasks,
+            task_lookup=task_lookup,
+            active_children_by_parent=active_children_by_parent,
+        ),
         "upcoming_events": [_project_event_item(event) for event in sorted_events[:8]],
         "people": people,
         "memories": project_memories[:8],
@@ -949,9 +996,23 @@ def _project_brain(
     }
 
 
-def _task_matches_project(task: dict[str, Any], project: dict[str, Any]) -> bool:
+def _task_matches_project(
+    task: dict[str, Any],
+    project: dict[str, Any],
+    task_lookup: dict[str, dict[str, Any]] | None = None,
+) -> bool:
+    parent = _parent_task(task, task_lookup or {})
+    if project.get("classification_bucket"):
+        return _task_needs_classification(task, parent=parent)
+
     life_area = project.get("life_area")
     if life_area and _task_section_for(task) == life_area:
+        return True
+
+    if parent and life_area and _task_section_for(parent) == life_area:
+        return True
+
+    if parent and _text_matches_project(_task_match_text(parent), project):
         return True
 
     return _text_matches_project(_task_match_text(task), project)
@@ -1041,6 +1102,203 @@ def _project_people(project: dict[str, Any], memories: list[dict[str, Any]]) -> 
         if title:
             people.add(title)
     return sorted(people)
+
+
+def _children_by_parent(tasks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    children: dict[str, list[dict[str, Any]]] = {}
+    for task in tasks:
+        parent_id = str(task.get("parent_id") or "").strip()
+        if not parent_id:
+            continue
+        children.setdefault(parent_id, []).append(task)
+    return children
+
+
+def _parent_task(
+    task: dict[str, Any],
+    task_lookup: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    parent_id = str(task.get("parent_id") or "").strip()
+    return task_lookup.get(parent_id) if parent_id else None
+
+
+def _task_completed(task: dict[str, Any]) -> bool:
+    return bool(task.get("completed") or task.get("is_completed") or task.get("checked"))
+
+
+def _task_is_container(
+    task: dict[str, Any],
+    active_children_by_parent: dict[str, list[dict[str, Any]]],
+) -> bool:
+    task_id = str(task.get("id") or "")
+    if not active_children_by_parent.get(task_id):
+        return False
+    return not _task_explicitly_completeable(task)
+
+
+def _task_explicitly_completeable(task: dict[str, Any]) -> bool:
+    labels = {str(label).strip().lower() for label in task.get("labels") or []}
+    if {"completeable", "completable", "leaf-task"} & labels:
+        return True
+    text = _normalize_text(f"{task.get('content') or ''} {task.get('description') or ''}")
+    return "[completeable]" in text or "[completable]" in text
+
+
+def _project_leaf_tasks(
+    tasks: list[dict[str, Any]],
+    active_children_by_parent: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    return [
+        task
+        for task in tasks
+        if not _task_completed(task) and not _task_is_container(task, active_children_by_parent)
+    ]
+
+
+def _project_rankable_task(task: dict[str, Any]) -> dict[str, Any]:
+    rankable = dict(task)
+    try:
+        todoist_priority = int(task.get("todoist_priority") or 0)
+    except (TypeError, ValueError):
+        todoist_priority = 0
+    try:
+        priority = int(task.get("priority") or 0)
+    except (TypeError, ValueError):
+        priority = 0
+    rankable["priority"] = max(priority, todoist_priority)
+    return rankable
+
+
+def _project_task_groups(
+    tasks: list[dict[str, Any]],
+    task_lookup: dict[str, dict[str, Any]],
+    active_children_by_parent: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    tasks_by_id = {str(task.get("id")): task for task in tasks if task.get("id")}
+    grouped_parent_ids = {
+        str(task.get("parent_id"))
+        for task in tasks
+        if task.get("parent_id") and str(task.get("parent_id")) in task_lookup
+    }
+    roots = [
+        task
+        for task in tasks
+        if not task.get("parent_id") or str(task.get("id")) in grouped_parent_ids
+    ]
+    for parent_id in grouped_parent_ids:
+        parent = task_lookup.get(parent_id)
+        if parent and parent_id not in tasks_by_id:
+            roots.append(parent)
+
+    groups: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for parent in _sort_project_tasks(roots):
+        parent_id = str(parent.get("id") or "")
+        if parent_id in seen:
+            continue
+        seen.add(parent_id)
+        subtasks = [
+            task
+            for task in active_children_by_parent.get(parent_id, [])
+            if str(task.get("id") or "") in tasks_by_id
+        ]
+        groups.append(
+            {
+                "parent_task": _task_item(parent, _todoist_task_section_for(parent)),
+                "subtasks": [
+                    _task_item(task, _todoist_task_section_for(task)) for task in _sort_project_tasks(subtasks)
+                ],
+                "is_container": _task_is_container(parent, active_children_by_parent),
+            }
+        )
+    return groups
+
+
+def _project_task_diagnostics(
+    *,
+    project: dict[str, Any],
+    tasks: list[dict[str, Any]],
+    task_lookup: dict[str, dict[str, Any]],
+    active_children_by_parent: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    diagnostics: list[dict[str, Any]] = []
+    for task in _sort_project_tasks(tasks):
+        parent = _parent_task(task, task_lookup)
+        included = _task_matches_project(task, project, task_lookup) and not _task_completed(task)
+        resolved_project = _resolved_project_name_for_task(task, task_lookup)
+        diagnostics.append(
+            {
+                "task_title": str(task.get("content") or "Untitled task"),
+                "parent_title": str(parent.get("content")) if parent else None,
+                "todoist_section": task.get("todoist_section_name") or task.get("section_name"),
+                "resolved_project": resolved_project,
+                "priority": task.get("todoist_priority") or task.get("priority"),
+                "included": included,
+                "reason": _task_diagnostic_reason(
+                    task=task,
+                    project=project,
+                    parent=parent,
+                    included=included,
+                    active_children_by_parent=active_children_by_parent,
+                ),
+            }
+        )
+    return diagnostics
+
+
+def _task_diagnostic_reason(
+    *,
+    task: dict[str, Any],
+    project: dict[str, Any],
+    parent: dict[str, Any] | None,
+    included: bool,
+    active_children_by_parent: dict[str, list[dict[str, Any]]],
+) -> str:
+    if _task_completed(task):
+        return "excluded: completed"
+    if included and task.get("parent_id"):
+        return "included: subtask inherited project from parent or section"
+    if included and _task_is_container(task, active_children_by_parent):
+        return "included: parent container with active children"
+    if included:
+        return "included: standalone task matched project"
+    if project.get("classification_bucket"):
+        return "excluded: task already has a resolved project"
+    if parent and _task_needs_classification(task, parent=parent):
+        return "excluded: needs classification"
+    return "excluded: matched another project or no project signal"
+
+
+def _resolved_project_name_for_task(
+    task: dict[str, Any],
+    task_lookup: dict[str, dict[str, Any]],
+) -> str:
+    parent = _parent_task(task, task_lookup)
+    for project in PROJECT_DEFINITIONS:
+        if project.get("classification_bucket"):
+            continue
+        if _task_matches_project(task, project, task_lookup):
+            return str(project["name"])
+    if _task_needs_classification(task, parent=parent):
+        return "Needs Classification"
+    return "Uncategorized"
+
+
+def _task_needs_classification(
+    task: dict[str, Any],
+    *,
+    parent: dict[str, Any] | None,
+) -> bool:
+    if parent:
+        for project in PROJECT_DEFINITIONS:
+            if not project.get("classification_bucket") and _task_matches_project(parent, project, {}):
+                return False
+    if _task_section_for(task) != "Misc":
+        return False
+    for project in PROJECT_DEFINITIONS:
+        if not project.get("classification_bucket") and _text_matches_project(_task_match_text(task), project):
+            return False
+    return True
 
 
 def _project_blockers(
@@ -1566,6 +1824,7 @@ def _task_item(task: dict[str, Any], section: str) -> dict[str, Any]:
         "content": str(task.get("content") or ""),
         "description": task.get("description"),
         "section": section,
+        "parent_id": task.get("parent_id"),
         "project_name": task.get("project_name"),
         "section_name": task.get("section_name"),
         "category": task.get("category") or task.get("project_category") or _task_section_for(task),
@@ -1577,11 +1836,7 @@ def _task_item(task: dict[str, Any], section: str) -> dict[str, Any]:
         "due_status": task.get("due_status"),
         "priority": task.get("priority"),
         "todoist_priority": task.get("todoist_priority"),
-        "completed": bool(
-            task.get("completed")
-            or task.get("is_completed")
-            or task.get("checked")
-        ),
+        "completed": _task_completed(task),
         "labels": task.get("labels") or [],
         "url": task.get("url"),
     }

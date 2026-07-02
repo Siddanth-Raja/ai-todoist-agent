@@ -9,6 +9,7 @@ import {
   ArrowLeft,
   CalendarClock,
   CheckCircle2,
+  ChevronDown,
   Clock3,
   ExternalLink,
   ListTodo,
@@ -24,6 +25,8 @@ import {
   type MemoryEntry,
   type ProjectBrain,
   type ProjectBlocker,
+  type ProjectTaskDiagnostic,
+  type ProjectTaskGroup,
   type TaskItem,
 } from "@/lib/api";
 
@@ -98,6 +101,123 @@ function taskDue(task: TaskItem) {
   return "Anytime";
 }
 
+function taskPriority(task: TaskItem) {
+  return task.todoist_priority ?? task.priority ?? "?";
+}
+
+function TaskBadges({ task }: { task: TaskItem }) {
+  return (
+    <div className="mt-2 flex flex-wrap gap-2 text-[0.68rem]">
+      <span className="rounded-full border border-white/10 bg-white/[0.06] px-2 py-1 text-stone-400">
+        {taskDue(task)}
+      </span>
+      <span className="rounded-full border border-white/10 bg-white/[0.06] px-2 py-1 text-stone-400">
+        P{taskPriority(task)}
+      </span>
+      {task.parent_id ? (
+        <span className="rounded-full border border-white/10 bg-white/[0.06] px-2 py-1 text-stone-400">
+          Subtask
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function TaskRow({ task, nested = false }: { task: TaskItem; nested?: boolean }) {
+  return (
+    <article className={`${nested ? "bg-white/[0.035]" : "bg-black/20"} rounded-2xl p-4`}>
+      <div className="flex items-start gap-3">
+        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-moss" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <p className="break-words text-sm font-semibold text-pearl">{task.content}</p>
+          <TaskBadges task={task} />
+        </div>
+        {task.url ? (
+          <a href={task.url} target="_blank" rel="noreferrer" className="text-stone-500 hover:text-moss" aria-label="Open Todoist task">
+            <ExternalLink className="h-4 w-4" aria-hidden="true" />
+          </a>
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+function TaskGroup({ group }: { group: ProjectTaskGroup }) {
+  const hasSubtasks = group.subtasks.length > 0;
+  if (!hasSubtasks) {
+    return <TaskRow task={group.parent_task} />;
+  }
+
+  return (
+    <details className="group rounded-2xl bg-black/20 p-4" open>
+      <summary className="flex cursor-pointer list-none items-start gap-3">
+        <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-stone-500 transition group-open:rotate-0" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="break-words text-sm font-semibold text-pearl">{group.parent_task.content}</p>
+            {group.is_container ? (
+              <span className="rounded-full border border-iris/25 bg-iris/10 px-2 py-1 text-[0.68rem] text-iris">
+                Container
+              </span>
+            ) : null}
+          </div>
+          <TaskBadges task={group.parent_task} />
+        </div>
+        <span className="shrink-0 rounded-full border border-white/10 bg-white/[0.06] px-2 py-1 text-[0.68rem] text-stone-400">
+          {group.subtasks.length}
+        </span>
+      </summary>
+      <div className="mt-3 space-y-2 border-l border-white/10 pl-4">
+        {group.subtasks.map((subtask) => (
+          <TaskRow key={subtask.id ?? subtask.content} task={subtask} nested />
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function DiagnosticRow({ diagnostic }: { diagnostic: ProjectTaskDiagnostic }) {
+  return (
+    <article className="rounded-2xl bg-black/20 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="break-words text-sm font-semibold text-pearl">{diagnostic.task_title}</p>
+          {diagnostic.parent_title ? (
+            <p className="mt-1 break-words text-xs text-stone-500">Parent: {diagnostic.parent_title}</p>
+          ) : null}
+        </div>
+        <span
+          className={`rounded-full border px-2 py-1 text-[0.68rem] ${
+            diagnostic.included
+              ? "border-moss/25 bg-moss/10 text-moss"
+              : "border-stone-500/25 bg-white/[0.045] text-stone-400"
+          }`}
+        >
+          {diagnostic.included ? "Included" : "Excluded"}
+        </span>
+      </div>
+      <dl className="mt-3 grid gap-2 text-xs leading-5 text-stone-400 sm:grid-cols-2">
+        <div>
+          <dt className="text-stone-500">Project</dt>
+          <dd className="break-words">{diagnostic.resolved_project}</dd>
+        </div>
+        <div>
+          <dt className="text-stone-500">Section</dt>
+          <dd className="break-words">{diagnostic.todoist_section ?? "None"}</dd>
+        </div>
+        <div>
+          <dt className="text-stone-500">Priority</dt>
+          <dd>{diagnostic.priority ? `P${diagnostic.priority}` : "None"}</dd>
+        </div>
+        <div>
+          <dt className="text-stone-500">Reason</dt>
+          <dd className="break-words">{diagnostic.reason}</dd>
+        </div>
+      </dl>
+    </article>
+  );
+}
+
 function ActivityRow({ activity }: { activity: ActivityEntry }) {
   return (
     <article className="rounded-2xl bg-black/20 p-4">
@@ -157,7 +277,7 @@ export default function ProjectDetailPage() {
       return [];
     }
     return [
-      { label: "Tasks", value: project.tasks.length },
+      { label: "Tasks", value: project.task_count ?? project.tasks.length },
       { label: "Events", value: project.upcoming_events.length },
       { label: "Blockers", value: project.blockers.length },
       { label: "Memories", value: project.memories.length },
@@ -291,32 +411,12 @@ export default function ProjectDetailPage() {
         </Card>
 
         <Card title="Tasks" icon={<ListTodo className="h-5 w-5" aria-hidden="true" />}>
-          {project.tasks.length === 0 ? (
+          {project.task_groups.length === 0 ? (
             <EmptyState text="No matching Todoist tasks." />
           ) : (
             <div className="space-y-3">
-              {project.tasks.map((task) => (
-                <article key={task.id ?? task.content} className="rounded-2xl bg-black/20 p-4">
-                  <div className="flex items-start gap-3">
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-moss" aria-hidden="true" />
-                    <div className="min-w-0 flex-1">
-                      <p className="break-words text-sm font-semibold text-pearl">{task.content}</p>
-                      <div className="mt-2 flex flex-wrap gap-2 text-[0.68rem]">
-                        <span className="rounded-full border border-white/10 bg-white/[0.06] px-2 py-1 text-stone-400">
-                          {taskDue(task)}
-                        </span>
-                        <span className="rounded-full border border-white/10 bg-white/[0.06] px-2 py-1 text-stone-400">
-                          P{task.todoist_priority ?? task.priority ?? "?"}
-                        </span>
-                      </div>
-                    </div>
-                    {task.url ? (
-                      <a href={task.url} target="_blank" rel="noreferrer" className="text-stone-500 hover:text-moss" aria-label="Open Todoist task">
-                        <ExternalLink className="h-4 w-4" aria-hidden="true" />
-                      </a>
-                    ) : null}
-                  </div>
-                </article>
+              {project.task_groups.map((group) => (
+                <TaskGroup key={group.parent_task.id ?? group.parent_task.content} group={group} />
               ))}
             </div>
           )}
@@ -357,6 +457,20 @@ export default function ProjectDetailPage() {
             <div className="space-y-3">
               {project.recent_activity.map((activity) => (
                 <ActivityRow key={activity.id} activity={activity} />
+              ))}
+            </div>
+          )}
+        </Card>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-1">
+        <Card title="Classification diagnostics" icon={<ListTodo className="h-5 w-5" aria-hidden="true" />}>
+          {project.classification_diagnostics.length === 0 ? (
+            <EmptyState text="No task diagnostics available." />
+          ) : (
+            <div className="grid gap-3 xl:grid-cols-2">
+              {project.classification_diagnostics.slice(0, 40).map((diagnostic, index) => (
+                <DiagnosticRow key={`${diagnostic.task_title}-${diagnostic.parent_title ?? "root"}-${index}`} diagnostic={diagnostic} />
               ))}
             </div>
           )}

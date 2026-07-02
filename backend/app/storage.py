@@ -96,6 +96,12 @@ DEFAULT_MEMORIES = (
         "Client/law firm/dentist/realtor/website tasks go to Freelance.",
     ),
     (
+        "memory-rule-ddn",
+        "classification_rule",
+        "DDN",
+        "DDN can route to Freelance or Personal depending on the current intended project. If unclear, expose it as Needs Classification instead of hiding it.",
+    ),
+    (
         "memory-rule-misc",
         "classification_rule",
         "Misc fallback",

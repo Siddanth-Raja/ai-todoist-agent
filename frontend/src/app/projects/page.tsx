@@ -28,7 +28,7 @@ function statusClass(status: string) {
 
 function projectMetricLabel(project: ProjectBrain) {
   const parts = [
-    `${project.tasks.length} tasks`,
+    `${project.task_count ?? project.tasks.length} tasks`,
     `${project.upcoming_events.length} events`,
     `${project.blockers.length} blockers`,
   ];

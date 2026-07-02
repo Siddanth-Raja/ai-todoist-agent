@@ -472,7 +472,7 @@ class AppSurfaceEndpointTests(unittest.TestCase):
             nebulo = main.project_detail("nebulo", current_time=now, authorization=self.authorization)
             am = main.project_detail("A&M", current_time=now, authorization=self.authorization)
 
-        self.assertEqual(len(projects), 6)
+        self.assertEqual(len(projects), 7)
         self.assertEqual(nebulo["name"], "Nebulo")
         self.assertEqual(nebulo["status"], "Blocked")
         self.assertEqual(nebulo["tasks"][0]["content"], "Waiting on Brandon feedback")
@@ -486,6 +486,113 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         self.assertIn("stale_high_priority_task", blocker_types)
         self.assertTrue(nebulo["next_recommendation"].startswith("Resolve blocker:"))
         self.assertEqual(am["key"], "am")
+
+    def test_projects_include_subtask_hierarchy_and_rank_leaf_tasks(self):
+        now = datetime(2026, 6, 5, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
+        pcos_parent = {
+            "id": "task-pcos-parent",
+            "content": "ai todoist agent",
+            "description": "",
+            "project_name": "To-Do",
+            "section_name": "Misc",
+            "todoist_section_name": "Misc",
+            "category": "Misc",
+            "due": None,
+            "priority": 1,
+            "todoist_priority": 1,
+            "labels": [],
+        }
+        pcos_subtasks = [
+            {
+                "id": f"task-pcos-child-{index}",
+                "content": f"PCOS implementation subtask {index}",
+                "description": "",
+                "project_name": "To-Do",
+                "parent_id": "task-pcos-parent",
+                "section_name": "Misc",
+                "todoist_section_name": "Misc",
+                "category": "Misc",
+                "due": None,
+                "priority": 1,
+                "todoist_priority": 1,
+                "labels": [],
+            }
+            for index in range(1, 17)
+        ]
+        pcos_subtasks[7]["content"] = "Wire Project Brain task hierarchy"
+        pcos_subtasks[7]["priority"] = 4
+        pcos_subtasks[7]["todoist_priority"] = 4
+        pcos_subtasks[10]["content"] = "Completed child should not be next"
+        pcos_subtasks[10]["priority"] = 4
+        pcos_subtasks[10]["todoist_priority"] = 4
+        pcos_subtasks[10]["completed"] = True
+        freelance_task = {
+            "id": "task-ddn-freelance",
+            "content": "brainstorm features for DDN and ask Rithika to connect",
+            "description": "",
+            "project_name": "To-Do",
+            "section_name": "Freelance Web Design",
+            "todoist_section_name": "Freelance Web Design",
+            "category": "Freelance",
+            "due": None,
+            "priority": 4,
+            "todoist_priority": 4,
+            "labels": [],
+        }
+        unknown_ddn_task = {
+            "id": "task-ddn-unknown",
+            "content": "Clarify DDN plan",
+            "description": "",
+            "project_name": "To-Do",
+            "section_name": "Misc",
+            "todoist_section_name": "Misc",
+            "category": "Misc",
+            "due": None,
+            "priority": 4,
+            "todoist_priority": 4,
+            "labels": [],
+        }
+        tasks = [pcos_parent, *pcos_subtasks, freelance_task, unknown_ddn_task]
+
+        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)), patch(
+            "app.main.list_upcoming_events",
+            return_value=CalendarReadResult(events=[]),
+        ):
+            pcos = main.project_detail("pcos", current_time=now, authorization=self.authorization)
+            freelance = main.project_detail("freelance", current_time=now, authorization=self.authorization)
+            needs_classification = main.project_detail(
+                "needs-classification",
+                current_time=now,
+                authorization=self.authorization,
+            )
+
+        pcos_group = next(
+            group for group in pcos["task_groups"] if group["parent_task"]["id"] == "task-pcos-parent"
+        )
+        self.assertTrue(pcos_group["is_container"])
+        self.assertEqual(len(pcos_group["subtasks"]), 15)
+        self.assertEqual(pcos["task_count"], 16)
+        self.assertIn("Wire Project Brain task hierarchy", pcos["next_recommendation"])
+        self.assertNotIn("ai todoist agent", pcos["next_recommendation"])
+        self.assertFalse(
+            any(task["content"] == "Completed child should not be next" for task in pcos_group["subtasks"])
+        )
+
+        self.assertTrue(
+            any(task["content"] == "brainstorm features for DDN and ask Rithika to connect" for task in freelance["tasks"])
+        )
+        self.assertIn("brainstorm features for DDN", freelance["next_recommendation"])
+
+        self.assertEqual(needs_classification["task_count"], 1)
+        self.assertEqual(needs_classification["tasks"][0]["content"], "Clarify DDN plan")
+        self.assertTrue(
+            any(
+                diagnostic["task_title"] == "Clarify DDN plan"
+                and diagnostic["resolved_project"] == "Needs Classification"
+                and diagnostic["included"]
+                for diagnostic in needs_classification["classification_diagnostics"]
+            )
+        )
 
     def test_calendar_endpoint_returns_labels_and_conflicts(self):
         events = [

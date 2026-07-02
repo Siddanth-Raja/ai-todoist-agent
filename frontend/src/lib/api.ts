@@ -38,6 +38,7 @@ export type TaskItem = {
   content: string;
   description?: string | null;
   section: string;
+  parent_id?: string | null;
   project_name?: string | null;
   section_name?: string | null;
   category?: string | null;
@@ -172,14 +173,33 @@ export type ProjectBlocker = {
   source_id: string | null;
 };
 
+export type ProjectTaskDiagnostic = {
+  task_title: string;
+  parent_title: string | null;
+  todoist_section: string | null;
+  resolved_project: string;
+  priority: number | null;
+  included: boolean;
+  reason: string;
+};
+
+export type ProjectTaskGroup = {
+  parent_task: TaskItem;
+  subtasks: TaskItem[];
+  is_container: boolean;
+};
+
 export type ProjectBrain = {
   key: string;
   name: string;
   description: string;
   status: string;
+  task_count: number;
   next_recommendation: string;
   blockers: ProjectBlocker[];
   tasks: TaskItem[];
+  task_groups: ProjectTaskGroup[];
+  classification_diagnostics: ProjectTaskDiagnostic[];
   upcoming_events: CalendarEvent[];
   people: string[];
   memories: MemoryEntry[];

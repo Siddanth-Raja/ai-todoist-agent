@@ -1,4 +1,5 @@
 from datetime import datetime, time, timedelta
+import re
 from typing import Any, Literal
 
 import requests
@@ -85,6 +86,104 @@ LIFE_AREA_DESCRIPTIONS = {
     "Personal": "gym, health, shopping, errands, car, life admin",
     "Misc": "uncategorized",
 }
+
+PROJECT_DEFINITIONS = (
+    {
+        "key": "pcos-ai-todoist-agent",
+        "name": "PCOS / ai todoist agent",
+        "description": "Personal Chief of Staff system, Todoist agent, local app, and assistant behavior.",
+        "life_area": None,
+        "keywords": (
+            "pcos",
+            "personal chief of staff",
+            "chief of staff",
+            "ai todoist agent",
+            "todoist agent",
+            "agent api",
+            "assistant behavior",
+            "settings health",
+        ),
+        "people": (),
+    },
+    {
+        "key": "nebulo",
+        "name": "Nebulo",
+        "description": "AI context control, private storage, product work, and Brandon-related follow-through.",
+        "life_area": "Nebulo",
+        "keywords": ("nebulo", "brandon", "context control", "context-control", "private storage"),
+        "people": ("Brandon",),
+    },
+    {
+        "key": "xo",
+        "name": "XO",
+        "description": "VR, prototype, headset, worldbuilding, Ashwin, and Charlie.",
+        "life_area": "XO",
+        "keywords": ("xo", "xo collective", "vr", "headset", "prototype", "ashwin", "charlie"),
+        "people": ("Ashwin", "Charlie"),
+    },
+    {
+        "key": "freelance",
+        "name": "Freelance",
+        "description": "Client outreach, websites, proposals, invoices, and delivery work.",
+        "life_area": "Freelance",
+        "keywords": (
+            "freelance",
+            "client",
+            "website",
+            "law firm",
+            "dentist",
+            "realtor",
+            "invoice",
+            "proposal",
+        ),
+        "people": (),
+    },
+    {
+        "key": "am",
+        "name": "A&M",
+        "description": "College, TAMU, Blinn, housing, registration, classes, and roommate context.",
+        "life_area": "A&M",
+        "keywords": ("a&m", "a and m", "tamu", "blinn", "college", "housing", "classes", "nikhil", "andy", "kamden"),
+        "people": ("Nikhil", "Andy", "Kamden"),
+    },
+    {
+        "key": "personal",
+        "name": "Personal",
+        "description": "Gym, health, shopping, errands, car, family, and life admin.",
+        "life_area": "Personal",
+        "keywords": (
+            "personal",
+            "gym",
+            "health",
+            "shopping",
+            "target",
+            "errand",
+            "car",
+            "family",
+            "life admin",
+            "sam",
+            "jai",
+            "krrish",
+        ),
+        "people": ("Sam", "Jai", "Krrish"),
+    },
+)
+PROJECT_ALIASES = {
+    "pcos": "pcos-ai-todoist-agent",
+    "ai-todoist-agent": "pcos-ai-todoist-agent",
+    "ai todoist agent": "pcos-ai-todoist-agent",
+    "personal-chief-of-staff": "pcos-ai-todoist-agent",
+    "chief-of-staff": "pcos-ai-todoist-agent",
+    "chief of staff": "pcos-ai-todoist-agent",
+    "aandm": "am",
+    "a-and-m": "am",
+    "a&m": "am",
+    "a and m": "am",
+    "tamu": "am",
+    "college": "am",
+}
+BLOCKER_WORDS = ("blocked", "blocking", "waiting", "review", "feedback")
+FOLLOW_UP_WORDS = ("follow up", "follow-up", "waiting", "pending", "review", "feedback")
 
 
 class MemoryCreate(BaseModel):
@@ -297,6 +396,28 @@ class TodayResponse(BaseModel):
     recommendation: TodayRecommendation
     life_areas: list[LifeArea]
     errors: list[str] = Field(default_factory=list)
+
+
+class ProjectBlocker(BaseModel):
+    type: str
+    title: str
+    detail: str | None = None
+    severity: Literal["warning", "critical"] = "warning"
+    source_id: str | None = None
+
+
+class ProjectBrain(BaseModel):
+    key: str
+    name: str
+    description: str
+    status: str
+    next_recommendation: str
+    blockers: list[ProjectBlocker] = Field(default_factory=list)
+    tasks: list[TaskItem] = Field(default_factory=list)
+    upcoming_events: list[CalendarEvent] = Field(default_factory=list)
+    people: list[str] = Field(default_factory=list)
+    memories: list[MemoryEntry] = Field(default_factory=list)
+    recent_activity: list[ActivityEntry] = Field(default_factory=list)
 
 
 @app.get("/health")
@@ -717,6 +838,476 @@ def today_index(
     }
 
 
+@app.get("/projects", response_model=list[ProjectBrain])
+def projects_index(
+    current_time: datetime | None = None,
+    authorization: str | None = Header(default=None),
+) -> list[dict[str, Any]]:
+    require_agent_api_key(authorization)
+    return _project_brains(current_time=current_time)
+
+
+@app.get("/projects/{project_key}", response_model=ProjectBrain)
+def project_detail(
+    project_key: str,
+    current_time: datetime | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_agent_api_key(authorization)
+    canonical_key = _canonical_project_key(project_key)
+    project = next(
+        (item for item in _project_brains(current_time=current_time) if item["key"] == canonical_key),
+        None,
+    )
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+
+def _canonical_project_key(project_key: str) -> str:
+    normalized = _slug_text(project_key)
+    return PROJECT_ALIASES.get(normalized, normalized)
+
+
+def _project_brains(current_time: datetime | None = None) -> list[dict[str, Any]]:
+    settings = get_settings()
+    local_now = current_time.astimezone(settings.local_tz) if current_time else datetime.now(settings.local_tz)
+
+    todoist_result = list_active_tasks(settings)
+    enriched_tasks = [
+        enrich_task(task, local_now.date()) for task in todoist_result.tasks if task.get("content")
+    ]
+    calendar_result = list_upcoming_events(settings, now=current_time, days=14)
+    upcoming_events = _future_events(calendar_result.events, local_now)
+    memories = [memory for memory in list_memory_entries() if memory.get("enabled")]
+    activity = list_activity(limit=200)
+
+    return [
+        _project_brain(
+            project=project,
+            tasks=enriched_tasks,
+            events=upcoming_events,
+            memories=memories,
+            activity=activity,
+            now=local_now,
+        )
+        for project in PROJECT_DEFINITIONS
+    ]
+
+
+def _project_brain(
+    *,
+    project: dict[str, Any],
+    tasks: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    memories: list[dict[str, Any]],
+    activity: list[dict[str, Any]],
+    now: datetime,
+) -> dict[str, Any]:
+    project_tasks = [task for task in tasks if _task_matches_project(task, project)]
+    project_events = [event for event in events if _event_matches_project(event, project)]
+    project_memories = [memory for memory in memories if _memory_matches_project(memory, project)]
+    project_activity = [entry for entry in activity if _activity_matches_project(entry, project)]
+    people = _project_people(project, project_memories)
+
+    ranked_tasks = rank_tasks(
+        project_tasks,
+        free_block=None,
+        user_energy="medium",
+        focus_category=project.get("life_area"),
+        today=now.date(),
+    )
+    sorted_tasks = _sort_project_tasks(project_tasks)
+    sorted_events = sorted(project_events, key=_event_start)
+    blockers = _project_blockers(
+        project=project,
+        tasks=sorted_tasks,
+        events=sorted_events,
+        ranked_tasks=ranked_tasks,
+        now=now,
+    )
+
+    return {
+        "key": project["key"],
+        "name": project["name"],
+        "description": project["description"],
+        "status": _project_status(blockers=blockers, tasks=sorted_tasks, events=sorted_events),
+        "next_recommendation": _project_next_recommendation(
+            blockers=blockers,
+            ranked_tasks=ranked_tasks,
+            events=sorted_events,
+            memories=project_memories,
+        ),
+        "blockers": blockers[:8],
+        "tasks": [
+            _task_item(task, _todoist_task_section_for(task)) for task in sorted_tasks[:12]
+        ],
+        "upcoming_events": [_project_event_item(event) for event in sorted_events[:8]],
+        "people": people,
+        "memories": project_memories[:8],
+        "recent_activity": project_activity[:8],
+    }
+
+
+def _task_matches_project(task: dict[str, Any], project: dict[str, Any]) -> bool:
+    life_area = project.get("life_area")
+    if life_area and _task_section_for(task) == life_area:
+        return True
+
+    return _text_matches_project(_task_match_text(task), project)
+
+
+def _event_matches_project(event: dict[str, Any], project: dict[str, Any]) -> bool:
+    explicit_project = event.get("resolved_project") or event.get("project") or event.get("project_key")
+    if explicit_project:
+        explicit = _canonical_project_key(str(explicit_project))
+        if explicit == project["key"] or _slug_text(str(explicit_project)) == _slug_text(project["name"]):
+            return True
+
+    title = str(event.get("title") or "")
+    prefix_match = re.match(r"^(.+?)\s+[\u2014-]\s+", title)
+    if prefix_match:
+        prefix = _canonical_project_key(prefix_match.group(1))
+        if prefix == project["key"]:
+            return True
+
+    return _text_matches_project(_event_match_text(event), project)
+
+
+def _memory_matches_project(memory: dict[str, Any], project: dict[str, Any]) -> bool:
+    memory_type = str(memory.get("type") or "").lower()
+    title = str(memory.get("title") or "")
+    if memory_type == "project" and _same_project_name(title, project):
+        return True
+    if memory_type in {"person", "group"} and _slug_text(title) in {
+        _slug_text(person) for person in project.get("people", ())
+    }:
+        return True
+    return _text_matches_project(_memory_match_text(memory), project)
+
+
+def _activity_matches_project(entry: dict[str, Any], project: dict[str, Any]) -> bool:
+    payload = entry.get("payload") or entry.get("metadata") or {}
+    if isinstance(payload, dict):
+        payload_project = (
+            payload.get("resolved_project")
+            or payload.get("project")
+            or payload.get("project_key")
+            or payload.get("project_context")
+        )
+        task_payload = payload.get("task") if isinstance(payload.get("task"), dict) else {}
+        event_payload = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        section_name = (
+            task_payload.get("section_name")
+            or task_payload.get("todoist_section_name")
+            or payload.get("section_name")
+        )
+        if payload_project and _canonical_project_key(str(payload_project)) == project["key"]:
+            return True
+        if section_name and project.get("life_area") == life_area_for_todoist_section(str(section_name)):
+            return True
+        if event_payload and _text_matches_project(_event_match_text(event_payload), project):
+            return True
+
+    return _text_matches_project(_activity_match_text(entry), project)
+
+
+def _text_matches_project(text: str, project: dict[str, Any]) -> bool:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return False
+
+    if _contains_phrase(normalized, str(project.get("name") or "")):
+        return True
+    for keyword in project.get("keywords", ()):
+        if _contains_phrase(normalized, str(keyword)):
+            return True
+    for person in project.get("people", ()):
+        if _contains_phrase(normalized, str(person)):
+            return True
+    return False
+
+
+def _same_project_name(value: str, project: dict[str, Any]) -> bool:
+    return _canonical_project_key(value) == project["key"] or _slug_text(value) == _slug_text(project["name"])
+
+
+def _project_people(project: dict[str, Any], memories: list[dict[str, Any]]) -> list[str]:
+    people = {str(person) for person in project.get("people", ())}
+    for memory in memories:
+        if str(memory.get("type") or "").lower() != "person":
+            continue
+        title = str(memory.get("title") or "").strip()
+        if title:
+            people.add(title)
+    return sorted(people)
+
+
+def _project_blockers(
+    *,
+    project: dict[str, Any],
+    tasks: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    ranked_tasks: list[dict[str, Any]],
+    now: datetime,
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+
+    for task in tasks:
+        content = str(task.get("content") or "Untitled task")
+        if task.get("due_status") == "overdue":
+            blockers.append(
+                {
+                    "type": "overdue_task",
+                    "title": content,
+                    "detail": "Overdue Todoist task",
+                    "severity": "critical",
+                    "source_id": task.get("id"),
+                }
+            )
+        if _is_stale_high_priority_task(task, now):
+            blockers.append(
+                {
+                    "type": "stale_high_priority_task",
+                    "title": content,
+                    "detail": "High-priority task has been open for more than 7 days",
+                    "severity": "warning",
+                    "source_id": task.get("id"),
+                }
+            )
+        blocker_word = _first_matching_phrase(_task_match_text(task), BLOCKER_WORDS)
+        if blocker_word:
+            blockers.append(
+                {
+                    "type": "blocked_task",
+                    "title": content,
+                    "detail": f"Task mentions {blocker_word}",
+                    "severity": "warning",
+                    "source_id": task.get("id"),
+                }
+            )
+
+    for event in events:
+        follow_up_word = _first_matching_phrase(_event_match_text(event), FOLLOW_UP_WORDS)
+        if follow_up_word:
+            blockers.append(
+                {
+                    "type": "pending_meeting_follow_up",
+                    "title": str(event.get("title") or "Calendar event"),
+                    "detail": f"Upcoming event mentions {follow_up_word}",
+                    "severity": "warning",
+                    "source_id": event.get("id"),
+                }
+            )
+
+    if events and not ranked_tasks:
+        blockers.append(
+            {
+                "type": "empty_next_step",
+                "title": "No next task before upcoming event",
+                "detail": f"{project['name']} has calendar context but no matching Todoist next step",
+                "severity": "warning",
+                "source_id": None,
+            }
+        )
+
+    return _dedupe_blockers(blockers)
+
+
+def _project_status(
+    *,
+    blockers: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+) -> str:
+    if any(blocker.get("severity") == "critical" for blocker in blockers):
+        return "Blocked"
+    if blockers:
+        return "Needs attention"
+    if tasks or events:
+        return "Active"
+    return "Quiet"
+
+
+def _project_next_recommendation(
+    *,
+    blockers: list[dict[str, Any]],
+    ranked_tasks: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    memories: list[dict[str, Any]],
+) -> str:
+    if blockers:
+        first = blockers[0]
+        return f"Resolve blocker: {first['title']}"
+    if ranked_tasks:
+        return f"Work next: {ranked_tasks[0].get('content')}"
+    if events:
+        return f"Prepare for: {events[0].get('title') or 'upcoming event'}"
+    if memories:
+        return "Add a concrete next task from the saved context."
+    return "Add a concrete next task."
+
+
+def _future_events(events: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
+    future = [event for event in events if _event_end(event) >= now]
+    future.sort(key=_event_start)
+    return future
+
+
+def _sort_project_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    due_order = {"overdue": 0, "today": 1, "tomorrow": 2, "this_week": 3, "later": 4}
+    return sorted(
+        tasks,
+        key=lambda task: (
+            due_order.get(str(task.get("due_status") or ""), 5),
+            -int(task.get("todoist_priority") or task.get("priority") or 0),
+            str(task.get("due_date") or "9999-12-31"),
+            str(task.get("content") or "").lower(),
+        ),
+    )
+
+
+def _project_event_item(event: dict[str, Any]) -> dict[str, Any]:
+    start = _event_start(event)
+    end = _event_end(event)
+    return {
+        "id": event.get("id"),
+        "title": event.get("title") or "(No title)",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "duration_minutes": int(event.get("duration_minutes") or _ceil_minutes_between(start, end)),
+        "all_day": bool(event.get("all_day")),
+        "busy": bool(event.get("busy")),
+        "event_type": event.get("event_type") or _calendar_event_category(event),
+        "event_category": _calendar_event_category(event),
+        "status": event.get("status"),
+        "transparency": event.get("transparency"),
+        "attendees_count": event.get("attendees_count"),
+        "location": event.get("location"),
+        "html_link": event.get("html_link"),
+    }
+
+
+def _is_stale_high_priority_task(task: dict[str, Any], now: datetime) -> bool:
+    if not _is_high_priority_task(task):
+        return False
+    created_at = _parse_datetime(task.get("created_at"))
+    if not created_at:
+        return False
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=now.tzinfo)
+    return (now - created_at.astimezone(now.tzinfo)).days >= 7
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _dedupe_blockers(blockers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, str | None]] = set()
+    deduped: list[dict[str, Any]] = []
+    for blocker in blockers:
+        key = (str(blocker.get("type")), str(blocker.get("title")), blocker.get("source_id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(blocker)
+    return deduped
+
+
+def _task_match_text(task: dict[str, Any]) -> str:
+    return " ".join(
+        str(part or "")
+        for part in (
+            task.get("content"),
+            task.get("description"),
+            task.get("project_name"),
+            task.get("section_name"),
+            task.get("todoist_section_name"),
+            task.get("category"),
+            " ".join(str(label) for label in task.get("labels") or []),
+        )
+    )
+
+
+def _event_match_text(event: dict[str, Any]) -> str:
+    return " ".join(
+        str(part or "")
+        for part in (
+            event.get("title"),
+            event.get("summary"),
+            event.get("description"),
+            event.get("location"),
+            event.get("resolved_project"),
+            event.get("project"),
+            event.get("project_key"),
+        )
+    )
+
+
+def _memory_match_text(memory: dict[str, Any]) -> str:
+    return " ".join(str(memory.get(part) or "") for part in ("type", "title", "content"))
+
+
+def _activity_match_text(entry: dict[str, Any]) -> str:
+    return " ".join(
+        str(part or "")
+        for part in (
+            entry.get("type"),
+            entry.get("action_type"),
+            entry.get("title"),
+            entry.get("description"),
+            entry.get("detail"),
+            entry.get("source"),
+            _flatten_text(entry.get("payload") or entry.get("metadata")),
+        )
+    )
+
+
+def _flatten_text(value: Any) -> str:
+    if isinstance(value, dict):
+        return " ".join(_flatten_text(item) for item in value.values())
+    if isinstance(value, list):
+        return " ".join(_flatten_text(item) for item in value)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _normalize_text(value: str) -> str:
+    return " ".join(value.lower().replace("_", " ").replace("-", " ").split())
+
+
+def _slug_text(value: str) -> str:
+    text = value.lower().replace("&", " and ")
+    text = text.replace("_", " ").replace("-", " ")
+    return "-".join(re.sub(r"[^a-z0-9]+", " ", text).split())
+
+
+def _contains_phrase(text: str, phrase: str) -> bool:
+    normalized_phrase = _normalize_text(phrase)
+    if not normalized_phrase:
+        return False
+    if len(normalized_phrase) <= 3:
+        return re.search(rf"(?<![a-z0-9]){re.escape(normalized_phrase)}(?![a-z0-9])", text) is not None
+    return normalized_phrase in text
+
+
+def _first_matching_phrase(text: str, phrases: tuple[str, ...]) -> str | None:
+    normalized = _normalize_text(text)
+    for phrase in phrases:
+        if _contains_phrase(normalized, phrase):
+            return phrase
+    return None
+
+
 def _future_today_events(events: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
     end_of_day = datetime.combine(now.date() + timedelta(days=1), time.min, tzinfo=now.tzinfo)
     remaining = [
@@ -1114,6 +1705,15 @@ def _log_chat_activity(response: dict[str, Any]) -> None:
                     title=f"Calendar event created: {event.get('title') or 'Calendar event'}",
                     detail=event.get("start"),
                     source="google_calendar",
+                    payload=action,
+                )
+            elif action_type == "create_many_todoist_subtasks":
+                parent_title = action.get("parent_task_title") or "Todoist parent task"
+                log_activity(
+                    action_type="subtasks_created",
+                    title=f"Subtasks created: {parent_title}",
+                    detail=f"{action.get('task_count') or 0} created",
+                    source="todoist",
                     payload=action,
                 )
             elif action_type == "update_calendar_event":

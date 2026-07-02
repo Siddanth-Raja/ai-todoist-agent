@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
@@ -28,9 +29,19 @@ import {
 const lifeAreaGradients: Record<string, string> = {
   "A&M": "from-rose-300/20 via-white/[0.055] to-white/[0.035]",
   XO: "from-sky-300/20 via-white/[0.055] to-white/[0.035]",
+  Nebulo: "from-iris/20 via-white/[0.055] to-white/[0.035]",
   Freelance: "from-moss/20 via-white/[0.055] to-white/[0.035]",
   Personal: "from-gold/20 via-white/[0.055] to-white/[0.035]",
   Misc: "from-iris/20 via-white/[0.055] to-white/[0.035]",
+};
+
+const projectHrefByLifeArea: Record<string, string> = {
+  "A&M": "/projects/am",
+  XO: "/projects/xo",
+  Nebulo: "/projects/nebulo",
+  Freelance: "/projects/freelance",
+  Personal: "/projects/personal",
+  Misc: "/projects",
 };
 
 function getGreeting(hour: number) {
@@ -418,8 +429,9 @@ export default function TodayPage() {
                 </article>
               ))
             : lifeAreas.map((area) => (
-                <article
+                <Link
                   key={area.name}
+                  href={projectHrefByLifeArea[area.name] ?? "/projects"}
                   className={`min-h-60 rounded-[2rem] border border-white/10 bg-gradient-to-br ${gradientForLifeArea(area.name)} p-5 shadow-card backdrop-blur-2xl`}
                 >
                   <div className="flex h-full flex-col justify-between gap-8">
@@ -445,7 +457,7 @@ export default function TodayPage() {
                       ))}
                     </div>
                   </div>
-                </article>
+                </Link>
               ))}
         </div>
       </section>

@@ -408,6 +408,85 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         self.assertIn("5:45 PM", payload["now_display"])
         self.assertEqual(payload["minutes_until_next_event"], 45)
 
+    def test_projects_endpoint_builds_project_brain(self):
+        now = datetime(2026, 6, 5, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
+        tasks = [
+            {
+                "id": "task-nebulo",
+                "content": "Waiting on Brandon feedback",
+                "description": "Blocked until review lands",
+                "project_name": "To-Do",
+                "section_name": "Nebulo",
+                "section_id": "section-nebulo",
+                "todoist_section_name": "Nebulo",
+                "todoist_section_id": "section-nebulo",
+                "category": "Nebulo",
+                "classification_source": "todoist_section",
+                "due": {"date": "2026-06-04"},
+                "priority": 1,
+                "todoist_priority": 4,
+                "created_at": "2026-05-20T12:00:00-05:00",
+                "labels": [],
+            },
+            {
+                "id": "task-xo",
+                "content": "Review headset prototype",
+                "description": "",
+                "project_name": "To-Do",
+                "section_name": "XO Collective",
+                "todoist_section_name": "XO Collective",
+                "category": "XO",
+                "due": None,
+                "priority": 1,
+                "todoist_priority": 2,
+                "labels": [],
+            },
+        ]
+        events = [
+            self._calendar_event(
+                "event-nebulo",
+                "Nebulo review with Brandon",
+                "2026-06-06T13:00:00-05:00",
+                "2026-06-06T13:30:00-05:00",
+            ),
+            self._calendar_event(
+                "event-pcos",
+                "PCOS Project Brain QA",
+                "2026-06-07T14:00:00-05:00",
+                "2026-06-07T15:00:00-05:00",
+            ),
+        ]
+        main.log_activity(
+            action_type="calendar_event_updated",
+            title="Calendar event updated: Nebulo review with Brandon",
+            detail="2026-06-06T13:00:00-05:00",
+            source="google_calendar",
+            payload={"type": "update_calendar_event", "event": events[0]},
+        )
+
+        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)), patch(
+            "app.main.list_upcoming_events",
+            return_value=CalendarReadResult(events=events),
+        ):
+            projects = main.projects_index(current_time=now, authorization=self.authorization)
+            nebulo = main.project_detail("nebulo", current_time=now, authorization=self.authorization)
+            am = main.project_detail("A&M", current_time=now, authorization=self.authorization)
+
+        self.assertEqual(len(projects), 6)
+        self.assertEqual(nebulo["name"], "Nebulo")
+        self.assertEqual(nebulo["status"], "Blocked")
+        self.assertEqual(nebulo["tasks"][0]["content"], "Waiting on Brandon feedback")
+        self.assertEqual(nebulo["upcoming_events"][0]["title"], "Nebulo review with Brandon")
+        self.assertIn("Brandon", nebulo["people"])
+        self.assertTrue(any(memory["title"] == "Nebulo" for memory in nebulo["memories"]))
+        self.assertTrue(any(activity["title"].startswith("Calendar event updated") for activity in nebulo["recent_activity"]))
+        blocker_types = {blocker["type"] for blocker in nebulo["blockers"]}
+        self.assertIn("overdue_task", blocker_types)
+        self.assertIn("blocked_task", blocker_types)
+        self.assertIn("stale_high_priority_task", blocker_types)
+        self.assertTrue(nebulo["next_recommendation"].startswith("Resolve blocker:"))
+        self.assertEqual(am["key"], "am")
+
     def test_calendar_endpoint_returns_labels_and_conflicts(self):
         events = [
             {

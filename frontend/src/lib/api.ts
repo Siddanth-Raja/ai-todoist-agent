@@ -164,6 +164,28 @@ export type TodayResponse = {
   errors: string[];
 };
 
+export type ProjectBlocker = {
+  type: string;
+  title: string;
+  detail: string | null;
+  severity: "warning" | "critical";
+  source_id: string | null;
+};
+
+export type ProjectBrain = {
+  key: string;
+  name: string;
+  description: string;
+  status: string;
+  next_recommendation: string;
+  blockers: ProjectBlocker[];
+  tasks: TaskItem[];
+  upcoming_events: CalendarEvent[];
+  people: string[];
+  memories: MemoryEntry[];
+  recent_activity: ActivityEntry[];
+};
+
 export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
   const settings = readAgentSettings();
   if (!settings.apiKey) {

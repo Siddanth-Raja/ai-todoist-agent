@@ -226,7 +226,7 @@ function CalendarUpdateActionCard({ action }: { action: ChatAction }) {
   return (
     <div className="rounded-lg border border-moss/30 bg-moss/10 p-4">
       <div className="mb-3 flex items-center gap-2 text-sm font-medium text-moss">
-        <CalendarPlus className="h-4 w-4" aria-hidden="true" />
+        <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
         Calendar event updated
       </div>
       <dl className="space-y-2">
@@ -271,6 +271,7 @@ function BulkTodoistSubtasksActionCard({ action }: { action: ChatAction }) {
   const parentTitle = getString(action, "parent_task_title") || "parent task";
   const section = getString(action, "section_name");
   const count = getNumber(action, "task_count") ?? getArray(action, "tasks").length;
+  const tasks = getArray(action, "tasks");
   const skipped = getArray(action, "skipped");
 
   return (
@@ -285,6 +286,34 @@ function BulkTodoistSubtasksActionCard({ action }: { action: ChatAction }) {
         <FieldRow label="Created" value={count} />
         <FieldRow label="Skipped" value={skipped.length || null} />
       </dl>
+      {tasks.length > 0 ? (
+        <div className="mt-3 rounded-lg border border-white/10 bg-black/20 p-3">
+          <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-stone-500">Created</p>
+          <ul className="max-h-44 space-y-2 overflow-y-auto pr-1 text-xs leading-5 text-stone-200">
+            {tasks.slice(0, 20).map((task, index) => (
+              <li key={index} className="flex gap-2">
+                <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-moss" aria-hidden="true" />
+                <span className="min-w-0 break-words">
+                  {getString(task, "content") || getString(getRecord(task, "task"), "content") || "Untitled task"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {skipped.length > 0 ? (
+        <div className="mt-3 rounded-lg border border-gold/25 bg-gold/10 p-3">
+          <p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-gold">Skipped</p>
+          <ul className="space-y-2 text-xs leading-5 text-stone-200">
+            {skipped.slice(0, 8).map((task, index) => (
+              <li key={index} className="break-words">
+                {getString(task, "content") || "Untitled task"}
+                {getString(task, "reason") ? ` - ${getString(task, "reason")}` : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

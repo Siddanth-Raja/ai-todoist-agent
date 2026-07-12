@@ -3,7 +3,7 @@ from typing import Any
 
 from .planner import enrich_task
 from .project_registry import ProjectRegistrySnapshot
-from .work_domain import NormalizedWorkItem, WorkPriority, WorkStatus
+from .work_domain import NormalizedWorkItem, WorkEnergy, WorkPriority, WorkStatus
 
 
 TODOIST_PROVIDER = "todoist"
@@ -94,6 +94,10 @@ class TodoistWorkAdapter:
                 if enriched.get("project_id") is not None
                 else None
             ),
+            estimated_duration_minutes=_positive_int(
+                enriched.get("estimated_duration")
+            ),
+            energy_requirement=_work_energy(enriched.get("energy_level")),
             provider_metadata=enriched,
         )
 
@@ -181,6 +185,21 @@ def _parse_datetime(value: Any) -> datetime | None:
         return None
     try:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _work_energy(value: Any) -> WorkEnergy | None:
+    try:
+        return WorkEnergy(str(value).strip().lower())
     except ValueError:
         return None
 

@@ -19,6 +19,7 @@ from app.todoist_work_adapter import (  # noqa: E402
 from app.work_domain import (  # noqa: E402
     NormalizedWorkItem,
     WorkDependency,
+    WorkEnergy,
     WorkPriority,
     WorkStatus,
 )
@@ -129,6 +130,8 @@ class TodoistWorkAdapterTests(unittest.TestCase):
         self.assertEqual(work.created_at.isoformat(), "2026-07-01T10:00:00-05:00")
         self.assertEqual(work.updated_at.isoformat(), "2026-07-11T11:00:00-05:00")
         self.assertEqual(work.provider_reference, "todo-project")
+        self.assertEqual(work.estimated_duration_minutes, 15)
+        self.assertEqual(work.energy_requirement, WorkEnergy.LOW)
         self.assertEqual(work.provider_url, task["url"])
         self.assertEqual(
             work.provider_metadata["provider_metadata"],

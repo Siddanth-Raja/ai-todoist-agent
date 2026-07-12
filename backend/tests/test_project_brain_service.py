@@ -13,9 +13,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.calendar_tools import CalendarReadResult  # noqa: E402
 from app.project_brain import ProjectBrainService  # noqa: E402
 from app.project_registry import project_registry_service  # noqa: E402
+from app.recommendation_service import recommendation_service  # noqa: E402
 from app.storage import create_canonical_project, ensure_database  # noqa: E402
 from app.todoist_tools import TodoistReadResult  # noqa: E402
 from app.todoist_work_adapter import todoist_work_adapter  # noqa: E402
+from app.work_domain import (  # noqa: E402
+    NormalizedWorkItem,
+    WorkDependency,
+    WorkPriority,
+    WorkStatus,
+)
 
 
 @dataclass
@@ -128,6 +135,81 @@ class ProjectBrainServiceTests(unittest.TestCase):
         self.assertTrue(brain["task_groups"][0]["is_container"])
         self.assertEqual(brain["task_groups"][0]["parent_task"]["id"], "parent")
         self.assertEqual(brain["task_groups"][0]["subtasks"][0]["id"], "child")
+
+    def test_build_project_uses_shared_recommendation_service_without_contract_leak(self):
+        project = self.registry.get_project_definition("nebulo")
+        tasks = todoist_work_adapter.adapt_many(
+            [
+                {
+                    "id": "nebulo-next",
+                    "content": "Ship Nebulo demo",
+                    "description": "",
+                    "section_name": "Nebulo",
+                    "todoist_section_name": "Nebulo",
+                    "category": "Nebulo",
+                    "priority": 4,
+                    "todoist_priority": 4,
+                    "labels": [],
+                }
+            ],
+            registry=self.registry,
+            today=self.now.date(),
+        )
+
+        with patch(
+            "app.project_brain.recommendation_service.recommend_project_next_move",
+            wraps=recommendation_service.recommend_project_next_move,
+        ) as recommend:
+            brain = self.service.build_project(
+                project=project,
+                tasks=tasks,
+                events=[],
+                memories=[],
+                activity=[],
+                now=self.now,
+                registry=self.registry,
+            )
+
+        recommend.assert_called_once()
+        self.assertIsInstance(recommend.call_args.args[0][0], NormalizedWorkItem)
+        self.assertEqual(brain["next_recommendation"], "Work next: Ship Nebulo demo")
+        self.assertNotIn("recommendation", brain)
+        self.assertNotIn("provider_record_id", brain["tasks"][0])
+        self.assertNotIn("canonical_project_id", brain["tasks"][0])
+
+    def test_build_project_surfaces_explicit_blocker_resolution_distinctly(self):
+        project = self.registry.get_project_definition("nebulo")
+        blocked = NormalizedWorkItem(
+            provider="linear",
+            provider_record_id="SID-999",
+            canonical_project_id=project["canonical_project_id"],
+            title="Ship release",
+            status=WorkStatus.OPEN,
+            priority=WorkPriority.URGENT,
+            is_blocked=True,
+            dependencies=(
+                WorkDependency(
+                    provider="linear",
+                    provider_record_id="SID-998",
+                    dependency_type="blocked_by",
+                ),
+            ),
+        )
+
+        brain = self.service.build_project(
+            project=project,
+            tasks=[blocked],
+            events=[],
+            memories=[],
+            activity=[],
+            now=self.now,
+            registry=self.registry,
+        )
+
+        self.assertEqual(
+            brain["next_recommendation"],
+            "Resolve blocker: Ship release",
+        )
 
     def test_build_project_preserves_needs_classification_diagnostics(self):
         project = self.registry.get_project_definition("needs-classification")

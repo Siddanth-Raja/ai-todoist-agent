@@ -3,7 +3,11 @@ import re
 from typing import Any
 
 from .calendar_tools import list_upcoming_events
-from .planner import rank_tasks
+from .recommendation_service import (
+    RecommendationAction,
+    WorkRecommendation,
+    recommendation_service,
+)
 from .project_registry import (
     ProjectRegistrySnapshot,
     project_registry_service,
@@ -126,13 +130,11 @@ class ProjectBrainService:
         people = _project_people(project, project_memories)
         task_groups = _project_task_groups(project_tasks, task_lookup, active_children_by_parent)
         leaf_tasks = _project_leaf_tasks(project_tasks, active_children_by_parent)
-        ranked_tasks = rank_tasks(
-            [_project_rankable_task(task) for task in leaf_tasks],
-            free_block=None,
-            user_energy="medium",
-            focus_category=project.get("life_area"),
-            today=now.date(),
+        recommendation = recommendation_service.recommend_project_next_move(
+            leaf_tasks,
+            current_time=now,
         )
+        ranked_tasks = _project_ranked_tasks(recommendation, leaf_tasks)
         sorted_tasks = _sort_project_tasks(project_tasks)
         sorted_events = sorted(project_events, key=_event_start)
         blockers = _project_blockers(
@@ -151,6 +153,7 @@ class ProjectBrainService:
             "status": _project_status(blockers=blockers, tasks=sorted_tasks, events=sorted_events),
             "next_recommendation": _project_next_recommendation(
                 blockers=blockers,
+                recommendation=recommendation,
                 ranked_tasks=ranked_tasks,
                 events=sorted_events,
                 memories=project_memories,
@@ -330,6 +333,21 @@ def _project_rankable_task(task: NormalizedWorkItem) -> dict[str, Any]:
     return rankable
 
 
+def _project_ranked_tasks(recommendation, tasks: list[NormalizedWorkItem]) -> list[dict[str, Any]]:
+    if recommendation is None:
+        return []
+    by_id = {task.provider_record_id: task for task in tasks}
+    ordered_ids = [
+        recommendation.selected_work.provider_record_id,
+        *(alternative.work.provider_record_id for alternative in recommendation.considered_alternatives),
+    ]
+    return [
+        _project_rankable_task(by_id[provider_record_id])
+        for provider_record_id in ordered_ids
+        if provider_record_id in by_id
+    ]
+
+
 def _project_task_groups(
     tasks: list[NormalizedWorkItem],
     task_lookup: dict[str, NormalizedWorkItem],
@@ -499,9 +517,18 @@ def _project_status(
     return "Quiet"
 
 
-def _project_next_recommendation(*, blockers: list[dict[str, Any]], ranked_tasks: list[dict[str, Any]], events: list[dict[str, Any]], memories: list[dict[str, Any]]) -> str:
+def _project_next_recommendation(
+    *,
+    blockers: list[dict[str, Any]],
+    recommendation: WorkRecommendation | None,
+    ranked_tasks: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    memories: list[dict[str, Any]],
+) -> str:
     if blockers:
         return f"Resolve blocker: {blockers[0]['title']}"
+    if recommendation and recommendation.action == RecommendationAction.RESOLVE_BLOCKER:
+        return f"Resolve blocker: {recommendation.selected_work.title}"
     if ranked_tasks:
         return f"Work next: {ranked_tasks[0].get('content')}"
     if events:

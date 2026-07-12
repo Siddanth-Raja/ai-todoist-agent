@@ -19,6 +19,12 @@ class WorkPriority(IntEnum):
     URGENT = 4
 
 
+class WorkEnergy(StrEnum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class WorkDependency(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -51,6 +57,8 @@ class NormalizedWorkItem(BaseModel):
     updated_at: datetime | None = None
     provider_url: str | None = None
     provider_reference: str | None = None
+    estimated_duration_minutes: int | None = Field(default=None, ge=1)
+    energy_requirement: WorkEnergy | None = None
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")

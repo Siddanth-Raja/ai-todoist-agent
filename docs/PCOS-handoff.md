@@ -451,6 +451,7 @@ ai-todoist-agent/
 │   │   ├── planner.py
 │   │   ├── project_brain.py
 │   │   ├── project_registry.py
+│   │   ├── recommendation_service.py
 │   │   ├── storage.py
 │   │   ├── todoist_work_adapter.py
 │   │   ├── todoist_tools.py
@@ -464,6 +465,7 @@ ai-todoist-agent/
 │   │   ├── test_calendar_intelligence.py
 │   │   ├── test_project_brain_service.py
 │   │   ├── test_project_registry.py
+│   │   ├── test_recommendation_service.py
 │   │   └── test_work_domain.py
 │   ├── README.md
 │   ├── requirements.txt
@@ -3297,9 +3299,9 @@ Normalized status is `open`, `completed`, or `canceled`. Completed and canceled 
 
 Todoist does not provide explicit dependency or blocked-state semantics, so the adapter emits no dependencies and `is_blocked = false`. Existing Project Brain keyword-based blocker presentation remains outside the normalized model only to preserve current behavior; it must not be mistaken for provider-grounded dependency state.
 
-Normalized work is computed in memory and is not persisted or synchronized. Linear adapters, shared recommendations, and other consuming surfaces remain separate work.
+Normalized work is computed in memory and is not persisted or synchronized. The shared recommendation service now consumes it for Project Brain; Linear adapters and the Today, Tasks, and Chat migrations remain separate work.
 
-The existing `/tasks` created-at omission and legacy API priority fields are intentionally unchanged. Project Brain uses compatibility projections until the shared recommendation/API migration can address those concerns without changing current behavior.
+The existing `/tasks` created-at omission and legacy API priority fields are intentionally unchanged. Project Brain retains a narrow compatibility projection only at its existing response boundary.
 
 Verification after the normalized work implementation reached:
 
@@ -3349,6 +3351,7 @@ Recorded development checkpoints include:
 | Dedicated Project Brain service | 90 tests passing | Build passing | Passing |
 | Durable canonical project registry | 95 tests passing | Build passing | Passing |
 | Normalized work model | 100 tests passing | Build passing | Passing |
+| Shared recommendation service | 113 tests passing | Build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -3359,6 +3362,7 @@ The current backend test suite includes:
 - `backend/tests/test_calendar_intelligence.py`
 - `backend/tests/test_project_brain_service.py`
 - `backend/tests/test_project_registry.py`
+- `backend/tests/test_recommendation_service.py`
 - `backend/tests/test_work_domain.py`
 
 Common verification commands are:
@@ -3643,7 +3647,7 @@ If Today overrides the canonical project next move for contextual reasons, the r
 
 ## 19.5 Recommendation Engine Consolidation
 
-**Status:** Active direction
+**Status:** Shared service implemented for Project Brain / remaining consumers planned
 
 PCOS currently has useful ranking behavior but no single recommendation engine.
 
@@ -3696,6 +3700,48 @@ A recommendation result should be capable of explaining signals such as:
 The UI may render this explanation concisely.
 
 The backend should preserve enough structured evidence for debugging.
+
+### Existing recommendation-path audit
+
+The shared-service implementation began by auditing all four existing paths. They remain present until their dedicated migration issues:
+
+- `backend/app/planner.py` enriches raw task dictionaries and scores due urgency, Todoist priority, estimated-duration/free-block fit, inferred task energy versus inferred user energy, and Calendar focus category. It still serves existing planner and Today callers.
+- `backend/app/project_brain.py` previously projected normalized Todoist work back into planner dictionaries, ranked executable leaves through `rank_tasks`, and formatted the first result as `Work next: ...`. It now sends typed `NormalizedWorkItem` records to the shared service while retaining the same public wording and response shape.
+- `backend/app/main.py` Today aggregation still has a separate orchestration path. It prioritizes preparation inside 60 minutes of an upcoming commitment, computes a current free block, invokes planner ranking, filters for fit, and emits task/calendar/open fallback responses. SID-127 owns this migration.
+- `frontend/src/app/tasks/page.tsx` still computes per-life-area recommendations using normalized Todoist priority, task age, due urgency, foundation/unblocking language, and project momentum. It also preserves recommendation-change snapshots in localStorage. SID-128 owns the backend migration, and localStorage change behavior is intentionally not ported by the shared-service issue.
+
+This audit avoids creating a fifth ranking path: the new backend service is the canonical destination, Project Brain is its first consumer, and the other three paths remain compatibility consumers until their dedicated issues.
+
+### Implemented recommendation contract
+
+`backend/app/recommendation_service.py` now defines typed models for:
+
+- recommendation purpose: canonical `project_next_move` or context-aware `current_action`;
+- action distinction: `do_work` or `resolve_blocker`;
+- selected provider and provider-record identity;
+- canonical project ID where available;
+- deterministic score and concise explanation;
+- structured evidence with signal name, source value, score delta, and explanation;
+- up to three considered alternatives;
+- computation timestamp and the exact supplied context.
+
+Context can include current time, usable free-block minutes, energy, upcoming commitment title/time, and explicit project-momentum work IDs. Missing free-block, energy, or commitment context stays `None` and produces no invented signal.
+
+### Deterministic scoring and filtering
+
+The service consumes normalized priority only; provider-specific priority conversion stays in provider adapters. Current deterministic weights preserve the useful existing planner behavior while adding the audited Tasks signals:
+
+- due urgency: overdue `+100`, today `+80`, tomorrow `+50`, within seven days `+20`;
+- normalized priority: urgent `+40`, high `+25`, medium `+10`, low/none `+0`;
+- task age: `+0.25` per day, capped at 30 days;
+- foundation/unblocking language and visible project-momentum language: explicit additive evidence using the audited Tasks vocabulary;
+- supplied free-block fit: fits `+25`, almost fits `+5`, exceeds block `-30`;
+- supplied energy fit: exact match `+15`, low-energy/high-requirement mismatch `-70`, high-energy/low-requirement mismatch `-5`;
+- supplied commitment within 60 minutes: work that preserves a ten-minute transition receives `+15`; work that does not fit receives `-40`.
+
+Completed, canceled, container, non-executable, and explicitly blocked records are excluded from `do_work`. If no unblocked executable work exists, an explicitly blocked executable record can produce a `resolve_blocker` recommendation with preserved dependency evidence. Todoist still supplies no explicit dependencies or blocked state, so the service does not infer either from keywords.
+
+Tie-breaking is stable: score, due date, creation timestamp, action, provider, provider record ID, and title. With the same records, supplied context, and computation time, output is deterministic regardless of input order.
 
 ---
 
@@ -4331,16 +4377,18 @@ The remaining plumbing is a Linear adapter and any later migration of Today, Tas
 
 ## 22.4 Shared Recommendation Service
 
-No single backend service currently owns recommendation computation.
+**Status:** Implemented for typed domain computation and Project Brain
 
-Existing logic is split across:
+The typed shared service now owns canonical project-next-move and context-aware current-action computation over `NormalizedWorkItem` records. Project Brain is the first migrated consumer and preserves its existing response contract.
+
+Compatibility logic remains split across:
 
 - `planner.py`;
 - Today aggregation;
 - Project Brain;
 - Tasks frontend logic.
 
-The shared recommendation service described in the architecture direction is not implemented.
+Today, Tasks, and Chat migrations remain assigned to SID-127, SID-128, and SID-129. `planner.py` remains because existing callers still depend on it.
 
 ---
 
@@ -5534,7 +5582,7 @@ Canonical Project Registry should be designed alongside this issue.
 
 ## Issue: Build Shared Recommendation Service
 
-**Status:** Todo
+**Status:** Implemented
 
 **Priority:** Urgent
 
@@ -8000,6 +8048,17 @@ Current responsibilities include:
 - computing parent/container/executable state across the Todoist batch;
 - leaving explicit dependencies and blocked state empty when Todoist supplies none.
 
+`backend/app/recommendation_service.py`
+
+Current responsibilities include:
+
+- typed recommendation purpose, action, identity, context, evidence, alternative, and result models;
+- canonical project-next-move and context-aware current-action computation;
+- deterministic normalized priority, due urgency, task age, foundation, momentum, free-block, energy, and commitment scoring;
+- executable/container/completed/canceled/blocked filtering;
+- explicit blocker-resolution recommendations;
+- stable provider-neutral tie-breaking.
+
 `main.py` remains an architecture-consolidation target for responsibilities outside Project Brain.
 
 Do not continue adding major intelligence subsystems directly to `main.py` without considering the Project Brain service roadmap.
@@ -8606,7 +8665,7 @@ Implemented systems include:
 
 “Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, confirmation still has a legacy process-global path, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
 
-The normalized work checkpoint reached 100 tests passing, with the Next.js 15.5.19 production build and `git diff --check` passing. Earlier 8-, 56-, 75-, 85-, 86-, 90-, and 95-test checkpoints remain recorded as implementation history rather than current feature claims.
+The shared recommendation checkpoint reached 113 tests passing, with the Next.js 15.5.19 production build and `git diff --check` passing. The normalized work checkpoint reached 100 tests. Earlier 8-, 56-, 75-, 85-, 86-, 90-, and 95-test checkpoints remain recorded as implementation history rather than current feature claims.
 
 The current product is not yet the full Personal Operating System described in the vision.
 

@@ -4,6 +4,10 @@ from typing import Any
 
 from .calendar_tools import list_upcoming_events
 from .planner import enrich_task, rank_tasks
+from .project_registry import (
+    ProjectRegistrySnapshot,
+    project_registry_service,
+)
 from .storage import list_activity, list_memory_entries
 from .todoist_tools import (
     LIFE_AREA_TO_TODOIST_SECTION,
@@ -13,121 +17,16 @@ from .todoist_tools import (
 )
 
 
-PROJECT_DEFINITIONS = (
-    {
-        "key": "pcos-ai-todoist-agent",
-        "name": "PCOS / ai todoist agent",
-        "description": "Personal Chief of Staff system, Todoist agent, local app, and assistant behavior.",
-        "life_area": None,
-        "keywords": (
-            "pcos",
-            "personal chief of staff",
-            "chief of staff",
-            "ai todoist agent",
-            "todoist agent",
-            "agent api",
-            "assistant behavior",
-            "settings health",
-        ),
-        "people": (),
-    },
-    {
-        "key": "nebulo",
-        "name": "Nebulo",
-        "description": "AI context control, private storage, product work, and Brandon-related follow-through.",
-        "life_area": "Nebulo",
-        "keywords": ("nebulo", "brandon", "context control", "context-control", "private storage"),
-        "people": ("Brandon",),
-    },
-    {
-        "key": "xo",
-        "name": "XO",
-        "description": "VR, prototype, headset, worldbuilding, Ashwin, and Charlie.",
-        "life_area": "XO",
-        "keywords": ("xo", "xo collective", "vr", "headset", "prototype", "ashwin", "charlie"),
-        "people": ("Ashwin", "Charlie"),
-    },
-    {
-        "key": "freelance",
-        "name": "Freelance",
-        "description": "Client outreach, websites, proposals, invoices, and delivery work.",
-        "life_area": "Freelance",
-        "keywords": (
-            "freelance",
-            "client",
-            "website",
-            "law firm",
-            "dentist",
-            "realtor",
-            "invoice",
-            "proposal",
-        ),
-        "people": (),
-    },
-    {
-        "key": "am",
-        "name": "A&M",
-        "description": "College, TAMU, Blinn, housing, registration, classes, and roommate context.",
-        "life_area": "A&M",
-        "keywords": ("a&m", "a and m", "tamu", "blinn", "college", "housing", "classes", "nikhil", "andy", "kamden"),
-        "people": ("Nikhil", "Andy", "Kamden"),
-    },
-    {
-        "key": "personal",
-        "name": "Personal",
-        "description": "Gym, health, shopping, errands, car, family, and life admin.",
-        "life_area": "Personal",
-        "keywords": (
-            "personal",
-            "gym",
-            "health",
-            "shopping",
-            "target",
-            "errand",
-            "car",
-            "family",
-            "life admin",
-            "sam",
-            "jai",
-            "krrish",
-        ),
-        "people": ("Sam", "Jai", "Krrish"),
-    },
-    {
-        "key": "needs-classification",
-        "name": "Needs Classification",
-        "description": "Unclassified Todoist work that needs a project decision before it can be safely hidden or routed.",
-        "life_area": "Misc",
-        "keywords": (),
-        "people": (),
-        "classification_bucket": True,
-    },
-)
-
-PROJECT_ALIASES = {
-    "pcos": "pcos-ai-todoist-agent",
-    "ai-todoist-agent": "pcos-ai-todoist-agent",
-    "ai todoist agent": "pcos-ai-todoist-agent",
-    "personal-chief-of-staff": "pcos-ai-todoist-agent",
-    "chief-of-staff": "pcos-ai-todoist-agent",
-    "chief of staff": "pcos-ai-todoist-agent",
-    "aandm": "am",
-    "a-and-m": "am",
-    "a&m": "am",
-    "a and m": "am",
-    "tamu": "am",
-    "college": "am",
-    "uncategorized": "needs-classification",
-    "needs-classification": "needs-classification",
-    "needs classification": "needs-classification",
-}
-
 BLOCKER_WORDS = ("blocked", "blocking", "waiting", "review", "feedback")
 FOLLOW_UP_WORDS = ("follow up", "follow-up", "waiting", "pending", "review", "feedback")
 
 
 class ProjectBrainService:
+    def __init__(self, registry_service=project_registry_service):
+        self.registry_service = registry_service
+
     def list_projects(self, *, settings: Any, current_time: datetime | None = None) -> list[dict[str, Any]]:
+        registry = self.registry_service.snapshot()
         local_now = current_time.astimezone(settings.local_tz) if current_time else datetime.now(settings.local_tz)
         todoist_result = list_active_tasks(settings)
         tasks = [
@@ -148,8 +47,9 @@ class ProjectBrainService:
                 memories=memories,
                 activity=activity,
                 now=local_now,
+                registry=registry,
             )
-            for project in PROJECT_DEFINITIONS
+            for project in registry.projects
         ]
 
     def get_project(
@@ -159,19 +59,38 @@ class ProjectBrainService:
         settings: Any,
         current_time: datetime | None = None,
     ) -> dict[str, Any] | None:
-        canonical_key = self.canonical_project_key(project_key)
+        registry = self.registry_service.snapshot()
+        canonical_key = registry.resolve_key(project_key)
+        local_now = current_time.astimezone(settings.local_tz) if current_time else datetime.now(settings.local_tz)
+        todoist_result = list_active_tasks(settings)
+        tasks = [
+            enrich_task(task, local_now.date())
+            for task in todoist_result.tasks
+            if task.get("content")
+        ]
+        calendar_result = list_upcoming_events(settings, now=current_time, days=14)
+        events = _future_events(calendar_result.events, local_now)
+        memories = [memory for memory in list_memory_entries() if memory.get("enabled")]
+        activity = list_activity(limit=200)
         return next(
             (
-                project
-                for project in self.list_projects(settings=settings, current_time=current_time)
+                self.build_project(
+                    project=project,
+                    tasks=tasks,
+                    events=events,
+                    memories=memories,
+                    activity=activity,
+                    now=local_now,
+                    registry=registry,
+                )
+                for project in registry.projects
                 if project["key"] == canonical_key
             ),
             None,
         )
 
     def canonical_project_key(self, project_key: str) -> str:
-        normalized = _slug_text(project_key)
-        return PROJECT_ALIASES.get(normalized, normalized)
+        return self.registry_service.snapshot().resolve_key(project_key)
 
     def build_project(
         self,
@@ -182,16 +101,26 @@ class ProjectBrainService:
         memories: list[dict[str, Any]],
         activity: list[dict[str, Any]],
         now: datetime,
+        registry: ProjectRegistrySnapshot | None = None,
     ) -> dict[str, Any]:
+        registry = registry or self.registry_service.snapshot()
         task_lookup = {str(task.get("id")): task for task in tasks if task.get("id")}
         active_tasks = [task for task in tasks if not _task_completed(task)]
         active_children_by_parent = _children_by_parent(active_tasks)
         project_tasks = [
-            task for task in active_tasks if _task_matches_project(task, project, task_lookup)
+            task
+            for task in active_tasks
+            if _task_matches_project(task, project, registry, task_lookup)
         ]
-        project_events = [event for event in events if _event_matches_project(event, project)]
-        project_memories = [memory for memory in memories if _memory_matches_project(memory, project)]
-        project_activity = [entry for entry in activity if _activity_matches_project(entry, project)]
+        project_events = [
+            event for event in events if _event_matches_project(event, project, registry)
+        ]
+        project_memories = [
+            memory for memory in memories if _memory_matches_project(memory, project, registry)
+        ]
+        project_activity = [
+            entry for entry in activity if _activity_matches_project(entry, project, registry)
+        ]
         people = _project_people(project, project_memories)
         task_groups = _project_task_groups(project_tasks, task_lookup, active_children_by_parent)
         leaf_tasks = _project_leaf_tasks(project_tasks, active_children_by_parent)
@@ -232,6 +161,7 @@ class ProjectBrainService:
                 tasks=tasks,
                 task_lookup=task_lookup,
                 active_children_by_parent=active_children_by_parent,
+                registry=registry,
             ),
             "upcoming_events": [_project_event_item(event) for event in sorted_events[:8]],
             "people": people,
@@ -243,10 +173,15 @@ class ProjectBrainService:
 project_brain_service = ProjectBrainService()
 
 
-def _task_matches_project(task: dict[str, Any], project: dict[str, Any], task_lookup: dict[str, dict[str, Any]] | None = None) -> bool:
+def _task_matches_project(
+    task: dict[str, Any],
+    project: dict[str, Any],
+    registry: ProjectRegistrySnapshot,
+    task_lookup: dict[str, dict[str, Any]] | None = None,
+) -> bool:
     parent = _parent_task(task, task_lookup or {})
     if project.get("classification_bucket"):
-        return _task_needs_classification(task, parent=parent)
+        return _task_needs_classification(task, parent=parent, registry=registry)
     life_area = project.get("life_area")
     if life_area and _task_section_for(task) == life_area:
         return True
@@ -257,23 +192,31 @@ def _task_matches_project(task: dict[str, Any], project: dict[str, Any], task_lo
     return _text_matches_project(_task_match_text(task), project)
 
 
-def _event_matches_project(event: dict[str, Any], project: dict[str, Any]) -> bool:
+def _event_matches_project(
+    event: dict[str, Any],
+    project: dict[str, Any],
+    registry: ProjectRegistrySnapshot,
+) -> bool:
     explicit_project = event.get("resolved_project") or event.get("project") or event.get("project_key")
     if explicit_project:
-        explicit = project_brain_service.canonical_project_key(str(explicit_project))
+        explicit = registry.resolve_key(str(explicit_project))
         if explicit == project["key"] or _slug_text(str(explicit_project)) == _slug_text(project["name"]):
             return True
     title = str(event.get("title") or "")
     prefix_match = re.match(r"^(.+?)\s+[\u2014-]\s+", title)
-    if prefix_match and project_brain_service.canonical_project_key(prefix_match.group(1)) == project["key"]:
+    if prefix_match and registry.resolve_key(prefix_match.group(1)) == project["key"]:
         return True
     return _text_matches_project(_event_match_text(event), project)
 
 
-def _memory_matches_project(memory: dict[str, Any], project: dict[str, Any]) -> bool:
+def _memory_matches_project(
+    memory: dict[str, Any],
+    project: dict[str, Any],
+    registry: ProjectRegistrySnapshot,
+) -> bool:
     memory_type = str(memory.get("type") or "").lower()
     title = str(memory.get("title") or "")
-    if memory_type == "project" and _same_project_name(title, project):
+    if memory_type == "project" and _same_project_name(title, project, registry):
         return True
     if memory_type in {"person", "group"} and _slug_text(title) in {
         _slug_text(person) for person in project.get("people", ())
@@ -282,14 +225,18 @@ def _memory_matches_project(memory: dict[str, Any], project: dict[str, Any]) -> 
     return _text_matches_project(_memory_match_text(memory), project)
 
 
-def _activity_matches_project(entry: dict[str, Any], project: dict[str, Any]) -> bool:
+def _activity_matches_project(
+    entry: dict[str, Any],
+    project: dict[str, Any],
+    registry: ProjectRegistrySnapshot,
+) -> bool:
     payload = entry.get("payload") or entry.get("metadata") or {}
     if isinstance(payload, dict):
         payload_project = payload.get("resolved_project") or payload.get("project") or payload.get("project_key") or payload.get("project_context")
         task_payload = payload.get("task") if isinstance(payload.get("task"), dict) else {}
         event_payload = payload.get("event") if isinstance(payload.get("event"), dict) else {}
         section_name = task_payload.get("section_name") or task_payload.get("todoist_section_name") or payload.get("section_name")
-        if payload_project and project_brain_service.canonical_project_key(str(payload_project)) == project["key"]:
+        if payload_project and registry.resolve_key(str(payload_project)) == project["key"]:
             return True
         if section_name and project.get("life_area") == life_area_for_todoist_section(str(section_name)):
             return True
@@ -307,8 +254,12 @@ def _text_matches_project(text: str, project: dict[str, Any]) -> bool:
     return any(_contains_phrase(normalized, str(value)) for value in (*project.get("keywords", ()), *project.get("people", ())))
 
 
-def _same_project_name(value: str, project: dict[str, Any]) -> bool:
-    return project_brain_service.canonical_project_key(value) == project["key"] or _slug_text(value) == _slug_text(project["name"])
+def _same_project_name(
+    value: str,
+    project: dict[str, Any],
+    registry: ProjectRegistrySnapshot,
+) -> bool:
+    return registry.resolve_key(value) == project["key"] or _slug_text(value) == _slug_text(project["name"])
 
 
 def _project_people(project: dict[str, Any], memories: list[dict[str, Any]]) -> list[str]:
@@ -394,24 +345,46 @@ def _project_task_groups(tasks: list[dict[str, Any]], task_lookup: dict[str, dic
     return groups
 
 
-def _project_task_diagnostics(*, project: dict[str, Any], tasks: list[dict[str, Any]], task_lookup: dict[str, dict[str, Any]], active_children_by_parent: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+def _project_task_diagnostics(
+    *,
+    project: dict[str, Any],
+    tasks: list[dict[str, Any]],
+    task_lookup: dict[str, dict[str, Any]],
+    active_children_by_parent: dict[str, list[dict[str, Any]]],
+    registry: ProjectRegistrySnapshot,
+) -> list[dict[str, Any]]:
     diagnostics: list[dict[str, Any]] = []
     for task in _sort_project_tasks(tasks):
         parent = _parent_task(task, task_lookup)
-        included = _task_matches_project(task, project, task_lookup) and not _task_completed(task)
+        included = _task_matches_project(task, project, registry, task_lookup) and not _task_completed(task)
         diagnostics.append({
             "task_title": str(task.get("content") or "Untitled task"),
             "parent_title": str(parent.get("content")) if parent else None,
             "todoist_section": task.get("todoist_section_name") or task.get("section_name"),
-            "resolved_project": _resolved_project_name_for_task(task, task_lookup),
+            "resolved_project": _resolved_project_name_for_task(task, task_lookup, registry),
             "priority": task.get("todoist_priority") or task.get("priority"),
             "included": included,
-            "reason": _task_diagnostic_reason(task=task, project=project, parent=parent, included=included, active_children_by_parent=active_children_by_parent),
+            "reason": _task_diagnostic_reason(
+                task=task,
+                project=project,
+                parent=parent,
+                included=included,
+                active_children_by_parent=active_children_by_parent,
+                registry=registry,
+            ),
         })
     return diagnostics
 
 
-def _task_diagnostic_reason(*, task: dict[str, Any], project: dict[str, Any], parent: dict[str, Any] | None, included: bool, active_children_by_parent: dict[str, list[dict[str, Any]]]) -> str:
+def _task_diagnostic_reason(
+    *,
+    task: dict[str, Any],
+    project: dict[str, Any],
+    parent: dict[str, Any] | None,
+    included: bool,
+    active_children_by_parent: dict[str, list[dict[str, Any]]],
+    registry: ProjectRegistrySnapshot,
+) -> str:
     if _task_completed(task):
         return "excluded: completed"
     if included and task.get("parent_id"):
@@ -422,29 +395,52 @@ def _task_diagnostic_reason(*, task: dict[str, Any], project: dict[str, Any], pa
         return "included: standalone task matched project"
     if project.get("classification_bucket"):
         return "excluded: task already has a resolved project"
-    if parent and _task_needs_classification(task, parent=parent):
+    if parent and _task_needs_classification(task, parent=parent, registry=registry):
         return "excluded: needs classification"
     return "excluded: matched another project or no project signal"
 
 
-def _resolved_project_name_for_task(task: dict[str, Any], task_lookup: dict[str, dict[str, Any]]) -> str:
+def _resolved_project_name_for_task(
+    task: dict[str, Any],
+    task_lookup: dict[str, dict[str, Any]],
+    registry: ProjectRegistrySnapshot,
+) -> str:
     parent = _parent_task(task, task_lookup)
-    for project in PROJECT_DEFINITIONS:
-        if not project.get("classification_bucket") and _task_matches_project(task, project, task_lookup):
+    for project in registry.projects:
+        if not project.get("classification_bucket") and _task_matches_project(
+            task,
+            project,
+            registry,
+            task_lookup,
+        ):
             return str(project["name"])
-    return "Needs Classification" if _task_needs_classification(task, parent=parent) else "Uncategorized"
+    return (
+        "Needs Classification"
+        if _task_needs_classification(task, parent=parent, registry=registry)
+        else "Uncategorized"
+    )
 
 
-def _task_needs_classification(task: dict[str, Any], *, parent: dict[str, Any] | None) -> bool:
+def _task_needs_classification(
+    task: dict[str, Any],
+    *,
+    parent: dict[str, Any] | None,
+    registry: ProjectRegistrySnapshot,
+) -> bool:
     if parent:
-        for project in PROJECT_DEFINITIONS:
-            if not project.get("classification_bucket") and _task_matches_project(parent, project, {}):
+        for project in registry.projects:
+            if not project.get("classification_bucket") and _task_matches_project(
+                parent,
+                project,
+                registry,
+                {},
+            ):
                 return False
     if _task_section_for(task) != "Misc":
         return False
     return not any(
         not project.get("classification_bucket") and _text_matches_project(_task_match_text(task), project)
-        for project in PROJECT_DEFINITIONS
+        for project in registry.projects
     )
 
 

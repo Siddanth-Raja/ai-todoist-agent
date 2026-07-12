@@ -449,6 +449,8 @@ ai-todoist-agent/
 │   │   ├── config.py
 │   │   ├── main.py
 │   │   ├── planner.py
+│   │   ├── project_brain.py
+│   │   ├── project_registry.py
 │   │   ├── storage.py
 │   │   └── todoist_tools.py
 │   ├── scripts/
@@ -457,7 +459,9 @@ ai-todoist-agent/
 │   ├── tests/
 │   │   ├── test_agent_examples.py
 │   │   ├── test_app_surfaces.py
-│   │   └── test_calendar_intelligence.py
+│   │   ├── test_calendar_intelligence.py
+│   │   ├── test_project_brain_service.py
+│   │   └── test_project_registry.py
 │   ├── README.md
 │   ├── requirements.txt
 │   └── personal_chief_of_staff.sqlite3
@@ -574,12 +578,13 @@ The current internal database is SQLite.
 
 The default database path is `backend/personal_chief_of_staff.sqlite3`. It can be overridden through `APP_DB_PATH` or `APP_DATABASE_PATH`.
 
-The internal database currently stores four classes of PCOS-owned state:
+The internal database currently stores five classes of PCOS-owned state:
 
 1. memory entries;
 2. habit definitions;
 3. habit check-ins;
 4. activity logs.
+5. canonical project metadata, aliases, classification hints, and provider mappings.
 
 It does not currently mirror the complete Todoist or Google Calendar datasets.
 
@@ -654,7 +659,7 @@ Configuration is cached through `functools.lru_cache`.
 - Calendar API route.
 - Activity routes.
 
-`main.py` now delegates `GET /projects` and `GET /projects/{project_key}` to `backend/app/project_brain.py`. That service owns the existing hard-coded project definitions and aliases, provider aggregation, project classification, Todoist hierarchy and container handling, blockers, status, diagnostics, and next-recommendation behavior. The HTTP module retains the Project Brain response schemas and route adapters.
+`main.py` delegates `GET /projects` and `GET /projects/{project_key}` to `backend/app/project_brain.py`. Project Brain reads canonical project definitions and aliases from the SQLite-backed registry in `backend/app/project_registry.py`, then owns provider aggregation, project classification, Todoist hierarchy and container handling, blockers, status, diagnostics, and next-recommendation behavior. The HTTP module retains the Project Brain response schemas and route adapters.
 
 The FastAPI application metadata currently describes PCOS as `Personal Chief of Staff` with application version `0.2.0`.
 
@@ -895,6 +900,10 @@ memory_entries
 habit_definitions
 habit_checkins
 activity_logs
+canonical_projects
+canonical_project_aliases
+canonical_project_classification_hints
+canonical_project_provider_mappings
 ```
 
 ### `memory_entries`
@@ -963,9 +972,19 @@ created_at
 
 Activity payloads are serialized into the database.
 
+### Canonical project registry
+
+`canonical_projects` stores durable internal project IDs, stable route keys, display names, descriptions, enabled state, and ordering.
+
+The related alias and classification-hint tables preserve current route resolution and keyword, person, and life-area classification behavior without keeping user-project definitions in Project Brain code.
+
+`canonical_project_provider_mappings` associates a canonical project ID with a provider, provider resource type, and provider reference. It can represent Todoist sections now and future Linear project or repository mappings without implementing those providers.
+
+Needs Classification is intentionally absent from these tables. `project_registry.py` synthesizes it as a non-editable system/unresolved state.
+
 ### Startup seeding
 
-Database initialization seeds default habits and default memories.
+Database initialization seeds default habits, default memories, and the six current canonical projects.
 
 Default habits are currently:
 
@@ -1013,6 +1032,8 @@ Classification memories also encode known routing rules for:
 The seed path is idempotent by memory type and title.
 
 Seeding has no tombstone model. Default habits are recreated by their fixed IDs, and default memories are recreated by type and title during a later database initialization if the user deleted them. The delete routes work immediately, but deletion of seeded records is not durable across backend restart.
+
+Canonical project seeding uses stable IDs and insert-only initialization. It is idempotent and does not overwrite later display, description, ordering, or enabled-state edits.
 
 ---
 
@@ -1862,13 +1883,11 @@ Any intelligence needed consistently across Mac, iPhone, iPad, or future surface
 
 ## 13.5 Project Brain
 
-Project Brain V1 is currently a computed backend aggregation.
+Project Brain remains a computed backend aggregation, while canonical project identity and matching metadata are now durable SQLite state.
 
-It is not stored as a canonical persisted project database.
+The backend loads an enabled registry snapshot, appends Needs Classification as a system state, and derives Project Brain responses from provider and internal state.
 
-The current backend derives Project Brain responses from provider and internal state.
-
-This is appropriate for the current prototype, but richer future project intelligence may require persisted metadata for:
+The registry now persists provider links and canonical project identities. Richer future project intelligence may still require persisted metadata for:
 
 - provider links;
 - canonical project identities;
@@ -1879,7 +1898,7 @@ This is appropriate for the current prototype, but richer future project intelli
 - reviewed blockers;
 - project-specific settings.
 
-That persistence model has not yet been implemented.
+Those broader project-intelligence records have not yet been implemented.
 
 ---
 
@@ -1903,7 +1922,7 @@ Future providers will worsen this without decomposition.
 
 ## 14.3 Project Brain service extraction is complete, but schemas remain in `main.py`
 
-Project definitions, task aggregation, project classification, hierarchy, blockers, diagnostics, and next-move computation now live in `backend/app/project_brain.py`.
+Project definitions and aliases now come from the durable registry. Task aggregation, project classification, hierarchy, blockers, diagnostics, and next-move computation remain in `backend/app/project_brain.py`.
 
 `main.py` still owns the HTTP response schemas and route adapters, while Today remains a separate aggregation path. Moving schemas is optional cleanup; consolidating Today is separate roadmap work and was intentionally not combined with the service extraction.
 
@@ -3227,7 +3246,27 @@ npm run build passing
 git diff --check passing
 ```
 
-## 17.16 Action Cards
+## 17.16 Durable Canonical Project Registry
+
+Canonical project identity is now stored in SQLite rather than in `main.py` or `project_brain.py` dictionaries.
+
+The registry stores stable internal IDs, stable route keys, display metadata, enabled state, aliases, classification hints, and provider mappings. It seeds PCOS, Nebulo, XO, Freelance, A&M, and Personal with the existing behavior-preserving metadata.
+
+Needs Classification remains a synthesized system state with no editable project row or durable ID.
+
+Project Brain consumes a registry snapshot while preserving existing response contracts, stable keys and aliases, classification diagnostics, hierarchy, blockers, and next-move behavior. A future normal project can be created through storage and participate in Project Brain without editing application dictionaries.
+
+The provider-mapping boundary uses `(provider, resource_type, provider_ref)` to resolve a durable `canonical_project_id`. SID-125 can place that nullable ID on normalized work while preserving provider and provider-record identity separately.
+
+Verification after the registry implementation reached:
+
+```text
+95 backend tests passing
+npm run build passing
+git diff --check passing
+```
+
+## 17.17 Action Cards
 
 The Chat frontend renders structured action results.
 
@@ -3237,7 +3276,7 @@ The visual direction is that system changes should appear as application state t
 
 This is an implemented UI pattern and an accepted product principle.
 
-## 17.17 Activity Logging
+## 17.18 Activity Logging
 
 Activity logging is implemented as local PCOS state.
 
@@ -3264,6 +3303,8 @@ Recorded development checkpoints include:
 | Multi-task and subtask creation | 75 tests passing | Build passing | Not recorded |
 | Project Brain V1 | 85 tests passing | Build passing | Not recorded |
 | Project Brain aggregation fix | 86 tests passing | Build passing | Passing |
+| Dedicated Project Brain service | 90 tests passing | Build passing | Passing |
+| Durable canonical project registry | 95 tests passing | Build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -3272,6 +3313,8 @@ The current backend test suite includes:
 - `backend/tests/test_agent_examples.py`
 - `backend/tests/test_app_surfaces.py`
 - `backend/tests/test_calendar_intelligence.py`
+- `backend/tests/test_project_brain_service.py`
+- `backend/tests/test_project_registry.py`
 
 Common verification commands are:
 
@@ -4123,9 +4166,9 @@ Activity should describe meaningful operational history.
 
 ---
 
-## 21.10 Project Identity Is Still Partly Hard-coded
+## 21.10 Canonical Project Identity Is Durable; Broader Project State Is Not
 
-Current project keys are defined in backend code.
+Normal canonical projects now use durable SQLite records.
 
 The implemented set includes:
 
@@ -4135,15 +4178,14 @@ The implemented set includes:
 - freelance;
 - am;
 - personal;
-- needs-classification.
 
-This works for the current single-user prototype.
+Needs Classification is a system/unresolved state rather than a normal project record.
 
-It is not a flexible long-term project registry.
+Aliases, classification hints, enabled state, and provider mappings are durable. New normal projects can be added through storage without changing Project Brain dictionaries.
 
 ### Direction
 
-Project identity should eventually support durable provider links and explicit project metadata.
+The next architecture step is to let normalized work reference the durable project ID while preserving provider-specific record identity.
 
 A project may need links to:
 
@@ -4154,7 +4196,7 @@ A project may need links to:
 - email contexts;
 - calendar patterns.
 
-Do not add a new hard-coded project key every time the user's life changes.
+Do not turn the registry into a multi-user project-management database or store normalized work rows before SID-125 defines that model.
 
 ---
 
@@ -4203,26 +4245,28 @@ This plumbing is unfinished.
 
 ## 22.2 Canonical Project Registry
 
-Project Brain currently relies on hard-coded project definitions and classification behavior.
+**Status:** Implemented foundation
 
-A durable project registry does not exist.
+Project Brain now reads user-project definitions and classification behavior from the durable SQLite registry.
 
-A future project registry should be capable of representing:
+The implemented registry represents:
 
 - canonical project ID;
 - display name;
 - description;
-- status;
+- enabled state and ordering;
 - provider links;
 - Linear project identity;
 - Todoist mappings;
 - repository mappings;
-- known people;
+- people classification hints;
 - aliases;
 - classification hints;
 - enabled state.
 
-The exact persistence schema is not implemented.
+The provider mapping boundary stores provider, resource type, and provider reference against a durable canonical project ID. It is ready to represent Linear project and repository links, but neither provider integration is implemented here.
+
+Needs Classification is synthesized outside the editable registry as a system/unresolved state.
 
 ---
 
@@ -5336,7 +5380,7 @@ Current backend test suite must establish a clean baseline before refactoring.
 
 ## Issue: Create a Durable Canonical Project Registry
 
-**Status:** Todo
+**Status:** Implemented
 
 **Priority:** High
 
@@ -7874,12 +7918,22 @@ Current responsibilities include:
 
 Current responsibilities include:
 
-- project definitions and aliases;
+- consuming canonical project registry snapshots;
 - Todoist, Calendar, Memory, and Activity aggregation;
 - project classification and Needs Classification diagnostics;
 - parent-child hierarchy and container handling;
 - project blockers and status;
 - project next recommendations.
+
+`backend/app/project_registry.py`
+
+Current responsibilities include:
+
+- materializing enabled SQLite project records for Project Brain;
+- resolving stable keys and aliases;
+- translating stored classification hints into Project Brain definitions;
+- synthesizing Needs Classification as a system state;
+- exposing durable project IDs and provider mappings without changing API contracts.
 
 `main.py` remains an architecture-consolidation target for responsibilities outside Project Brain.
 
@@ -7963,9 +8017,13 @@ memory_entries
 habit_definitions
 habit_checkins
 activity_logs
+canonical_projects
+canonical_project_aliases
+canonical_project_classification_hints
+canonical_project_provider_mappings
 ```
 
-Future durable project registry, provider mappings, actions, conversation state, job state, and change intelligence will require persistence work.
+Future actions, conversation state, job state, normalized work, and change intelligence will require additional persistence work.
 
 Do not silently add unrelated columns to Memory as a substitute for designing the correct domain model.
 
@@ -8470,6 +8528,8 @@ Implemented systems include:
 - Today;
 - Projects;
 - Project Brain V1;
+- dedicated Project Brain service;
+- durable canonical project registry;
 - Chat;
 - Calendar V1;
 - Tasks V1;
@@ -8480,7 +8540,7 @@ Implemented systems include:
 
 “Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, confirmation still has a legacy process-global path, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
 
-The current documentation-repair audit reached 86 tests passing, with the Next.js 15.5.19 production build and `git diff --check` passing. Earlier 8-, 56-, 75-, 85-, and 86-test checkpoints remain recorded as implementation history rather than current feature claims.
+The canonical project registry checkpoint reached 95 tests passing, with the Next.js 15.5.19 production build and `git diff --check` passing. Earlier 8-, 56-, 75-, 85-, 86-, and 90-test checkpoints remain recorded as implementation history rather than current feature claims.
 
 The current product is not yet the full Personal Operating System described in the vision.
 

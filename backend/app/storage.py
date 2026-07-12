@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import threading
 import uuid
@@ -16,6 +17,139 @@ DEFAULT_HABITS = (
     ("gym", "Gym", "Strength, gym, or workout session"),
     ("running", "Running", "Run, walk, or cardio session"),
     ("work", "Work", "Focused work or useful work block"),
+)
+
+DEFAULT_CANONICAL_PROJECTS = (
+    {
+        "id": "project-pcos-ai-todoist-agent",
+        "key": "pcos-ai-todoist-agent",
+        "display_name": "PCOS / ai todoist agent",
+        "description": "Personal Chief of Staff system, Todoist agent, local app, and assistant behavior.",
+        "sort_order": 10,
+        "aliases": ("pcos", "ai-todoist-agent", "personal-chief-of-staff", "chief-of-staff"),
+        "hints": (
+            ("keyword", "pcos"),
+            ("keyword", "personal chief of staff"),
+            ("keyword", "chief of staff"),
+            ("keyword", "ai todoist agent"),
+            ("keyword", "todoist agent"),
+            ("keyword", "agent api"),
+            ("keyword", "assistant behavior"),
+            ("keyword", "settings health"),
+        ),
+        "provider_mappings": (),
+    },
+    {
+        "id": "project-nebulo",
+        "key": "nebulo",
+        "display_name": "Nebulo",
+        "description": "AI context control, private storage, product work, and Brandon-related follow-through.",
+        "sort_order": 20,
+        "aliases": (),
+        "hints": (
+            ("life_area", "Nebulo"),
+            ("keyword", "nebulo"),
+            ("keyword", "brandon"),
+            ("keyword", "context control"),
+            ("keyword", "context-control"),
+            ("keyword", "private storage"),
+            ("person", "Brandon"),
+        ),
+        "provider_mappings": (("todoist", "section", "Nebulo", None),),
+    },
+    {
+        "id": "project-xo",
+        "key": "xo",
+        "display_name": "XO",
+        "description": "VR, prototype, headset, worldbuilding, Ashwin, and Charlie.",
+        "sort_order": 30,
+        "aliases": (),
+        "hints": (
+            ("life_area", "XO"),
+            ("keyword", "xo"),
+            ("keyword", "xo collective"),
+            ("keyword", "vr"),
+            ("keyword", "headset"),
+            ("keyword", "prototype"),
+            ("keyword", "ashwin"),
+            ("keyword", "charlie"),
+            ("person", "Ashwin"),
+            ("person", "Charlie"),
+        ),
+        "provider_mappings": (("todoist", "section", "XO Collective", None),),
+    },
+    {
+        "id": "project-freelance",
+        "key": "freelance",
+        "display_name": "Freelance",
+        "description": "Client outreach, websites, proposals, invoices, and delivery work.",
+        "sort_order": 40,
+        "aliases": (),
+        "hints": (
+            ("life_area", "Freelance"),
+            ("keyword", "freelance"),
+            ("keyword", "client"),
+            ("keyword", "website"),
+            ("keyword", "law firm"),
+            ("keyword", "dentist"),
+            ("keyword", "realtor"),
+            ("keyword", "invoice"),
+            ("keyword", "proposal"),
+        ),
+        "provider_mappings": (("todoist", "section", "Freelance Web Design", None),),
+    },
+    {
+        "id": "project-am",
+        "key": "am",
+        "display_name": "A&M",
+        "description": "College, TAMU, Blinn, housing, registration, classes, and roommate context.",
+        "sort_order": 50,
+        "aliases": ("aandm", "a-and-m", "tamu", "college"),
+        "hints": (
+            ("life_area", "A&M"),
+            ("keyword", "a&m"),
+            ("keyword", "a and m"),
+            ("keyword", "tamu"),
+            ("keyword", "blinn"),
+            ("keyword", "college"),
+            ("keyword", "housing"),
+            ("keyword", "classes"),
+            ("keyword", "nikhil"),
+            ("keyword", "andy"),
+            ("keyword", "kamden"),
+            ("person", "Nikhil"),
+            ("person", "Andy"),
+            ("person", "Kamden"),
+        ),
+        "provider_mappings": (("todoist", "section", "College", None),),
+    },
+    {
+        "id": "project-personal",
+        "key": "personal",
+        "display_name": "Personal",
+        "description": "Gym, health, shopping, errands, car, family, and life admin.",
+        "sort_order": 60,
+        "aliases": (),
+        "hints": (
+            ("life_area", "Personal"),
+            ("keyword", "personal"),
+            ("keyword", "gym"),
+            ("keyword", "health"),
+            ("keyword", "shopping"),
+            ("keyword", "target"),
+            ("keyword", "errand"),
+            ("keyword", "car"),
+            ("keyword", "family"),
+            ("keyword", "life admin"),
+            ("keyword", "sam"),
+            ("keyword", "jai"),
+            ("keyword", "krrish"),
+            ("person", "Sam"),
+            ("person", "Jai"),
+            ("person", "Krrish"),
+        ),
+        "provider_mappings": (("todoist", "section", "Personal", None),),
+    },
 )
 
 DEFAULT_MEMORIES = (
@@ -137,6 +271,14 @@ _INITIALIZED_PATHS: set[str] = set()
 _INIT_LOCK = threading.Lock()
 
 
+class _ClosingConnection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -154,7 +296,7 @@ def _connect() -> sqlite3.Connection:
     if path not in {":memory:", ""}:
         Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
 
-    connection = sqlite3.connect(path)
+    connection = sqlite3.connect(path, factory=_ClosingConnection)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
@@ -212,11 +354,55 @@ def ensure_database() -> None:
                     source TEXT NOT NULL DEFAULT 'app',
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS canonical_projects (
+                    id TEXT PRIMARY KEY,
+                    key TEXT NOT NULL UNIQUE,
+                    display_name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    sort_order INTEGER NOT NULL DEFAULT 100,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS canonical_project_aliases (
+                    project_id TEXT NOT NULL,
+                    alias TEXT NOT NULL,
+                    normalized_alias TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (project_id, normalized_alias),
+                    FOREIGN KEY (project_id) REFERENCES canonical_projects(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS canonical_project_classification_hints (
+                    project_id TEXT NOT NULL,
+                    hint_type TEXT NOT NULL CHECK(hint_type IN ('life_area', 'keyword', 'person')),
+                    value TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY (project_id, hint_type, value),
+                    FOREIGN KEY (project_id) REFERENCES canonical_projects(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS canonical_project_provider_mappings (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    resource_type TEXT NOT NULL,
+                    provider_ref TEXT NOT NULL,
+                    metadata TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE (provider, resource_type, provider_ref),
+                    FOREIGN KEY (project_id) REFERENCES canonical_projects(id) ON DELETE CASCADE
+                );
                 """
             )
             _ensure_activity_columns(connection)
             _seed_default_habits(connection)
             _seed_default_memories(connection)
+            _seed_default_canonical_projects(connection)
 
         _INITIALIZED_PATHS.add(path)
 
@@ -257,6 +443,71 @@ def _seed_default_memories(connection: sqlite3.Connection) -> None:
             """,
             (memory_id, memory_type, title, content, now, now),
         )
+
+
+def _seed_default_canonical_projects(connection: sqlite3.Connection) -> None:
+    now = _utc_now()
+    for project in DEFAULT_CANONICAL_PROJECTS:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO canonical_projects
+                (id, key, display_name, description, enabled, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+            """,
+            (
+                project["id"],
+                project["key"],
+                project["display_name"],
+                project["description"],
+                project["sort_order"],
+                now,
+                now,
+            ),
+        )
+        row = connection.execute(
+            "SELECT id FROM canonical_projects WHERE key = ?",
+            (project["key"],),
+        ).fetchone()
+        project_id = str(row["id"])
+
+        for alias in project["aliases"]:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO canonical_project_aliases
+                    (project_id, alias, normalized_alias, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (project_id, alias, _normalize_project_reference(alias), now),
+            )
+
+        for hint_type, value in project["hints"]:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO canonical_project_classification_hints
+                    (project_id, hint_type, value, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (project_id, hint_type, value, now),
+            )
+
+        for provider, resource_type, provider_ref, metadata in project["provider_mappings"]:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO canonical_project_provider_mappings
+                    (id, project_id, provider, resource_type, provider_ref, metadata, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    f"mapping-{project['key']}-{provider}-{_slugify(resource_type)}-{_slugify(provider_ref)}",
+                    project_id,
+                    provider,
+                    resource_type,
+                    provider_ref,
+                    json.dumps(metadata, ensure_ascii=False) if metadata is not None else None,
+                    now,
+                    now,
+                ),
+            )
 
 
 def _memory_from_row(row: sqlite3.Row) -> dict[str, Any]:
@@ -613,6 +864,353 @@ def log_activity(
             (activity_id,),
         ).fetchone()
     return _activity_from_row(row)
+
+
+def list_canonical_projects(*, include_disabled: bool = False) -> list[dict[str, Any]]:
+    ensure_database()
+    where_clause = "" if include_disabled else "WHERE enabled = 1"
+    with _connect() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT id, key, display_name, description, enabled, sort_order, created_at, updated_at
+            FROM canonical_projects
+            {where_clause}
+            ORDER BY sort_order, display_name COLLATE NOCASE, key
+            """
+        ).fetchall()
+        return [_canonical_project_from_row(connection, row) for row in rows]
+
+
+def get_canonical_project(project_reference: str) -> dict[str, Any] | None:
+    ensure_database()
+    normalized_reference = _normalize_project_reference(project_reference)
+    with _connect() as connection:
+        row = connection.execute(
+            """
+            SELECT DISTINCT p.id, p.key, p.display_name, p.description, p.enabled,
+                p.sort_order, p.created_at, p.updated_at
+            FROM canonical_projects p
+            LEFT JOIN canonical_project_aliases a ON a.project_id = p.id
+            WHERE p.id = ? OR p.key = ? OR a.normalized_alias = ?
+            LIMIT 1
+            """,
+            (project_reference, normalized_reference, normalized_reference),
+        ).fetchone()
+        return _canonical_project_from_row(connection, row) if row else None
+
+
+def create_canonical_project(
+    *,
+    key: str,
+    display_name: str,
+    description: str = "",
+    enabled: bool = True,
+    sort_order: int = 100,
+    aliases: list[str] | tuple[str, ...] = (),
+    classification_hints: list[dict[str, str]] | tuple[dict[str, str], ...] = (),
+    provider_mappings: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    ensure_database()
+    canonical_key = _normalize_project_reference(key)
+    if not canonical_key:
+        raise ValueError("project key is required")
+    if canonical_key == "needs-classification":
+        raise ValueError("needs-classification is a system state")
+
+    now = _utc_now()
+    canonical_project_id = project_id or str(uuid.uuid4())
+    with _connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO canonical_projects
+                (id, key, display_name, description, enabled, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                canonical_project_id,
+                canonical_key,
+                display_name,
+                description,
+                1 if enabled else 0,
+                sort_order,
+                now,
+                now,
+            ),
+        )
+        for alias in aliases:
+            _insert_project_alias(connection, canonical_project_id, alias, now)
+        for hint in classification_hints:
+            _insert_project_hint(
+                connection,
+                canonical_project_id,
+                str(hint.get("type") or ""),
+                str(hint.get("value") or ""),
+                now,
+            )
+        for mapping in provider_mappings:
+            _insert_project_provider_mapping(
+                connection,
+                canonical_project_id,
+                provider=str(mapping.get("provider") or ""),
+                resource_type=str(mapping.get("resource_type") or ""),
+                provider_ref=str(mapping.get("provider_ref") or ""),
+                metadata=mapping.get("metadata"),
+                enabled=bool(mapping.get("enabled", True)),
+                now=now,
+            )
+        row = connection.execute(
+            """
+            SELECT id, key, display_name, description, enabled, sort_order, created_at, updated_at
+            FROM canonical_projects
+            WHERE id = ?
+            """,
+            (canonical_project_id,),
+        ).fetchone()
+        return _canonical_project_from_row(connection, row)
+
+
+def update_canonical_project(project_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+    ensure_database()
+    allowed = {"display_name", "description", "enabled", "sort_order"}
+    changes = {key: value for key, value in updates.items() if key in allowed and value is not None}
+    if not changes:
+        return get_canonical_project(project_id)
+    if "enabled" in changes:
+        changes["enabled"] = 1 if changes["enabled"] else 0
+    changes["updated_at"] = _utc_now()
+    assignments = ", ".join(f"{key} = ?" for key in changes)
+    values = [*changes.values(), project_id]
+    with _connect() as connection:
+        cursor = connection.execute(
+            f"UPDATE canonical_projects SET {assignments} WHERE id = ?",
+            values,
+        )
+        if cursor.rowcount == 0:
+            return None
+        row = connection.execute(
+            """
+            SELECT id, key, display_name, description, enabled, sort_order, created_at, updated_at
+            FROM canonical_projects
+            WHERE id = ?
+            """,
+            (project_id,),
+        ).fetchone()
+        return _canonical_project_from_row(connection, row)
+
+
+def add_canonical_project_alias(project_id: str, alias: str) -> dict[str, Any] | None:
+    ensure_database()
+    with _connect() as connection:
+        if not _project_exists(connection, project_id):
+            return None
+        _insert_project_alias(connection, project_id, alias, _utc_now())
+    return get_canonical_project(project_id)
+
+
+def add_canonical_project_classification_hint(
+    project_id: str,
+    *,
+    hint_type: str,
+    value: str,
+) -> dict[str, Any] | None:
+    ensure_database()
+    with _connect() as connection:
+        if not _project_exists(connection, project_id):
+            return None
+        _insert_project_hint(connection, project_id, hint_type, value, _utc_now())
+    return get_canonical_project(project_id)
+
+
+def add_canonical_project_provider_mapping(
+    project_id: str,
+    *,
+    provider: str,
+    resource_type: str,
+    provider_ref: str,
+    metadata: dict[str, Any] | None = None,
+    enabled: bool = True,
+) -> dict[str, Any] | None:
+    ensure_database()
+    with _connect() as connection:
+        if not _project_exists(connection, project_id):
+            return None
+        _insert_project_provider_mapping(
+            connection,
+            project_id,
+            provider=provider,
+            resource_type=resource_type,
+            provider_ref=provider_ref,
+            metadata=metadata,
+            enabled=enabled,
+            now=_utc_now(),
+        )
+    return get_canonical_project(project_id)
+
+
+def resolve_canonical_project_provider_mapping(
+    *,
+    provider: str,
+    resource_type: str,
+    provider_ref: str,
+) -> dict[str, Any] | None:
+    ensure_database()
+    with _connect() as connection:
+        row = connection.execute(
+            """
+            SELECT p.id, p.key, p.display_name, p.description, p.enabled,
+                p.sort_order, p.created_at, p.updated_at
+            FROM canonical_project_provider_mappings m
+            JOIN canonical_projects p ON p.id = m.project_id
+            WHERE lower(m.provider) = lower(?)
+                AND lower(m.resource_type) = lower(?)
+                AND m.provider_ref = ?
+                AND m.enabled = 1
+                AND p.enabled = 1
+            LIMIT 1
+            """,
+            (provider, resource_type, provider_ref),
+        ).fetchone()
+        return _canonical_project_from_row(connection, row) if row else None
+
+
+def _canonical_project_from_row(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> dict[str, Any]:
+    project_id = str(row["id"])
+    aliases = connection.execute(
+        """
+        SELECT alias, normalized_alias
+        FROM canonical_project_aliases
+        WHERE project_id = ?
+        ORDER BY alias COLLATE NOCASE
+        """,
+        (project_id,),
+    ).fetchall()
+    hints = connection.execute(
+        """
+        SELECT hint_type, value
+        FROM canonical_project_classification_hints
+        WHERE project_id = ?
+        ORDER BY hint_type, value COLLATE NOCASE
+        """,
+        (project_id,),
+    ).fetchall()
+    mappings = connection.execute(
+        """
+        SELECT id, provider, resource_type, provider_ref, metadata, enabled, created_at, updated_at
+        FROM canonical_project_provider_mappings
+        WHERE project_id = ?
+        ORDER BY provider, resource_type, provider_ref
+        """,
+        (project_id,),
+    ).fetchall()
+    item = dict(row)
+    item["enabled"] = bool(item["enabled"])
+    item["aliases"] = [dict(alias) for alias in aliases]
+    item["classification_hints"] = [
+        {"type": hint["hint_type"], "value": hint["value"]}
+        for hint in hints
+    ]
+    item["provider_mappings"] = []
+    for mapping in mappings:
+        provider_mapping = dict(mapping)
+        provider_mapping["enabled"] = bool(provider_mapping["enabled"])
+        provider_mapping["metadata"] = (
+            json.loads(provider_mapping["metadata"])
+            if provider_mapping.get("metadata")
+            else None
+        )
+        item["provider_mappings"].append(provider_mapping)
+    return item
+
+
+def _project_exists(connection: sqlite3.Connection, project_id: str) -> bool:
+    return connection.execute(
+        "SELECT 1 FROM canonical_projects WHERE id = ?",
+        (project_id,),
+    ).fetchone() is not None
+
+
+def _insert_project_alias(
+    connection: sqlite3.Connection,
+    project_id: str,
+    alias: str,
+    now: str,
+) -> None:
+    normalized_alias = _normalize_project_reference(alias)
+    if not normalized_alias:
+        raise ValueError("project alias is required")
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO canonical_project_aliases
+            (project_id, alias, normalized_alias, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (project_id, alias, normalized_alias, now),
+    )
+
+
+def _insert_project_hint(
+    connection: sqlite3.Connection,
+    project_id: str,
+    hint_type: str,
+    value: str,
+    now: str,
+) -> None:
+    if hint_type not in {"life_area", "keyword", "person"}:
+        raise ValueError("unsupported project classification hint type")
+    if not value.strip():
+        raise ValueError("project classification hint value is required")
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO canonical_project_classification_hints
+            (project_id, hint_type, value, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (project_id, hint_type, value, now),
+    )
+
+
+def _insert_project_provider_mapping(
+    connection: sqlite3.Connection,
+    project_id: str,
+    *,
+    provider: str,
+    resource_type: str,
+    provider_ref: str,
+    metadata: dict[str, Any] | None,
+    enabled: bool,
+    now: str,
+) -> None:
+    if not provider.strip() or not resource_type.strip() or not provider_ref.strip():
+        raise ValueError("provider, resource_type, and provider_ref are required")
+    mapping_id = str(uuid.uuid4())
+    connection.execute(
+        """
+        INSERT INTO canonical_project_provider_mappings
+            (id, project_id, provider, resource_type, provider_ref, metadata, enabled, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            mapping_id,
+            project_id,
+            provider,
+            resource_type,
+            provider_ref,
+            json.dumps(metadata, ensure_ascii=False) if metadata is not None else None,
+            1 if enabled else 0,
+            now,
+            now,
+        ),
+    )
+
+
+def _normalize_project_reference(value: str) -> str:
+    text = value.lower().replace("&", " and ")
+    text = text.replace("_", " ").replace("-", " ")
+    return "-".join(re.sub(r"[^a-z0-9]+", " ", text).split())
 
 
 def _slugify(value: str) -> str:

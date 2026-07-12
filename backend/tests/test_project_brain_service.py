@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 from datetime import datetime
+import os
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -9,7 +11,9 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.calendar_tools import CalendarReadResult  # noqa: E402
-from app.project_brain import PROJECT_DEFINITIONS, ProjectBrainService  # noqa: E402
+from app.project_brain import ProjectBrainService  # noqa: E402
+from app.project_registry import project_registry_service  # noqa: E402
+from app.storage import create_canonical_project, ensure_database  # noqa: E402
 from app.todoist_tools import TodoistReadResult  # noqa: E402
 
 
@@ -24,12 +28,22 @@ class FakeSettings:
 
 class ProjectBrainServiceTests(unittest.TestCase):
     def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.env_patch = patch.dict(
+            os.environ,
+            {"APP_DB_PATH": os.path.join(self.tempdir.name, "app.sqlite3")},
+        )
+        self.env_patch.start()
+        self.addCleanup(self.env_patch.stop)
+        ensure_database()
         self.service = ProjectBrainService()
+        self.registry = project_registry_service.snapshot()
         self.now = datetime(2026, 6, 5, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
 
     def test_preserves_project_keys_and_aliases(self):
         self.assertEqual(
-            [project["key"] for project in PROJECT_DEFINITIONS],
+            [project["key"] for project in self.registry.projects],
             [
                 "pcos-ai-todoist-agent",
                 "nebulo",
@@ -46,9 +60,27 @@ class ProjectBrainServiceTests(unittest.TestCase):
             self.service.canonical_project_key("Needs Classification"),
             "needs-classification",
         )
+        expected_aliases = {
+            "ai todoist agent": "pcos-ai-todoist-agent",
+            "personal-chief-of-staff": "pcos-ai-todoist-agent",
+            "chief of staff": "pcos-ai-todoist-agent",
+            "aandm": "am",
+            "a&m": "am",
+            "a and m": "am",
+            "tamu": "am",
+            "college": "am",
+            "uncategorized": "needs-classification",
+        }
+        self.assertEqual(
+            {
+                alias: self.service.canonical_project_key(alias)
+                for alias in expected_aliases
+            },
+            expected_aliases,
+        )
 
     def test_build_project_preserves_hierarchy_and_ranks_executable_leaf(self):
-        project = next(item for item in PROJECT_DEFINITIONS if item["key"] == "pcos-ai-todoist-agent")
+        project = self.registry.get_project_definition("pcos")
         tasks = [
             {
                 "id": "parent",
@@ -82,6 +114,7 @@ class ProjectBrainServiceTests(unittest.TestCase):
             memories=[],
             activity=[],
             now=self.now,
+            registry=self.registry,
         )
 
         self.assertEqual(brain["task_count"], 2)
@@ -92,7 +125,7 @@ class ProjectBrainServiceTests(unittest.TestCase):
         self.assertEqual(brain["task_groups"][0]["subtasks"][0]["id"], "child")
 
     def test_build_project_preserves_needs_classification_diagnostics(self):
-        project = next(item for item in PROJECT_DEFINITIONS if item["key"] == "needs-classification")
+        project = self.registry.get_project_definition("needs-classification")
         task = {
             "id": "ddn",
             "content": "Clarify DDN plan",
@@ -112,6 +145,7 @@ class ProjectBrainServiceTests(unittest.TestCase):
             memories=[],
             activity=[],
             now=self.now,
+            registry=self.registry,
         )
 
         self.assertEqual(brain["tasks"][0]["content"], "Clarify DDN plan")
@@ -171,6 +205,49 @@ class ProjectBrainServiceTests(unittest.TestCase):
         self.assertIn("Brandon", nebulo["people"])
         self.assertEqual({memory["id"] for memory in nebulo["memories"]}, {"memory-nebulo", "memory-brandon"})
         self.assertTrue(nebulo["next_recommendation"].startswith("Resolve blocker:"))
+
+    def test_new_registry_project_flows_into_project_brain_without_code_changes(self):
+        create_canonical_project(
+            key="future-project",
+            display_name="Future Project",
+            description="Added through durable registry storage.",
+            aliases=["future"],
+            classification_hints=[{"type": "keyword", "value": "future signal"}],
+            provider_mappings=[
+                {
+                    "provider": "github",
+                    "resource_type": "repository",
+                    "provider_ref": "Siddanth-Raja/future-project",
+                }
+            ],
+        )
+        tasks = [
+            {
+                "id": "future-task",
+                "content": "Follow up on future signal",
+                "description": "",
+                "section_name": "Misc",
+                "todoist_section_name": "Misc",
+                "category": "Misc",
+                "priority": 2,
+                "todoist_priority": 2,
+                "labels": [],
+            }
+        ]
+
+        with patch("app.project_brain.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)), patch(
+            "app.project_brain.list_upcoming_events",
+            return_value=CalendarReadResult(events=[]),
+        ), patch("app.project_brain.list_memory_entries", return_value=[]), patch(
+            "app.project_brain.list_activity",
+            return_value=[],
+        ):
+            projects = self.service.list_projects(settings=FakeSettings(), current_time=self.now)
+            future = self.service.get_project("future", settings=FakeSettings(), current_time=self.now)
+
+        self.assertEqual(len(projects), 8)
+        self.assertEqual(future["key"], "future-project")
+        self.assertEqual(future["tasks"][0]["id"], "future-task")
 
 
 if __name__ == "__main__":

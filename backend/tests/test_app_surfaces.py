@@ -464,8 +464,8 @@ class AppSurfaceEndpointTests(unittest.TestCase):
             payload={"type": "update_calendar_event", "event": events[0]},
         )
 
-        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)), patch(
-            "app.main.list_upcoming_events",
+        with patch("app.project_brain.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)), patch(
+            "app.project_brain.list_upcoming_events",
             return_value=CalendarReadResult(events=events),
         ):
             projects = main.projects_index(current_time=now, authorization=self.authorization)
@@ -554,8 +554,8 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         }
         tasks = [pcos_parent, *pcos_subtasks, freelance_task, unknown_ddn_task]
 
-        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)), patch(
-            "app.main.list_upcoming_events",
+        with patch("app.project_brain.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)), patch(
+            "app.project_brain.list_upcoming_events",
             return_value=CalendarReadResult(events=[]),
         ):
             pcos = main.project_detail("pcos", current_time=now, authorization=self.authorization)

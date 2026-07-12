@@ -589,7 +589,7 @@ That behavior is consistent with the product direction that external providers r
 
 # 8. Backend Architecture
 
-The backend currently concentrates substantial orchestration in `backend/app/main.py` and `backend/app/agent.py`.
+The backend still concentrates substantial orchestration in `backend/app/main.py` and `backend/app/agent.py`, although Project Brain now has a dedicated service boundary.
 
 This architecture works for the current prototype but has accumulated large modules.
 
@@ -604,9 +604,9 @@ backend/app/calendar_tools.py 500+ lines
 backend/app/todoist_tools.py  500+ lines
 ```
 
-The current codebase therefore has meaningful modularization by provider and subsystem, but the primary agent and API modules are becoming monolithic.
+The current codebase therefore has meaningful modularization by provider and subsystem. Project Brain has been extracted, while the primary agent and remaining API orchestration are still large.
 
-Splitting orchestration, Project Brain, action execution, schemas, and conversation state into dedicated modules is technical-debt work rather than a current feature.
+Further splitting orchestration, action execution, schemas, and conversation state into dedicated modules remains technical-debt work rather than part of this completed Project Brain extraction.
 
 ---
 
@@ -651,12 +651,10 @@ Configuration is cached through `functools.lru_cache`.
 - Habit routes.
 - Task API routes.
 - Today aggregation.
-- Project definitions and Project Brain aggregation.
 - Calendar API route.
 - Activity routes.
-- Project classification and blocker helpers.
 
-There is no `backend/app/project_brain.py` or equivalent dedicated Project Brain service in the audited repository. The extraction described later is active roadmap work, not an implemented boundary.
+`main.py` now delegates `GET /projects` and `GET /projects/{project_key}` to `backend/app/project_brain.py`. That service owns the existing hard-coded project definitions and aliases, provider aggregation, project classification, Todoist hierarchy and container handling, blockers, status, diagnostics, and next-recommendation behavior. The HTTP module retains the Project Brain response schemas and route adapters.
 
 The FastAPI application metadata currently describes PCOS as `Personal Chief of Staff` with application version `0.2.0`.
 
@@ -1279,7 +1277,7 @@ Task aggregation preserves Todoist parent-child relationships.
 
 Parent tasks with active children can be treated as containers so executable leaf tasks are eligible for next-move ranking.
 
-Project Brain is computed live per request rather than read from a dedicated service or persisted project model. The current response is also bounded to 12 tasks, 12 task groups, eight blockers, eight upcoming events, eight memories, and eight recent activity records per project response; the overall `task_count` still reflects all matched active tasks.
+Project Brain is computed live per request by the dedicated backend service rather than read from a persisted project model. The current response is also bounded to 12 tasks, 12 task groups, eight blockers, eight upcoming events, eight memories, and eight recent activity records per project response; the overall `task_count` still reflects all matched active tasks.
 
 ---
 
@@ -1903,11 +1901,11 @@ This can produce inconsistent recommendations.
 
 Future providers will worsen this without decomposition.
 
-## 14.3 `main.py` owns too much Project Brain logic
+## 14.3 Project Brain service extraction is complete, but schemas remain in `main.py`
 
-Project definitions, task aggregation, project classification, Today logic, API schemas, and HTTP endpoints currently share one large module.
+Project definitions, task aggregation, project classification, hierarchy, blockers, diagnostics, and next-move computation now live in `backend/app/project_brain.py`.
 
-Project Brain should eventually become a dedicated backend subsystem.
+`main.py` still owns the HTTP response schemas and route adapters, while Today remains a separate aggregation path. Moving schemas is optional cleanup; consolidating Today is separate roadmap work and was intentionally not combined with the service extraction.
 
 ## 14.4 Provider abstraction is incomplete
 
@@ -3211,7 +3209,25 @@ npm run build passing
 git diff --check passing
 ```
 
-## 17.15 Action Cards
+## 17.15 Dedicated Project Brain Service
+
+Project Brain definitions, aliases, classification, aggregation, hierarchy, container handling, blockers, status, diagnostics, and next-recommendation behavior were extracted from `backend/app/main.py` into `backend/app/project_brain.py`.
+
+The `/projects` and `/projects/{project_key}` route contracts remain in `main.py` and delegate to `ProjectBrainService`.
+
+The extraction intentionally preserved the hard-coded definitions and current provider-specific work shape. The canonical registry, normalized work model, shared recommendation service, Today consolidation, Linear integration, agent decomposition, and Calendar changes remain separate roadmap work.
+
+Focused service-level coverage was added for project keys and aliases, provider aggregation, Needs Classification diagnostics, parent-container hierarchy, executable leaf ranking, blockers, people, memories, Activity, and Calendar commitments.
+
+Verification after the extraction reached:
+
+```text
+90 backend tests passing
+npm run build passing
+git diff --check passing
+```
+
+## 17.16 Action Cards
 
 The Chat frontend renders structured action results.
 
@@ -3221,7 +3237,7 @@ The visual direction is that system changes should appear as application state t
 
 This is an implemented UI pattern and an accepted product principle.
 
-## 17.16 Activity Logging
+## 17.17 Activity Logging
 
 Activity logging is implemented as local PCOS state.
 
@@ -3923,7 +3939,7 @@ Move tested behavior behind clearer boundaries incrementally.
 
 ---
 
-## 21.2 `main.py` Owns Too Much Application Logic
+## 21.2 `main.py` Still Owns Broad Application Logic
 
 `backend/app/main.py` is approximately 2,000 lines.
 
@@ -3934,21 +3950,17 @@ It currently combines:
 - authentication;
 - health diagnostics;
 - Today aggregation;
-- Project Brain aggregation;
-- project definitions;
-- classification;
-- blocker helpers;
 - memory routes;
 - habit routes;
 - task routes;
 - calendar routes;
 - activity routes.
 
-Project Brain should not continue growing inside the HTTP application module.
+Project Brain no longer grows inside the HTTP application module, but the remaining route, schema, Today, and provider-health responsibilities still make `main.py` broad.
 
 ### Direction
 
-Move Project Brain aggregation and shared intelligence into dedicated backend services.
+Continue moving shared application logic behind dedicated services without folding the separate Today, normalized work model, registry, or recommendation consolidation into unrelated refactors.
 
 HTTP routes should primarily validate requests, invoke application services, and return schemas.
 
@@ -5269,7 +5281,7 @@ Do not begin broad finance, native app, vehicle, or smart-mirror work before thi
 
 ## Issue: Extract Project Brain Into a Dedicated Backend Service
 
-**Status:** Todo
+**Status:** Implemented
 
 **Priority:** Urgent
 
@@ -7851,15 +7863,25 @@ Current responsibilities include:
 - API schemas;
 - provider health;
 - Today;
-- Project Brain aggregation;
-- project classification;
+- Project Brain response schemas and HTTP route adapters;
 - memory routes;
 - habits routes;
 - tasks routes;
 - calendar routes;
 - activity routes.
 
-This file is a current architecture-consolidation target.
+`backend/app/project_brain.py`
+
+Current responsibilities include:
+
+- project definitions and aliases;
+- Todoist, Calendar, Memory, and Activity aggregation;
+- project classification and Needs Classification diagnostics;
+- parent-child hierarchy and container handling;
+- project blockers and status;
+- project next recommendations.
+
+`main.py` remains an architecture-consolidation target for responsibilities outside Project Brain.
 
 Do not continue adding major intelligence subsystems directly to `main.py` without considering the Project Brain service roadmap.
 

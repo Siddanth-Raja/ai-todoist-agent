@@ -15,6 +15,7 @@ from app.project_brain import ProjectBrainService  # noqa: E402
 from app.project_registry import project_registry_service  # noqa: E402
 from app.storage import create_canonical_project, ensure_database  # noqa: E402
 from app.todoist_tools import TodoistReadResult  # noqa: E402
+from app.todoist_work_adapter import todoist_work_adapter  # noqa: E402
 
 
 @dataclass
@@ -109,7 +110,11 @@ class ProjectBrainServiceTests(unittest.TestCase):
 
         brain = self.service.build_project(
             project=project,
-            tasks=tasks,
+            tasks=todoist_work_adapter.adapt_many(
+                tasks,
+                registry=self.registry,
+                today=self.now.date(),
+            ),
             events=[],
             memories=[],
             activity=[],
@@ -140,7 +145,11 @@ class ProjectBrainServiceTests(unittest.TestCase):
 
         brain = self.service.build_project(
             project=project,
-            tasks=[task],
+            tasks=todoist_work_adapter.adapt_many(
+                [task],
+                registry=self.registry,
+                today=self.now.date(),
+            ),
             events=[],
             memories=[],
             activity=[],

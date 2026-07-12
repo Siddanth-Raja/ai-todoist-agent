@@ -3,18 +3,20 @@ import re
 from typing import Any
 
 from .calendar_tools import list_upcoming_events
-from .planner import enrich_task, rank_tasks
+from .planner import rank_tasks
 from .project_registry import (
     ProjectRegistrySnapshot,
     project_registry_service,
 )
 from .storage import list_activity, list_memory_entries
+from .todoist_work_adapter import todoist_work_adapter
 from .todoist_tools import (
     LIFE_AREA_TO_TODOIST_SECTION,
     TODOIST_SECTION_TO_LIFE_AREA,
     life_area_for_todoist_section,
     list_active_tasks,
 )
+from .work_domain import NormalizedWorkItem, WorkStatus
 
 
 BLOCKER_WORDS = ("blocked", "blocking", "waiting", "review", "feedback")
@@ -29,11 +31,11 @@ class ProjectBrainService:
         registry = self.registry_service.snapshot()
         local_now = current_time.astimezone(settings.local_tz) if current_time else datetime.now(settings.local_tz)
         todoist_result = list_active_tasks(settings)
-        tasks = [
-            enrich_task(task, local_now.date())
-            for task in todoist_result.tasks
-            if task.get("content")
-        ]
+        tasks = todoist_work_adapter.adapt_many(
+            todoist_result.tasks,
+            registry=registry,
+            today=local_now.date(),
+        )
         calendar_result = list_upcoming_events(settings, now=current_time, days=14)
         events = _future_events(calendar_result.events, local_now)
         memories = [memory for memory in list_memory_entries() if memory.get("enabled")]
@@ -63,11 +65,11 @@ class ProjectBrainService:
         canonical_key = registry.resolve_key(project_key)
         local_now = current_time.astimezone(settings.local_tz) if current_time else datetime.now(settings.local_tz)
         todoist_result = list_active_tasks(settings)
-        tasks = [
-            enrich_task(task, local_now.date())
-            for task in todoist_result.tasks
-            if task.get("content")
-        ]
+        tasks = todoist_work_adapter.adapt_many(
+            todoist_result.tasks,
+            registry=registry,
+            today=local_now.date(),
+        )
         calendar_result = list_upcoming_events(settings, now=current_time, days=14)
         events = _future_events(calendar_result.events, local_now)
         memories = [memory for memory in list_memory_entries() if memory.get("enabled")]
@@ -96,7 +98,7 @@ class ProjectBrainService:
         self,
         *,
         project: dict[str, Any],
-        tasks: list[dict[str, Any]],
+        tasks: list[NormalizedWorkItem],
         events: list[dict[str, Any]],
         memories: list[dict[str, Any]],
         activity: list[dict[str, Any]],
@@ -174,14 +176,19 @@ project_brain_service = ProjectBrainService()
 
 
 def _task_matches_project(
-    task: dict[str, Any],
+    task: NormalizedWorkItem,
     project: dict[str, Any],
     registry: ProjectRegistrySnapshot,
-    task_lookup: dict[str, dict[str, Any]] | None = None,
+    task_lookup: dict[str, NormalizedWorkItem] | None = None,
 ) -> bool:
     parent = _parent_task(task, task_lookup or {})
     if project.get("classification_bucket"):
         return _task_needs_classification(task, parent=parent, registry=registry)
+    if (
+        task.canonical_project_id
+        and task.canonical_project_id == project.get("canonical_project_id")
+    ):
+        return True
     life_area = project.get("life_area")
     if life_area and _task_section_for(task) == life_area:
         return True
@@ -272,8 +279,10 @@ def _project_people(project: dict[str, Any], memories: list[dict[str, Any]]) -> 
     return sorted(people)
 
 
-def _children_by_parent(tasks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    children: dict[str, list[dict[str, Any]]] = {}
+def _children_by_parent(
+    tasks: list[NormalizedWorkItem],
+) -> dict[str, list[NormalizedWorkItem]]:
+    children: dict[str, list[NormalizedWorkItem]] = {}
     for task in tasks:
         parent_id = str(task.get("parent_id") or "").strip()
         if parent_id:
@@ -281,34 +290,34 @@ def _children_by_parent(tasks: list[dict[str, Any]]) -> dict[str, list[dict[str,
     return children
 
 
-def _parent_task(task: dict[str, Any], task_lookup: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+def _parent_task(
+    task: NormalizedWorkItem,
+    task_lookup: dict[str, NormalizedWorkItem],
+) -> NormalizedWorkItem | None:
     parent_id = str(task.get("parent_id") or "").strip()
     return task_lookup.get(parent_id) if parent_id else None
 
 
-def _task_completed(task: dict[str, Any]) -> bool:
-    return bool(task.get("completed") or task.get("is_completed") or task.get("checked"))
+def _task_completed(task: NormalizedWorkItem) -> bool:
+    return task.status == WorkStatus.COMPLETED
 
 
-def _task_is_container(task: dict[str, Any], active_children_by_parent: dict[str, list[dict[str, Any]]]) -> bool:
-    task_id = str(task.get("id") or "")
-    return bool(active_children_by_parent.get(task_id)) and not _task_explicitly_completeable(task)
+def _task_is_container(
+    task: NormalizedWorkItem,
+    active_children_by_parent: dict[str, list[NormalizedWorkItem]],
+) -> bool:
+    return task.is_container
 
 
-def _task_explicitly_completeable(task: dict[str, Any]) -> bool:
-    labels = {str(label).strip().lower() for label in task.get("labels") or []}
-    if {"completeable", "completable", "leaf-task"} & labels:
-        return True
-    text = _normalize_text(f"{task.get('content') or ''} {task.get('description') or ''}")
-    return "[completeable]" in text or "[completable]" in text
+def _project_leaf_tasks(
+    tasks: list[NormalizedWorkItem],
+    active_children_by_parent: dict[str, list[NormalizedWorkItem]],
+) -> list[NormalizedWorkItem]:
+    return [task for task in tasks if task.is_executable]
 
 
-def _project_leaf_tasks(tasks: list[dict[str, Any]], active_children_by_parent: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    return [task for task in tasks if not _task_completed(task) and not _task_is_container(task, active_children_by_parent)]
-
-
-def _project_rankable_task(task: dict[str, Any]) -> dict[str, Any]:
-    rankable = dict(task)
+def _project_rankable_task(task: NormalizedWorkItem) -> dict[str, Any]:
+    rankable = task.to_legacy_task()
     try:
         todoist_priority = int(task.get("todoist_priority") or 0)
     except (TypeError, ValueError):
@@ -321,7 +330,11 @@ def _project_rankable_task(task: dict[str, Any]) -> dict[str, Any]:
     return rankable
 
 
-def _project_task_groups(tasks: list[dict[str, Any]], task_lookup: dict[str, dict[str, Any]], active_children_by_parent: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+def _project_task_groups(
+    tasks: list[NormalizedWorkItem],
+    task_lookup: dict[str, NormalizedWorkItem],
+    active_children_by_parent: dict[str, list[NormalizedWorkItem]],
+) -> list[dict[str, Any]]:
     tasks_by_id = {str(task.get("id")): task for task in tasks if task.get("id")}
     grouped_parent_ids = {str(task.get("parent_id")) for task in tasks if task.get("parent_id") and str(task.get("parent_id")) in task_lookup}
     roots = [task for task in tasks if not task.get("parent_id") or str(task.get("id")) in grouped_parent_ids]
@@ -348,9 +361,9 @@ def _project_task_groups(tasks: list[dict[str, Any]], task_lookup: dict[str, dic
 def _project_task_diagnostics(
     *,
     project: dict[str, Any],
-    tasks: list[dict[str, Any]],
-    task_lookup: dict[str, dict[str, Any]],
-    active_children_by_parent: dict[str, list[dict[str, Any]]],
+    tasks: list[NormalizedWorkItem],
+    task_lookup: dict[str, NormalizedWorkItem],
+    active_children_by_parent: dict[str, list[NormalizedWorkItem]],
     registry: ProjectRegistrySnapshot,
 ) -> list[dict[str, Any]]:
     diagnostics: list[dict[str, Any]] = []
@@ -378,11 +391,11 @@ def _project_task_diagnostics(
 
 def _task_diagnostic_reason(
     *,
-    task: dict[str, Any],
+    task: NormalizedWorkItem,
     project: dict[str, Any],
-    parent: dict[str, Any] | None,
+    parent: NormalizedWorkItem | None,
     included: bool,
-    active_children_by_parent: dict[str, list[dict[str, Any]]],
+    active_children_by_parent: dict[str, list[NormalizedWorkItem]],
     registry: ProjectRegistrySnapshot,
 ) -> str:
     if _task_completed(task):
@@ -401,8 +414,8 @@ def _task_diagnostic_reason(
 
 
 def _resolved_project_name_for_task(
-    task: dict[str, Any],
-    task_lookup: dict[str, dict[str, Any]],
+    task: NormalizedWorkItem,
+    task_lookup: dict[str, NormalizedWorkItem],
     registry: ProjectRegistrySnapshot,
 ) -> str:
     parent = _parent_task(task, task_lookup)
@@ -422,9 +435,9 @@ def _resolved_project_name_for_task(
 
 
 def _task_needs_classification(
-    task: dict[str, Any],
+    task: NormalizedWorkItem,
     *,
-    parent: dict[str, Any] | None,
+    parent: NormalizedWorkItem | None,
     registry: ProjectRegistrySnapshot,
 ) -> bool:
     if parent:
@@ -444,7 +457,14 @@ def _task_needs_classification(
     )
 
 
-def _project_blockers(*, project: dict[str, Any], tasks: list[dict[str, Any]], events: list[dict[str, Any]], ranked_tasks: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
+def _project_blockers(
+    *,
+    project: dict[str, Any],
+    tasks: list[NormalizedWorkItem],
+    events: list[dict[str, Any]],
+    ranked_tasks: list[dict[str, Any]],
+    now: datetime,
+) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
     for task in tasks:
         content = str(task.get("content") or "Untitled task")
@@ -464,7 +484,12 @@ def _project_blockers(*, project: dict[str, Any], tasks: list[dict[str, Any]], e
     return _dedupe_blockers(blockers)
 
 
-def _project_status(*, blockers: list[dict[str, Any]], tasks: list[dict[str, Any]], events: list[dict[str, Any]]) -> str:
+def _project_status(
+    *,
+    blockers: list[dict[str, Any]],
+    tasks: list[NormalizedWorkItem],
+    events: list[dict[str, Any]],
+) -> str:
     if any(blocker.get("severity") == "critical" for blocker in blockers):
         return "Blocked"
     if blockers:
@@ -492,7 +517,9 @@ def _future_events(events: list[dict[str, Any]], now: datetime) -> list[dict[str
     return future
 
 
-def _sort_project_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _sort_project_tasks(
+    tasks: list[NormalizedWorkItem],
+) -> list[NormalizedWorkItem]:
     due_order = {"overdue": 0, "today": 1, "tomorrow": 2, "this_week": 3, "later": 4}
     return sorted(tasks, key=lambda task: (due_order.get(str(task.get("due_status") or ""), 5), -int(task.get("todoist_priority") or task.get("priority") or 0), str(task.get("due_date") or "9999-12-31"), str(task.get("content") or "").lower()))
 
@@ -509,7 +536,7 @@ def _project_event_item(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _is_stale_high_priority_task(task: dict[str, Any], now: datetime) -> bool:
+def _is_stale_high_priority_task(task: NormalizedWorkItem, now: datetime) -> bool:
     if not _is_high_priority_task(task):
         return False
     created_at = _parse_datetime(task.get("created_at"))
@@ -542,7 +569,7 @@ def _dedupe_blockers(blockers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return deduped
 
 
-def _task_match_text(task: dict[str, Any]) -> str:
+def _task_match_text(task: NormalizedWorkItem) -> str:
     return " ".join(str(part or "") for part in (task.get("content"), task.get("description"), task.get("project_name"), task.get("section_name"), task.get("todoist_section_name"), task.get("category"), " ".join(str(label) for label in task.get("labels") or [])))
 
 
@@ -589,7 +616,7 @@ def _first_matching_phrase(text: str, phrases: tuple[str, ...]) -> str | None:
     return next((phrase for phrase in phrases if _contains_phrase(normalized, phrase)), None)
 
 
-def _task_section_for(task: dict[str, Any]) -> str:
+def _task_section_for(task: NormalizedWorkItem) -> str:
     category = str(task.get("category") or task.get("project_category") or "").strip()
     if category in {"A&M", "XO", "Freelance", "Nebulo", "Personal", "Misc"}:
         return category
@@ -600,13 +627,13 @@ def _task_section_for(task: dict[str, Any]) -> str:
     return todoist_section_category or "Misc"
 
 
-def _todoist_task_section_for(task: dict[str, Any]) -> str:
+def _todoist_task_section_for(task: NormalizedWorkItem) -> str:
     section_name = str(task.get("todoist_section_name") or task.get("section_name") or "").strip()
     canonical_section = LIFE_AREA_TO_TODOIST_SECTION.get(_task_section_for(task), LIFE_AREA_TO_TODOIST_SECTION["Misc"])
     return section_name if section_name in TODOIST_SECTION_TO_LIFE_AREA else canonical_section
 
 
-def _task_item(task: dict[str, Any], section: str) -> dict[str, Any]:
+def _task_item(task: NormalizedWorkItem, section: str) -> dict[str, Any]:
     return {
         "id": task.get("id"), "content": str(task.get("content") or ""), "description": task.get("description"), "section": section,
         "parent_id": task.get("parent_id"), "project_name": task.get("project_name"), "section_name": task.get("section_name"),
@@ -619,7 +646,7 @@ def _task_item(task: dict[str, Any], section: str) -> dict[str, Any]:
     }
 
 
-def _is_high_priority_task(task: dict[str, Any]) -> bool:
+def _is_high_priority_task(task: NormalizedWorkItem) -> bool:
     raw_priority = task.get("todoist_priority")
     try:
         return int(raw_priority if raw_priority is not None else task.get("priority")) >= 4

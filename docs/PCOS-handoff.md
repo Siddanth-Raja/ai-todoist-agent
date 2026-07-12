@@ -452,7 +452,9 @@ ai-todoist-agent/
 │   │   ├── project_brain.py
 │   │   ├── project_registry.py
 │   │   ├── storage.py
-│   │   └── todoist_tools.py
+│   │   ├── todoist_work_adapter.py
+│   │   ├── todoist_tools.py
+│   │   └── work_domain.py
 │   ├── scripts/
 │   │   ├── debug_google_auth.py
 │   │   └── google_oauth_setup.py
@@ -461,7 +463,8 @@ ai-todoist-agent/
 │   │   ├── test_app_surfaces.py
 │   │   ├── test_calendar_intelligence.py
 │   │   ├── test_project_brain_service.py
-│   │   └── test_project_registry.py
+│   │   ├── test_project_registry.py
+│   │   └── test_work_domain.py
 │   ├── README.md
 │   ├── requirements.txt
 │   └── personal_chief_of_staff.sqlite3
@@ -1293,6 +1296,10 @@ Project Brain currently aggregates data from:
 - Google Calendar;
 - Memory;
 - Activity.
+
+Todoist tasks enter Project Brain through `TodoistWorkAdapter` as typed `NormalizedWorkItem` records. Project Brain uses typed provider identity, project reference, status, priority, hierarchy, container, executable, blocked, dependency, timestamp, and provider-metadata fields internally.
+
+The existing planner inputs and Project Brain API response objects are produced through narrow compatibility projections. No normalized-work fields are added to the public `/projects` contract.
 
 Task aggregation preserves Todoist parent-child relationships.
 
@@ -3234,7 +3241,7 @@ Project Brain definitions, aliases, classification, aggregation, hierarchy, cont
 
 The `/projects` and `/projects/{project_key}` route contracts remain in `main.py` and delegate to `ProjectBrainService`.
 
-The extraction intentionally preserved the hard-coded definitions and current provider-specific work shape. The canonical registry, normalized work model, shared recommendation service, Today consolidation, Linear integration, agent decomposition, and Calendar changes remain separate roadmap work.
+The extraction intentionally preserved the then-current definitions and provider-specific work shape. The canonical registry and normalized work model were completed afterward; the shared recommendation service, Today consolidation, Linear integration, agent decomposition, and Calendar changes remain separate roadmap work.
 
 Focused service-level coverage was added for project keys and aliases, provider aggregation, Needs Classification diagnostics, parent-container hierarchy, executable leaf ranking, blockers, people, memories, Activity, and Calendar commitments.
 
@@ -3266,7 +3273,43 @@ npm run build passing
 git diff --check passing
 ```
 
-## 17.17 Action Cards
+## 17.17 Normalized Work Model and Todoist Adapter
+
+`backend/app/work_domain.py` defines the typed provider-neutral work contract used by Project Brain.
+
+The model represents provider identity, provider record ID, nullable canonical project ID, title, description, normalized and original status, normalized and original priority, due date/time, parent provider record ID, container and executable state, explicit blocked state, dependency references, timestamps, provider URL/reference, and preserved provider metadata.
+
+Normalized priority uses one direction across providers:
+
+```text
+0 = none
+1 = low
+2 = medium
+3 = high
+4 = urgent
+```
+
+Higher always means more important. Todoist's native `1–4` priority maps directly and remains separately available as `original_provider_priority`.
+
+Normalized status is `open`, `completed`, or `canceled`. Completed and canceled work cannot be executable, and container work cannot be executable.
+
+`backend/app/todoist_work_adapter.py` enriches Todoist source records, resolves canonical project IDs from registry provider mappings, preserves source metadata, and finalizes hierarchy across each provider batch. A parent with active children becomes a non-executable container unless it is explicitly marked completable. Completed children do not make an otherwise executable parent a container.
+
+Todoist does not provide explicit dependency or blocked-state semantics, so the adapter emits no dependencies and `is_blocked = false`. Existing Project Brain keyword-based blocker presentation remains outside the normalized model only to preserve current behavior; it must not be mistaken for provider-grounded dependency state.
+
+Normalized work is computed in memory and is not persisted or synchronized. Linear adapters, shared recommendations, and other consuming surfaces remain separate work.
+
+The existing `/tasks` created-at omission and legacy API priority fields are intentionally unchanged. Project Brain uses compatibility projections until the shared recommendation/API migration can address those concerns without changing current behavior.
+
+Verification after the normalized work implementation reached:
+
+```text
+100 backend tests passing
+npm run build passing
+git diff --check passing
+```
+
+## 17.18 Action Cards
 
 The Chat frontend renders structured action results.
 
@@ -3276,7 +3319,7 @@ The visual direction is that system changes should appear as application state t
 
 This is an implemented UI pattern and an accepted product principle.
 
-## 17.18 Activity Logging
+## 17.19 Activity Logging
 
 Activity logging is implemented as local PCOS state.
 
@@ -3305,6 +3348,7 @@ Recorded development checkpoints include:
 | Project Brain aggregation fix | 86 tests passing | Build passing | Passing |
 | Dedicated Project Brain service | 90 tests passing | Build passing | Passing |
 | Durable canonical project registry | 95 tests passing | Build passing | Passing |
+| Normalized work model | 100 tests passing | Build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -3315,6 +3359,7 @@ The current backend test suite includes:
 - `backend/tests/test_calendar_intelligence.py`
 - `backend/tests/test_project_brain_service.py`
 - `backend/tests/test_project_registry.py`
+- `backend/tests/test_work_domain.py`
 
 Common verification commands are:
 
@@ -3433,7 +3478,7 @@ The consolidation should preserve working behavior while progressively moving th
 
 ## 19.2 Introduce a Work Provider Boundary
 
-**Status:** Active direction / required for Linear
+**Status:** Normalized model and Todoist adapter implemented / Linear adapter planned
 
 Todoist is currently deeply represented in agent behavior and project aggregation.
 
@@ -3441,7 +3486,7 @@ This was acceptable when PCOS was primarily an AI Todoist agent.
 
 It is no longer sufficient for the accepted product direction.
 
-PCOS now needs to understand at least two different work systems:
+Project Brain now consumes typed normalized Todoist work while preserving the existing response contract. PCOS still needs to add a second work system:
 
 - Todoist;
 - Linear.
@@ -4030,15 +4075,15 @@ The frontend should render:
 
 ---
 
-## 21.4 Provider Models Are Not Normalized
+## 21.4 Provider Models Are Partially Normalized
 
-Todoist concepts currently leak into broader PCOS behavior.
+Project Brain now has a typed normalized work model and a Todoist adapter. Provider identity, original status and priority, provider record IDs, and provider metadata are preserved.
 
-Linear introduces different concepts including issues, statuses, projects, and dependencies.
+Today, Tasks, Chat, and agent behavior still consume older task dictionaries, and Linear has no adapter yet. Provider normalization is therefore implemented for Project Brain but not universal across PCOS.
 
 ### Direction
 
-Create normalized domain models where shared intelligence needs them.
+Extend the existing model through provider-specific adapters where shared intelligence needs them.
 
 Preserve provider-specific fields and IDs.
 
@@ -4272,15 +4317,15 @@ Needs Classification is synthesized outside the editable registry as a system/un
 
 ## 22.3 Shared Work Model
 
-No normalized cross-provider work model currently exists.
+**Status:** Typed model and Todoist adapter implemented
 
-Todoist tasks are the implemented work source.
+Project Brain now consumes typed normalized Todoist work.
 
 Linear issues are planned.
 
-Project Brain needs a shared reasoning representation before it can compare and rank work across both systems.
+The model can represent Linear-style dependencies and blocked state, but the Todoist adapter intentionally leaves those fields empty/false because Todoist does not provide them.
 
-This plumbing is unfinished.
+The remaining plumbing is a Linear adapter and any later migration of Today, Tasks, or Chat. Normalized provider work is intentionally not persisted or synchronized.
 
 ---
 
@@ -5427,7 +5472,7 @@ Schema design should account for Linear and repository mappings.
 
 ## Issue: Define the Normalized Work Model
 
-**Status:** Todo
+**Status:** Implemented
 
 **Priority:** Urgent
 
@@ -7935,6 +7980,26 @@ Current responsibilities include:
 - synthesizing Needs Classification as a system state;
 - exposing durable project IDs and provider mappings without changing API contracts.
 
+`backend/app/work_domain.py`
+
+Current responsibilities include:
+
+- typed normalized work, dependency, status, and priority models;
+- provider-neutral hierarchy, container, executable, and blocked fields;
+- execution-state invariants;
+- narrow legacy projection for existing Project Brain consumers.
+
+`backend/app/todoist_work_adapter.py`
+
+Current responsibilities include:
+
+- converting normalized Todoist provider records into typed work;
+- applying the documented higher-is-more-important priority scale;
+- preserving original Todoist priority and provider metadata;
+- resolving canonical project IDs through registry provider mappings;
+- computing parent/container/executable state across the Todoist batch;
+- leaving explicit dependencies and blocked state empty when Todoist supplies none.
+
 `main.py` remains an architecture-consolidation target for responsibilities outside Project Brain.
 
 Do not continue adding major intelligence subsystems directly to `main.py` without considering the Project Brain service roadmap.
@@ -8530,6 +8595,7 @@ Implemented systems include:
 - Project Brain V1;
 - dedicated Project Brain service;
 - durable canonical project registry;
+- typed normalized work model and Todoist adapter;
 - Chat;
 - Calendar V1;
 - Tasks V1;
@@ -8540,7 +8606,7 @@ Implemented systems include:
 
 “Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, confirmation still has a legacy process-global path, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
 
-The canonical project registry checkpoint reached 95 tests passing, with the Next.js 15.5.19 production build and `git diff --check` passing. Earlier 8-, 56-, 75-, 85-, 86-, and 90-test checkpoints remain recorded as implementation history rather than current feature claims.
+The normalized work checkpoint reached 100 tests passing, with the Next.js 15.5.19 production build and `git diff --check` passing. Earlier 8-, 56-, 75-, 85-, 86-, 90-, and 95-test checkpoints remain recorded as implementation history rather than current feature claims.
 
 The current product is not yet the full Personal Operating System described in the vision.
 

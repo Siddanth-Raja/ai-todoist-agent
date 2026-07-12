@@ -503,8 +503,11 @@ def _normalize_task(
         "due": task.get("due"),
         "priority": internal_priority,
         "todoist_priority": todoist_priority,
+        "status": task.get("status"),
         "created_at": task.get("created_at"),
+        "updated_at": task.get("updated_at"),
         "completed": bool(task.get("completed") or task.get("is_completed") or task.get("checked")),
         "labels": [str(label) for label in labels],
         "url": f"https://app.todoist.com/app/task/{task_id}" if task_id else None,
+        "provider_metadata": dict(task),
     }

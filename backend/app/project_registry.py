@@ -29,6 +29,29 @@ class ProjectRegistrySnapshot:
             None,
         )
 
+    def resolve_provider_project_id(
+        self,
+        *,
+        provider: str,
+        resource_type: str,
+        provider_ref: str,
+    ) -> str | None:
+        for project in self.projects:
+            canonical_project_id = project.get("canonical_project_id")
+            if canonical_project_id is None:
+                continue
+            for mapping in project.get("provider_mappings", ()):
+                if not mapping.get("enabled", True):
+                    continue
+                if (
+                    str(mapping.get("provider") or "").lower() == provider.lower()
+                    and str(mapping.get("resource_type") or "").lower()
+                    == resource_type.lower()
+                    and str(mapping.get("provider_ref") or "") == provider_ref
+                ):
+                    return str(canonical_project_id)
+        return None
+
 
 class ProjectRegistryService:
     def snapshot(self) -> ProjectRegistrySnapshot:

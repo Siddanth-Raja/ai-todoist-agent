@@ -36,6 +36,7 @@ class Settings:
     openai_api_key: str | None
     openai_model: str
     agent_api_key: str | None
+    linear_api_key: str | None = None
 
     @property
     def local_tz(self) -> ZoneInfo:
@@ -44,6 +45,10 @@ class Settings:
     @property
     def missing_todoist(self) -> bool:
         return not self.todoist_api_token
+
+    @property
+    def missing_linear(self) -> bool:
+        return not self.linear_api_key
 
     @property
     def missing_google_calendar_fields(self) -> list[str]:
@@ -74,6 +79,7 @@ def get_settings() -> Settings:
         openai_api_key=_optional_env("OPENAI_API_KEY"),
         openai_model=_optional_env("OPENAI_MODEL") or "gpt-4o-mini",
         agent_api_key=_optional_env("AGENT_API_KEY"),
+        linear_api_key=_optional_env("LINEAR_API_KEY"),
     )
 
 

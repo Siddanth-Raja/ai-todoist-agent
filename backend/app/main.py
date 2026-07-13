@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from .agent import MODE, confirm_pending_action, handle_chat
 from .calendar_tools import check_google_auth, categories_conflict, list_remaining_today_events, list_upcoming_events
 from .config import get_settings
+from .linear_client import LinearClient
 from .planner import enrich_task, rank_tasks
 from .project_brain import project_brain_service
 from .storage import (
@@ -358,6 +359,7 @@ def settings_health(authorization: str | None = Header(default=None)) -> dict[st
             "todoist": _todoist_health(settings),
             "google_calendar": _google_calendar_health(settings),
             "openai": _openai_health(settings),
+            "linear": _linear_health(settings),
         },
     }
 
@@ -464,6 +466,38 @@ def _openai_health(settings) -> dict[str, Any]:
     return _health_payload(
         status="ok",
         message=f"Connected to OpenAI model {settings.openai_model}.",
+    )
+
+
+def _linear_health(settings) -> dict[str, Any]:
+    result = LinearClient(settings).check_health()
+    details = {"state": result.state}
+    if result.error:
+        details["error_code"] = result.error.code
+        if result.error.http_status is not None:
+            details["http_status"] = result.error.http_status
+    if result.state == "not_configured":
+        return _health_payload(
+            status="warning",
+            message="Linear is not configured. Set LINEAR_API_KEY to enable read access.",
+            details=details,
+        )
+    if result.state == "connected":
+        return _health_payload(
+            status="ok",
+            message="Connected to Linear with read access.",
+            details=details,
+        )
+    if result.state == "authentication_failure":
+        return _health_payload(
+            status="error",
+            message="Linear rejected the configured API key or its permissions.",
+            details=details,
+        )
+    return _health_payload(
+        status="error",
+        message="Could not reach Linear or Linear returned an invalid provider response.",
+        details=details,
     )
 
 

@@ -3333,6 +3333,42 @@ Project Brain can consume recent activity.
 
 The Activity system is not yet a complete provider-wide timeline, but the storage and API foundation are implemented.
 
+## 17.20 Linear Read Provider and Normalized Adapter
+
+SID-133 adds the initial read-only Linear provider boundary without feeding Linear into Project Brain.
+
+`backend/app/linear_client.py` owns Linear transport. It uses Linear's supported GraphQL endpoint, personal API-key authentication through the raw `Authorization: <API_KEY>` header, a 15-second timeout, Relay cursor pagination for projects and issues, continuation pagination for issue relations, and structured errors. GraphQL error bodies are not returned to callers, and the configured token is never logged or included in health output.
+
+Local configuration is optional:
+
+```text
+LINEAR_API_KEY=<personal Linear API key>
+```
+
+When the variable is absent, PCOS still starts. Settings health reports Linear as `warning` with provider state `not_configured`. Configured connections distinguish `connected`, `authentication_failure`, and `provider_failure`; authentication and permission failures do not expose the credential.
+
+The read client retrieves Linear project identity, name, state, URL, priority, start and target dates, and timestamps. Issue reads preserve UUID and human identifier, title and description, workflow state name and type, priority, project, parent, direct and inverse relations, project milestone, assignee, team, created/updated/completed/canceled timestamps, due date, and URL. Malformed or incomplete provider envelopes fail closed.
+
+`backend/app/linear_work_adapter.py` converts issues to `NormalizedWorkItem` records in memory. The stable issue UUID is `provider_record_id`; the human identifier remains in provider metadata; the Linear project UUID is `provider_reference` and provider metadata. `canonical_project_id` intentionally remains nullable.
+
+Linear priority is explicitly inverted into the canonical higher-is-more-important scale:
+
+```text
+Linear 0 None   -> PCOS NONE
+Linear 4 Low    -> PCOS LOW
+Linear 3 Medium -> PCOS MEDIUM
+Linear 2 High   -> PCOS HIGH
+Linear 1 Urgent -> PCOS URGENT
+```
+
+Workflow normalization uses Linear's documented workflow-state `type`: `completed` becomes completed, `canceled` becomes canceled, and backlog/unstarted/started states remain open. Completed and canceled records are non-executable. Active parents with active children follow the canonical normalized-work container rule and become non-executable containers.
+
+Only explicit Linear `blocks` relations become normalized `blocks` or `blocked_by` dependencies. Blocked state is true only when an explicit inbound `blocks` relation exists. Titles, descriptions, milestone order, and workflow-state names do not invent dependencies or blocker state. Milestone, assignee, workflow, project, team, and relation data remain available in provider metadata.
+
+SID-133 does not create canonical Linear project mappings, combine Linear and Todoist records, change Project Brain or recommendations, add writes or synchronization, or persist mirrored issues. Linking Linear projects to canonical PCOS projects remains SID-134. Feeding mapped Linear work into Project Brain remains SID-135.
+
+Verification for SID-133 reached 129 backend tests passing, including 16 focused mocked Linear tests. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, and a no-credential runtime health smoke check passed. No local `LINEAR_API_KEY` was available, so live authenticated GraphQL verification remains pending and no credential was manufactured.
+
 ---
 
 # 18. Current Verification History
@@ -3352,6 +3388,7 @@ Recorded development checkpoints include:
 | Durable canonical project registry | 95 tests passing | Build passing | Passing |
 | Normalized work model | 100 tests passing | Build passing | Passing |
 | Shared recommendation service | 113 tests passing | Build passing | Passing |
+| Linear read provider and adapter | 129 tests passing | Build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -3364,6 +3401,7 @@ The current backend test suite includes:
 - `backend/tests/test_project_registry.py`
 - `backend/tests/test_recommendation_service.py`
 - `backend/tests/test_work_domain.py`
+- `backend/tests/test_linear_provider.py`
 
 Common verification commands are:
 
@@ -5931,7 +5969,7 @@ Do not begin by cloning Linear or enabling broad autonomous writes.
 
 ## Issue: Implement Linear Provider Connection and Read Adapter
 
-**Status:** Todo
+**Status:** Done
 
 **Priority:** High
 
@@ -8661,11 +8699,12 @@ Implemented systems include:
 - Habits;
 - Memory Center;
 - Settings and provider health diagnostics;
+- Linear read provider and normalized adapter;
 - local startup and shutdown scripts.
 
 “Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, confirmation still has a legacy process-global path, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
 
-The shared recommendation checkpoint reached 113 tests passing, with the Next.js 15.5.19 production build and `git diff --check` passing. The normalized work checkpoint reached 100 tests. Earlier 8-, 56-, 75-, 85-, 86-, 90-, and 95-test checkpoints remain recorded as implementation history rather than current feature claims.
+The Linear read-provider checkpoint reached 129 tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, and no-credential runtime health smoke checks passing. Live authenticated Linear verification remains pending because no local `LINEAR_API_KEY` was available. The shared recommendation checkpoint reached 113 tests, and the normalized work checkpoint reached 100 tests. Earlier 8-, 56-, 75-, 85-, 86-, 90-, and 95-test checkpoints remain recorded as implementation history rather than current feature claims.
 
 The current product is not yet the full Personal Operating System described in the vision.
 

@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.calendar_tools import CalendarReadResult  # noqa: E402
+from app.linear_client import LinearProviderError, LinearReadResult  # noqa: E402
+from app.linear_work_adapter import linear_work_adapter  # noqa: E402
 from app.project_brain import ProjectBrainService  # noqa: E402
 from app.project_registry import project_registry_service  # noqa: E402
 from app.recommendation_service import recommendation_service  # noqa: E402
@@ -28,10 +30,49 @@ from app.work_domain import (  # noqa: E402
 @dataclass
 class FakeSettings:
     timezone: str = "America/Chicago"
+    linear_api_key: str | None = None
 
     @property
     def local_tz(self):
         return ZoneInfo(self.timezone)
+
+
+def linear_issue(
+    project_id: str,
+    *,
+    record_id: str = "linear-issue",
+    identifier: str = "SID-135",
+    title: str = "Feed Linear work into Project Brain",
+    priority: int = 1,
+    milestone_id: str | None = "linear-milestone",
+    milestone_name: str = "Finish Linear integration",
+):
+    return {
+        "id": record_id,
+        "identifier": identifier,
+        "title": title,
+        "description": "Read-only mapped work",
+        "priority": priority,
+        "priorityLabel": "Urgent" if priority == 1 else "Medium",
+        "createdAt": "2026-07-01T10:00:00Z",
+        "updatedAt": "2026-07-13T10:00:00Z",
+        "completedAt": None,
+        "canceledAt": None,
+        "dueDate": None,
+        "url": f"https://linear.app/example/issue/{identifier}",
+        "state": {"id": "state", "name": "In Progress", "type": "started"},
+        "project": {"id": project_id, "name": "A rename must not matter"},
+        "parent": None,
+        "projectMilestone": (
+            {"id": milestone_id, "name": milestone_name, "targetDate": None}
+            if milestone_id
+            else None
+        ),
+        "assignee": None,
+        "team": {"id": "team", "key": "SID", "name": "Siddanth"},
+        "relations": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+        "inverseRelations": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+    }
 
 
 class ProjectBrainServiceTests(unittest.TestCase):
@@ -211,6 +252,57 @@ class ProjectBrainServiceTests(unittest.TestCase):
             "Resolve blocker: Ship release",
         )
 
+    def test_mixed_todoist_and_linear_work_uses_shared_recommendation_without_deduping(self):
+        project = self.registry.get_project_definition("pcos")
+        todoist = todoist_work_adapter.adapt_many(
+            [
+                {
+                    "id": "todoist-same-title",
+                    "content": "Feed Linear work into Project Brain",
+                    "description": "ai todoist agent",
+                    "section_name": "Misc",
+                    "todoist_section_name": "Misc",
+                    "category": "Misc",
+                    "priority": 1,
+                    "todoist_priority": 1,
+                    "labels": [],
+                }
+            ],
+            registry=self.registry,
+            today=self.now.date(),
+        )
+        linear = [
+            item.model_copy(update={"canonical_project_id": project["canonical_project_id"]})
+            for item in linear_work_adapter.adapt_many(
+                [linear_issue("8622937e-f05d-48b7-ba54-43604a8aa733")]
+            )
+        ]
+
+        brain = self.service.build_project(
+            project=project,
+            tasks=[*todoist, *linear],
+            events=[],
+            memories=[],
+            activity=[],
+            now=self.now,
+            registry=self.registry,
+        )
+
+        self.assertEqual(
+            brain["next_recommendation"],
+            "Work next: Feed Linear work into Project Brain",
+        )
+        self.assertEqual(brain["tasks"][0]["id"], "todoist-same-title")
+        package_item = brain["work_packages"][0].work_items[0]
+        self.assertEqual(package_item.provider, "linear")
+        self.assertEqual(package_item.provider_record_id, "linear-issue")
+        self.assertEqual(package_item.provider_url, "https://linear.app/example/issue/SID-135")
+        from app.main import ProjectBrain
+
+        payload = ProjectBrain.model_validate(brain).model_dump(mode="json")
+        self.assertEqual(payload["work_packages"][0]["provider"], "linear")
+        self.assertNotIn("recommendation_score", payload["work_packages"][0])
+
     def test_build_project_preserves_needs_classification_diagnostics(self):
         project = self.registry.get_project_definition("needs-classification")
         task = {
@@ -296,6 +388,204 @@ class ProjectBrainServiceTests(unittest.TestCase):
         self.assertIn("Brandon", nebulo["people"])
         self.assertEqual({memory["id"] for memory in nebulo["memories"]}, {"memory-nebulo", "memory-brandon"})
         self.assertTrue(nebulo["next_recommendation"].startswith("Resolve blocker:"))
+
+    def test_all_four_exact_mappings_are_read_without_name_matching(self):
+        expected = {
+            "8622937e-f05d-48b7-ba54-43604a8aa733": "pcos-ai-todoist-agent",
+            "6752d640-2f40-423f-b86f-ef11e0c4deda": "xo",
+            "d9fdfe44-3e66-4dc0-b564-b2bcb646e635": "nebulo",
+            "2bde590c-a8ab-4f4e-81eb-f7a8da8c1833": "freelance",
+        }
+        client = unittest.mock.Mock()
+        client.list_issues.side_effect = lambda *, project_id: LinearReadResult(
+            records=[
+                linear_issue(
+                    project_id,
+                    record_id=f"issue-{project_id}",
+                    identifier=f"ISSUE-{project_id[:4]}",
+                )
+            ]
+        )
+        with patch("app.project_brain.LinearClient", return_value=client), patch(
+            "app.project_brain.list_active_tasks",
+            return_value=TodoistReadResult(tasks=[]),
+        ), patch(
+            "app.project_brain.list_upcoming_events",
+            return_value=CalendarReadResult(events=[]),
+        ), patch("app.project_brain.list_memory_entries", return_value=[]), patch(
+            "app.project_brain.list_activity", return_value=[]
+        ):
+            projects = self.service.list_projects(
+                settings=FakeSettings(linear_api_key="configured"),
+                current_time=self.now,
+            )
+
+        self.assertEqual(
+            {call.kwargs["project_id"] for call in client.list_issues.call_args_list},
+            set(expected),
+        )
+        for project_id, project_key in expected.items():
+            project = next(item for item in projects if item["key"] == project_key)
+            self.assertEqual(project["linear_diagnostic"].status, "connected")
+            self.assertEqual(project["linear_diagnostic"].provider_ref, project_id)
+            self.assertEqual(project["work_packages"][0].canonical_project_key, project_key)
+            self.assertTrue(
+                all(
+                    item.provider_record_id == f"issue-{project_id}"
+                    for item in project["work_packages"][0].work_items
+                )
+            )
+
+    def test_linear_failures_are_additive_and_preserve_existing_project_context(self):
+        todoist_task = {
+            "id": "pcos-todoist",
+            "content": "Keep Todoist recommendation",
+            "description": "ai todoist agent",
+            "section_name": "Misc",
+            "todoist_section_name": "Misc",
+            "category": "Misc",
+            "priority": 4,
+            "todoist_priority": 4,
+            "labels": [],
+        }
+        client = unittest.mock.Mock()
+        client.list_issues.return_value = LinearReadResult(
+            records=[],
+            error=LinearProviderError(code="provider", message="safe"),
+        )
+        with patch("app.project_brain.LinearClient", return_value=client), patch(
+            "app.project_brain.list_active_tasks",
+            return_value=TodoistReadResult(tasks=[todoist_task]),
+        ), patch(
+            "app.project_brain.list_upcoming_events",
+            return_value=CalendarReadResult(events=[]),
+        ), patch(
+            "app.project_brain.list_memory_entries",
+            return_value=[
+                {
+                    "id": "memory-pcos",
+                    "type": "project",
+                    "title": "PCOS",
+                    "content": "Preserved",
+                    "enabled": True,
+                }
+            ],
+        ), patch("app.project_brain.list_activity", return_value=[]):
+            project = self.service.get_project(
+                "pcos",
+                settings=FakeSettings(linear_api_key="configured"),
+                current_time=self.now,
+            )
+
+        self.assertEqual(project["linear_diagnostic"].status, "provider_failure")
+        self.assertEqual(project["work_packages"], [])
+        self.assertEqual(project["tasks"][0]["id"], "pcos-todoist")
+        self.assertEqual(project["next_recommendation"], "Work next: Keep Todoist recommendation")
+        self.assertEqual(project["memories"][0]["id"], "memory-pcos")
+
+    def test_authentication_and_unexpected_provider_failures_degrade_safely(self):
+        cases = [
+            (
+                LinearReadResult(
+                    records=[],
+                    error=LinearProviderError(
+                        code="authentication",
+                        message="permission denied",
+                        http_status=403,
+                    ),
+                ),
+                "authentication_failure",
+            ),
+            (RuntimeError("unexpected provider failure"), "provider_failure"),
+        ]
+        for result_or_error, expected_status in cases:
+            client = unittest.mock.Mock()
+            if isinstance(result_or_error, Exception):
+                client.list_issues.side_effect = result_or_error
+            else:
+                client.list_issues.return_value = result_or_error
+            with self.subTest(expected_status=expected_status), patch(
+                "app.project_brain.LinearClient", return_value=client
+            ), patch(
+                "app.project_brain.list_active_tasks",
+                return_value=TodoistReadResult(tasks=[]),
+            ), patch(
+                "app.project_brain.list_upcoming_events",
+                return_value=CalendarReadResult(events=[]),
+            ), patch("app.project_brain.list_memory_entries", return_value=[]), patch(
+                "app.project_brain.list_activity", return_value=[]
+            ):
+                project = self.service.get_project(
+                    "pcos",
+                    settings=FakeSettings(linear_api_key="configured"),
+                    current_time=self.now,
+                )
+                self.assertEqual(
+                    project["linear_diagnostic"].status,
+                    expected_status,
+                )
+                self.assertEqual(project["work_packages"], [])
+
+    def test_missing_key_and_unmapped_projects_are_diagnosable_without_linear_calls(self):
+        client = unittest.mock.Mock()
+        client.list_issues.return_value = LinearReadResult(
+            records=[],
+            error=LinearProviderError(
+                code="not_configured",
+                message="Linear is not configured.",
+            ),
+        )
+        with patch("app.project_brain.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
+            "app.project_brain.list_upcoming_events",
+            return_value=CalendarReadResult(events=[]),
+        ), patch("app.project_brain.list_memory_entries", return_value=[]), patch(
+            "app.project_brain.list_activity", return_value=[]
+        ), patch("app.project_brain.LinearClient", return_value=client) as client_class:
+            pcos = self.service.get_project(
+                "pcos", settings=FakeSettings(), current_time=self.now
+            )
+            am = self.service.get_project(
+                "am", settings=FakeSettings(), current_time=self.now
+            )
+            personal = self.service.get_project(
+                "personal", settings=FakeSettings(), current_time=self.now
+            )
+            needs = self.service.get_project(
+                "needs-classification",
+                settings=FakeSettings(),
+                current_time=self.now,
+            )
+
+        self.assertEqual(pcos["linear_diagnostic"].status, "not_configured")
+        self.assertEqual(pcos["work_packages"], [])
+        self.assertEqual(am["linear_diagnostic"].status, "not_mapped")
+        self.assertEqual(personal["linear_diagnostic"].status, "not_mapped")
+        self.assertEqual(needs["linear_diagnostic"].status, "not_mapped")
+        self.assertEqual(client_class.call_count, 1)
+        client.list_issues.assert_called_once_with(
+            project_id="8622937e-f05d-48b7-ba54-43604a8aa733"
+        )
+
+    def test_out_of_project_provider_record_fails_closed(self):
+        client = unittest.mock.Mock()
+        client.list_issues.return_value = LinearReadResult(
+            records=[linear_issue("wrong-project")]
+        )
+        with patch("app.project_brain.LinearClient", return_value=client), patch(
+            "app.project_brain.list_active_tasks", return_value=TodoistReadResult(tasks=[])
+        ), patch(
+            "app.project_brain.list_upcoming_events",
+            return_value=CalendarReadResult(events=[]),
+        ), patch("app.project_brain.list_memory_entries", return_value=[]), patch(
+            "app.project_brain.list_activity", return_value=[]
+        ):
+            project = self.service.get_project(
+                "pcos",
+                settings=FakeSettings(linear_api_key="configured"),
+                current_time=self.now,
+            )
+        self.assertEqual(project["linear_diagnostic"].status, "malformed_response")
+        self.assertEqual(project["work_packages"], [])
 
     def test_new_registry_project_flows_into_project_brain_without_code_changes(self):
         create_canonical_project(

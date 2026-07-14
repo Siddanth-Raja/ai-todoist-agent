@@ -13,6 +13,7 @@ from .config import get_settings
 from .linear_client import LinearClient
 from .planner import enrich_task, rank_tasks
 from .project_brain import project_brain_service
+from .project_work_packages import LinearProjectDiagnostic, ProjectWorkPackage
 from .storage import (
     create_habit,
     create_habit_checkin,
@@ -340,6 +341,8 @@ class ProjectBrain(BaseModel):
     people: list[str] = Field(default_factory=list)
     memories: list[MemoryEntry] = Field(default_factory=list)
     recent_activity: list[ActivityEntry] = Field(default_factory=list)
+    work_packages: list[ProjectWorkPackage] = Field(default_factory=list)
+    linear_diagnostic: LinearProjectDiagnostic | None = None
 
 
 @app.get("/health")

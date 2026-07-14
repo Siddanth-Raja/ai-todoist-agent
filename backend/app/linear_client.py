@@ -54,8 +54,13 @@ query PcosLinearProjects($first: Int!, $after: String) {
 
 
 ISSUES_QUERY = """
-query PcosLinearIssues($first: Int!, $after: String, $relationFirst: Int!) {
-  issues(first: $first, after: $after, orderBy: updatedAt) {
+query PcosLinearIssues(
+  $first: Int!
+  $after: String
+  $relationFirst: Int!
+  $filter: IssueFilter
+) {
+  issues(first: $first, after: $after, orderBy: updatedAt, filter: $filter) {
     nodes {
       id
       identifier
@@ -165,12 +170,19 @@ class LinearClient:
     def list_projects(self) -> LinearReadResult:
         return self._paginate(PROJECTS_QUERY, "projects", _valid_project)
 
-    def list_issues(self) -> LinearReadResult:
+    def list_issues(self, *, project_id: str | None = None) -> LinearReadResult:
         result = self._paginate(
             ISSUES_QUERY,
             "issues",
             _valid_issue,
-            extra_variables={"relationFirst": LINEAR_PAGE_SIZE},
+            extra_variables={
+                "relationFirst": LINEAR_PAGE_SIZE,
+                "filter": (
+                    {"project": {"id": {"eq": project_id}}}
+                    if project_id
+                    else None
+                ),
+            },
         )
         if result.error:
             return result

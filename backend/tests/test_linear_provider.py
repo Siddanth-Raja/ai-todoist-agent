@@ -142,6 +142,23 @@ class LinearClientTests(unittest.TestCase):
         result = LinearClient(settings(), session=session).list_issues()
         self.assertEqual([record["id"] for record in result.records], ["issue-1", "issue-2"])
 
+    def test_issue_read_uses_exact_project_uuid_filter(self):
+        session = Mock()
+        session.post.return_value = response(
+            {"data": {"issues": connection([issue(project={"id": "exact-uuid", "name": "Renamed"})])}}
+        )
+
+        result = LinearClient(settings(), session=session).list_issues(
+            project_id="exact-uuid"
+        )
+
+        self.assertIsNone(result.error)
+        variables = session.post.call_args.kwargs["json"]["variables"]
+        self.assertEqual(
+            variables["filter"],
+            {"project": {"id": {"eq": "exact-uuid"}}},
+        )
+
     def test_nested_relations_paginate_without_losing_first_page(self):
         first = issue(
             relations=connection([

@@ -3401,6 +3401,44 @@ SID-134 does not call Linear from Project Brain, combine Linear and Todoist work
 
 Verification for SID-134 reached 134 backend tests passing. Focused registry tests, Python compilation, the Next.js 15.5.19 production build, `git diff --check`, ignored-secret checks, and the live mapping smoke check passed.
 
+## 17.22 Mapped Linear Project Brain Ingestion and Project Work Packages
+
+SID-135 makes Linear the second work provider consumed by Project Brain while preserving the existing Todoist, Calendar, Memory, Activity, task, hierarchy, blocker-wording, and route contracts.
+
+Project Brain resolves the requested canonical project through `ProjectRegistrySnapshot`, retrieves only its exact `(linear, project, provider_ref)` mapping, and asks `LinearClient` for issues through an exact Linear project UUID filter. Linear project names never participate in ingestion identity. Returned records are checked again at the service boundary; an issue whose `project.id` differs from the mapped UUID causes that Linear read to fail closed instead of crossing project boundaries.
+
+Normalized Linear records receive the mapped `canonical_project_id` in memory and retain their provider identity, stable issue UUID, human identifier, provider project UUID, original and normalized workflow state and priority, milestone, hierarchy, explicit dependency relations, timestamps, and URL. Project-level recommendation candidates then combine exact mapped Linear work with relevant Todoist work and use the existing shared recommendation service and weights. Same-title records remain distinct through `(provider, provider_record_id)` identity.
+
+`backend/app/project_work_packages.py` is the dedicated typed read-model boundary for Project Work Packages. Initial package semantics are deliberately narrow:
+
+- a Linear project milestone is the package backbone;
+- only open mapped issues explicitly assigned to that milestone are included;
+- each open unmilestoned issue becomes a single-item fallback package;
+- completed and canceled issues do not contribute current work;
+- parent containers and explicitly blocked issues cannot become next actions;
+- membership and blocker state are never inferred from titles, descriptions, status names, or milestone order;
+- the existing recommendation service selects and explains each package's executable next action;
+- deterministic ordering favors packages with executable actions and returns at most three options.
+
+The additive Project Brain contract exposes `work_packages` plus a `linear_diagnostic`. A diagnostic distinguishes `connected`, `not_mapped`, `not_configured`, `authentication_failure`, `provider_failure`, and `malformed_response`. Linear failure never masquerades as a successful empty roadmap and does not remove Todoist, Calendar, Memory, or Activity results.
+
+Mapped project pages add a focused `Work on [Project] now?` section. It shows at most three package choices with milestone or fallback title, context, open and explicitly blocked action counts, selected next action and explanation, availability state, and a Linear link. Unmapped A&M, Personal, and Needs Classification pages do not invent or display Linear packages. There is no package selection persistence or Linear write path.
+
+Live read-only verification used the ignored local `LINEAR_API_KEY` and produced the following exact-project results without cross-project records:
+
+| Canonical project | Linear project UUID | Issues read | Example grounded package | Selected next action |
+| --- | --- | ---: | --- | --- |
+| PCOS | `8622937e-f05d-48b7-ba54-43604a8aa733` | 56 | Milestone 2 — Calendar Trust and Provider Reliability | SID-131, Build In-App Google Calendar Reconnect |
+| XO | `6752d640-2f40-423f-b86f-ef11e0c4deda` | 30 | Deployment & VR Testing | SID-91, Fix Quest VR Rig and Locomotion |
+| Nebulo | `d9fdfe44-3e66-4dc0-b564-b2bcb646e635` | 9 | Demo 1 | SID-103, Verify and recover the provider-extraction source of truth |
+| Freelance | `2bde590c-a8ab-4f4e-81eb-f7a8da8c1833` | 34 | Milestone 2 — Produce One Sendable Real Audit | No next action because its only open action was explicitly blocked |
+
+Linear health reported `connected`. The live GraphQL project filter, issue pagination, relation reads, milestone parsing, normalization, package construction, and Project Brain boundary were compatible with the current Linear schema. No Linear writes were performed.
+
+Verification for SID-135 reached 149 backend tests passing, including 38 focused Linear, package, and Project Brain tests, plus 3 focused frontend presentation tests. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, ignored-secret checks, and live read-only package verification passed.
+
+SID-136 remains the boundary for grounded project-level blocker interpretation and presentation. SID-135 preserves explicit dependencies and prevents blocked work from becoming a next action, but it does not add milestone-order inference, keyword reinterpretation of Linear work, or a new blocker scoring path.
+
 ---
 
 # 18. Current Verification History
@@ -3422,6 +3460,7 @@ Recorded development checkpoints include:
 | Shared recommendation service | 113 tests passing | Build passing | Passing |
 | Linear read provider and adapter | 129 tests passing | Build passing | Passing |
 | Durable Linear project mappings | 134 tests passing | Build passing | Passing |
+| Mapped Linear Project Brain and work packages | 149 tests passing | 3 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -3435,6 +3474,7 @@ The current backend test suite includes:
 - `backend/tests/test_recommendation_service.py`
 - `backend/tests/test_work_domain.py`
 - `backend/tests/test_linear_provider.py`
+- `backend/tests/test_project_work_packages.py`
 
 Common verification commands are:
 
@@ -4426,7 +4466,7 @@ The implemented registry represents:
 - classification hints;
 - enabled state.
 
-The provider mapping boundary stores provider, resource type, and provider reference against a durable canonical project ID. Exact Linear project UUID mappings are implemented for PCOS, XO, Nebulo, and Freelance. Project Brain ingestion remains deferred to SID-135; repository mappings remain available through the same boundary when needed.
+The provider mapping boundary stores provider, resource type, and provider reference against a durable canonical project ID. Exact Linear project UUID mappings are implemented for PCOS, XO, Nebulo, and Freelance, and SID-135 now consumes those mappings in Project Brain. Repository mappings remain available through the same boundary when needed.
 
 Needs Classification is synthesized outside the editable registry as a system/unresolved state.
 
@@ -6085,23 +6125,23 @@ Linear read adapter.
 - Missing mappings are diagnosable.
 - Provider mappings can be changed without editing backend source code.
 
-Project Brain ingestion is intentionally deferred to SID-135, `Feed Linear Work Into Project Brain`.
+Project Brain ingestion was intentionally deferred from SID-134 and is now implemented by SID-135, `Feed Linear Work Into Project Brain`.
 
 ---
 
 ## Issue: Feed Linear Work Into Project Brain
 
-**Status:** Todo
+**Status:** Done
 
 **Priority:** Urgent
 
 **Description:**
 
-Integrate normalized Linear issue state into Project Brain.
+Integrate only exact UUID-mapped normalized Linear issue state into Project Brain and expose grounded Project Work Packages.
 
 For Linear-backed projects, Project Brain should understand detailed executable work, hierarchy, status, priorities, blockers, and dependencies from Linear while continuing to combine Calendar, Memory, Activity, and relevant Todoist state.
 
-This is the first major test of PCOS as a multi-provider intelligence layer.
+Each package is backed by a Linear milestone or one unmilestoned fallback issue and provides a bounded current-work choice followed by the next executable action selected by the shared recommendation service.
 
 **Dependencies / blockers:**
 
@@ -6130,6 +6170,12 @@ Project Brain service.
 - Activity continues contributing project context.
 - Project Workspace identifies work provider where useful.
 - Project Brain tests cover mixed Todoist and Linear state.
+- Project Work Packages expose at most three deterministic current-work options.
+- A package with no open work is not current, and explicitly blocked or container work cannot become its next action.
+- Missing mapping, missing key, authentication failure, and provider failure preserve all existing Project Brain sources and return additive diagnostics.
+- A&M, Personal, and Needs Classification do not receive invented Linear work.
+
+Grounded project-level blocker interpretation remains deferred to SID-136. SID-135 preserves explicit dependency evidence and executable-state safety but does not infer milestone dependencies or replace the existing blocker presentation model.
 
 ---
 
@@ -8736,11 +8782,12 @@ Implemented systems include:
 - Settings and provider health diagnostics;
 - Linear read provider and normalized adapter;
 - durable Linear project-to-canonical-project mappings;
+- mapped Linear Project Brain ingestion and Project Work Packages;
 - local startup and shutdown scripts.
 
 “Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, confirmation still has a legacy process-global path, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
 
-The durable Linear mapping checkpoint reached 134 tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, ignored-secret checks, and live UUID-to-canonical-project resolution passing. The Linear read-provider checkpoint reached 129 tests. The shared recommendation checkpoint reached 113 tests, and the normalized work checkpoint reached 100 tests. Earlier 8-, 56-, 75-, 85-, 86-, 90-, and 95-test checkpoints remain recorded as implementation history rather than current feature claims.
+The mapped Linear Project Brain checkpoint reached 149 backend tests and 3 frontend presentation tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, ignored-secret checks, exact-project live reads, and grounded package construction passing. The durable Linear mapping checkpoint reached 134 backend tests, the Linear read-provider checkpoint reached 129 tests, the shared recommendation checkpoint reached 113 tests, and the normalized work checkpoint reached 100 tests. Earlier 8-, 56-, 75-, 85-, 86-, 90-, and 95-test checkpoints remain recorded as implementation history rather than current feature claims.
 
 The current product is not yet the full Personal Operating System described in the vision.
 
@@ -8779,13 +8826,13 @@ build shared recommendation service                 │
                    shared trustworthy state
 ```
 
-Both tracks should be trustworthy before Linear becomes the proof of the multi-provider model.
+Mapped Linear ingestion and Project Work Packages now provide the first proof of the multi-provider model. Today, Tasks, and Chat still need to converge on the shared intelligence path in later roadmap work.
 
-The next major provider integration is:
+The active deep project-management provider is:
 
 `Linear`
 
-Linear should become the deeper project-management source for:
+Linear is now the deeper read-only project-management source for:
 
 ```text
 PCOS

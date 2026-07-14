@@ -27,8 +27,13 @@ import {
   type ProjectBlocker,
   type ProjectTaskDiagnostic,
   type ProjectTaskGroup,
+  type ProjectWorkPackage,
   type TaskItem,
 } from "@/lib/api";
+import {
+  packageAvailabilityPresentation,
+  workPackageSectionState,
+} from "@/lib/work-package-presentation";
 
 function statusClass(status: string) {
   if (status === "Blocked") {
@@ -248,6 +253,60 @@ function MemoryRow({ memory }: { memory: MemoryEntry }) {
   );
 }
 
+function WorkPackageOption({ workPackage }: { workPackage: ProjectWorkPackage }) {
+  const availability = packageAvailabilityPresentation(workPackage.availability_state);
+  const toneClass =
+    availability.tone === "available"
+      ? "border-moss/25 bg-moss/10 text-moss"
+      : availability.tone === "warning"
+        ? "border-gold/25 bg-gold/10 text-gold"
+        : "border-white/10 bg-white/[0.06] text-stone-400";
+
+  return (
+    <article className="rounded-2xl border border-white/10 bg-black/20 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="break-words text-lg font-semibold text-pearl">{workPackage.title}</p>
+          <p className="mt-1 text-xs text-stone-500">{workPackage.context}</p>
+        </div>
+        <span className={`rounded-full border px-2.5 py-1 text-[0.68rem] ${toneClass}`}>
+          {availability.label}
+        </span>
+      </div>
+      <p className="mt-4 text-sm text-stone-400">
+        {workPackage.open_action_count} open action{workPackage.open_action_count === 1 ? "" : "s"}
+        {workPackage.explicitly_blocked_action_count > 0
+          ? ` · ${workPackage.explicitly_blocked_action_count} explicitly blocked`
+          : ""}
+      </p>
+      {workPackage.next_action ? (
+        <div className="mt-4 rounded-xl bg-white/[0.055] p-4">
+          <p className="text-xs uppercase tracking-[0.16em] text-moss">Next action</p>
+          <p className="mt-2 break-words text-sm font-semibold text-pearl">
+            {workPackage.next_action.title}
+          </p>
+          <p className="mt-2 text-xs leading-5 text-stone-500">
+            {workPackage.next_action.explanation}
+          </p>
+        </div>
+      ) : (
+        <p className="mt-4 text-sm leading-6 text-stone-500">{availability.detail}</p>
+      )}
+      {workPackage.provider_url ? (
+        <a
+          href={workPackage.provider_url}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-4 inline-flex items-center gap-1.5 text-xs text-moss hover:text-pearl"
+        >
+          Open in Linear
+          <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+        </a>
+      ) : null}
+    </article>
+  );
+}
+
 export default function ProjectDetailPage() {
   const params = useParams<{ projectKey: string }>();
   const projectKey = params.projectKey;
@@ -283,6 +342,10 @@ export default function ProjectDetailPage() {
       { label: "Memories", value: project.memories.length },
     ];
   }, [project]);
+
+  const packageSectionState = project
+    ? workPackageSectionState(project.work_packages ?? [], project.linear_diagnostic ?? null)
+    : "hidden";
 
   if (isLoading) {
     return (
@@ -346,6 +409,35 @@ export default function ProjectDetailPage() {
           </div>
         </div>
       </section>
+
+      {packageSectionState !== "hidden" ? (
+        <section className="rounded-[1.5rem] border border-white/10 bg-white/[0.055] p-5 shadow-card backdrop-blur-2xl md:p-6">
+          <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.22em] text-moss">Project workspace</p>
+              <h4 className="mt-2 text-2xl font-semibold text-pearl">Work on {project.name} now?</h4>
+            </div>
+            {project.linear_diagnostic?.status === "connected" ? (
+              <span className="text-xs text-stone-500">
+                {project.linear_diagnostic.issue_count} mapped Linear issue{project.linear_diagnostic.issue_count === 1 ? "" : "s"}
+              </span>
+            ) : null}
+          </div>
+          {packageSectionState === "options" ? (
+            <div className="grid gap-3 lg:grid-cols-3">
+              {project.work_packages.slice(0, 3).map((workPackage) => (
+                <WorkPackageOption key={workPackage.package_id} workPackage={workPackage} />
+              ))}
+            </div>
+          ) : packageSectionState === "unavailable" ? (
+            <div className="rounded-2xl border border-gold/20 bg-gold/10 p-4 text-sm leading-6 text-gold">
+              {project.linear_diagnostic?.message ?? "Linear work is temporarily unavailable."}
+            </div>
+          ) : (
+            <EmptyState text="No current Linear work packages have open actions." />
+          )}
+        </section>
+      ) : null}
 
       <section className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
         <Card title="Next move" icon={<Target className="h-5 w-5" aria-hidden="true" />}>

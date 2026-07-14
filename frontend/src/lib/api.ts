@@ -189,6 +189,72 @@ export type ProjectTaskGroup = {
   is_container: boolean;
 };
 
+export type LinearProjectDiagnostic = {
+  provider: "linear";
+  status:
+    | "connected"
+    | "not_mapped"
+    | "not_configured"
+    | "authentication_failure"
+    | "provider_failure"
+    | "malformed_response";
+  provider_ref: string | null;
+  issue_count: number;
+  message: string;
+};
+
+export type ProjectWorkPackageItem = {
+  provider: "linear";
+  provider_record_id: string;
+  provider_identifier: string | null;
+  title: string;
+  status: string;
+  provider_status: string | null;
+  priority: number;
+  provider_priority: number | string | null;
+  is_executable: boolean;
+  is_container: boolean;
+  is_blocked: boolean;
+  explicit_dependencies: Array<{
+    provider: string;
+    provider_record_id: string;
+    dependency_type: string;
+  }>;
+  parent_provider_record_id: string | null;
+  provider_url: string | null;
+};
+
+export type ProjectWorkPackageAction = {
+  provider: "linear";
+  provider_record_id: string;
+  provider_identifier: string | null;
+  title: string;
+  provider_url: string | null;
+  explanation: string;
+};
+
+export type ProjectWorkPackage = {
+  package_id: string;
+  canonical_project_id: string;
+  canonical_project_key: string;
+  title: string;
+  context: string;
+  provider: "linear";
+  provider_reference_id: string;
+  provider_url: string | null;
+  open_action_count: number;
+  executable_action_count: number;
+  explicitly_blocked_action_count: number;
+  availability_state: "available" | "explicitly_blocked" | "no_executable_action";
+  work_items: ProjectWorkPackageItem[];
+  next_action: ProjectWorkPackageAction | null;
+  considered_alternatives: Array<{
+    provider: "linear";
+    provider_record_id: string;
+    title: string;
+  }>;
+};
+
 export type ProjectBrain = {
   key: string;
   name: string;
@@ -204,6 +270,8 @@ export type ProjectBrain = {
   people: string[];
   memories: MemoryEntry[];
   recent_activity: ActivityEntry[];
+  work_packages: ProjectWorkPackage[];
+  linear_diagnostic: LinearProjectDiagnostic | null;
 };
 
 export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {

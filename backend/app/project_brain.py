@@ -3,6 +3,8 @@ import re
 from typing import Any
 
 from .calendar_tools import list_upcoming_events
+from .linear_client import LinearClient, LinearProviderError
+from .linear_work_adapter import linear_work_adapter
 from .recommendation_service import (
     RecommendationAction,
     WorkRecommendation,
@@ -11,6 +13,10 @@ from .recommendation_service import (
 from .project_registry import (
     ProjectRegistrySnapshot,
     project_registry_service,
+)
+from .project_work_packages import (
+    LinearProjectDiagnostic,
+    project_work_package_service,
 )
 from .storage import list_activity, list_memory_entries
 from .todoist_work_adapter import todoist_work_adapter
@@ -46,14 +52,15 @@ class ProjectBrainService:
         activity = list_activity(limit=200)
 
         return [
-            self.build_project(
+            self._build_project_with_linear(
                 project=project,
-                tasks=tasks,
+                todoist_tasks=tasks,
                 events=events,
                 memories=memories,
                 activity=activity,
                 now=local_now,
                 registry=registry,
+                settings=settings,
             )
             for project in registry.projects
         ]
@@ -80,14 +87,15 @@ class ProjectBrainService:
         activity = list_activity(limit=200)
         return next(
             (
-                self.build_project(
+                self._build_project_with_linear(
                     project=project,
-                    tasks=tasks,
+                    todoist_tasks=tasks,
                     events=events,
                     memories=memories,
                     activity=activity,
                     now=local_now,
                     registry=registry,
+                    settings=settings,
                 )
                 for project in registry.projects
                 if project["key"] == canonical_key
@@ -97,6 +105,34 @@ class ProjectBrainService:
 
     def canonical_project_key(self, project_key: str) -> str:
         return self.registry_service.snapshot().resolve_key(project_key)
+
+    def _build_project_with_linear(
+        self,
+        *,
+        project: dict[str, Any],
+        todoist_tasks: list[NormalizedWorkItem],
+        events: list[dict[str, Any]],
+        memories: list[dict[str, Any]],
+        activity: list[dict[str, Any]],
+        now: datetime,
+        registry: ProjectRegistrySnapshot,
+        settings: Any,
+    ) -> dict[str, Any]:
+        linear_tasks, linear_diagnostic = _read_mapped_linear_work(
+            project=project,
+            registry=registry,
+            settings=settings,
+        )
+        return self.build_project(
+            project=project,
+            tasks=[*todoist_tasks, *linear_tasks],
+            events=events,
+            memories=memories,
+            activity=activity,
+            now=now,
+            registry=registry,
+            linear_diagnostic=linear_diagnostic,
+        )
 
     def build_project(
         self,
@@ -108,15 +144,29 @@ class ProjectBrainService:
         activity: list[dict[str, Any]],
         now: datetime,
         registry: ProjectRegistrySnapshot | None = None,
+        linear_diagnostic: LinearProjectDiagnostic | None = None,
     ) -> dict[str, Any]:
         registry = registry or self.registry_service.snapshot()
-        task_lookup = {str(task.get("id")): task for task in tasks if task.get("id")}
-        active_tasks = [task for task in tasks if not _task_completed(task)]
+        todoist_tasks = [task for task in tasks if task.provider == "todoist"]
+        task_lookup = {
+            str(task.get("id")): task for task in todoist_tasks if task.get("id")
+        }
+        active_tasks = [task for task in todoist_tasks if not _task_completed(task)]
         active_children_by_parent = _children_by_parent(active_tasks)
-        project_tasks = [
+        project_todoist_tasks = [
             task
             for task in active_tasks
             if _task_matches_project(task, project, registry, task_lookup)
+        ]
+        project_linear_tasks = [
+            task
+            for task in tasks
+            if task.provider == "linear"
+            and task.canonical_project_id == project.get("canonical_project_id")
+        ]
+        project_work = [*project_todoist_tasks, *project_linear_tasks]
+        current_project_work = [
+            item for item in project_work if item.status == WorkStatus.OPEN
         ]
         project_events = [
             event for event in events if _event_matches_project(event, project, registry)
@@ -128,14 +178,21 @@ class ProjectBrainService:
             entry for entry in activity if _activity_matches_project(entry, project, registry)
         ]
         people = _project_people(project, project_memories)
-        task_groups = _project_task_groups(project_tasks, task_lookup, active_children_by_parent)
-        leaf_tasks = _project_leaf_tasks(project_tasks, active_children_by_parent)
+        task_groups = _project_task_groups(
+            project_todoist_tasks,
+            task_lookup,
+            active_children_by_parent,
+        )
+        recommendation_candidates = _project_leaf_tasks(
+            project_work,
+            active_children_by_parent,
+        )
         recommendation = recommendation_service.recommend_project_next_move(
-            leaf_tasks,
+            recommendation_candidates,
             current_time=now,
         )
-        ranked_tasks = _project_ranked_tasks(recommendation, leaf_tasks)
-        sorted_tasks = _sort_project_tasks(project_tasks)
+        ranked_tasks = _project_ranked_tasks(recommendation, recommendation_candidates)
+        sorted_tasks = _sort_project_tasks(project_todoist_tasks)
         sorted_events = sorted(project_events, key=_event_start)
         blockers = _project_blockers(
             project=project,
@@ -144,13 +201,23 @@ class ProjectBrainService:
             ranked_tasks=ranked_tasks,
             now=now,
         )
+        work_packages = project_work_package_service.build_current_packages(
+            project_linear_tasks,
+            canonical_project_id=str(project.get("canonical_project_id") or ""),
+            canonical_project_key=str(project["key"]),
+            current_time=now,
+        )
 
         return {
             "key": project["key"],
             "name": project["name"],
             "description": project["description"],
             "task_count": len(sorted_tasks),
-            "status": _project_status(blockers=blockers, tasks=sorted_tasks, events=sorted_events),
+            "status": _project_status(
+                blockers=blockers,
+                tasks=current_project_work,
+                events=sorted_events,
+            ),
             "next_recommendation": _project_next_recommendation(
                 blockers=blockers,
                 recommendation=recommendation,
@@ -163,7 +230,7 @@ class ProjectBrainService:
             "task_groups": task_groups[:12],
             "classification_diagnostics": _project_task_diagnostics(
                 project=project,
-                tasks=tasks,
+                tasks=todoist_tasks,
                 task_lookup=task_lookup,
                 active_children_by_parent=active_children_by_parent,
                 registry=registry,
@@ -172,10 +239,100 @@ class ProjectBrainService:
             "people": people,
             "memories": project_memories[:8],
             "recent_activity": project_activity[:8],
+            "work_packages": work_packages,
+            "linear_diagnostic": linear_diagnostic,
         }
 
 
 project_brain_service = ProjectBrainService()
+
+
+def _read_mapped_linear_work(
+    *,
+    project: dict[str, Any],
+    registry: ProjectRegistrySnapshot,
+    settings: Any,
+) -> tuple[list[NormalizedWorkItem], LinearProjectDiagnostic]:
+    mapping = registry.diagnose_canonical_project_mapping(
+        str(project["key"]),
+        provider="linear",
+        resource_type="project",
+    )
+    if mapping.status != "mapped" or not mapping.provider_ref:
+        return [], LinearProjectDiagnostic(
+            status="not_mapped",
+            message="This canonical project has no Linear project mapping.",
+        )
+
+    project_id = mapping.provider_ref
+    try:
+        result = LinearClient(settings).list_issues(project_id=project_id)
+    except Exception:
+        return [], LinearProjectDiagnostic(
+            status="provider_failure",
+            provider_ref=project_id,
+            message="Linear could not be reached; existing Project Brain sources remain available.",
+        )
+    if result.error:
+        return [], _linear_failure_diagnostic(project_id, result.error)
+
+    for record in result.records:
+        provider_project = record.get("project") if isinstance(record, dict) else None
+        if not isinstance(provider_project, dict) or str(provider_project.get("id") or "") != project_id:
+            return [], LinearProjectDiagnostic(
+                status="malformed_response",
+                provider_ref=project_id,
+                message="Linear returned an issue outside the mapped project boundary.",
+            )
+    try:
+        adapted = linear_work_adapter.adapt_many(result.records)
+    except (TypeError, ValueError):
+        return [], LinearProjectDiagnostic(
+            status="malformed_response",
+            provider_ref=project_id,
+            message="Linear returned issue data that could not be normalized.",
+        )
+
+    canonical_project_id = str(project["canonical_project_id"])
+    mapped_items = [
+        item.model_copy(update={"canonical_project_id": canonical_project_id})
+        for item in adapted
+    ]
+    if len(mapped_items) != len(result.records):
+        return [], LinearProjectDiagnostic(
+            status="malformed_response",
+            provider_ref=project_id,
+            message="Linear returned incomplete issue data for the mapped project.",
+        )
+    return mapped_items, LinearProjectDiagnostic(
+        status="connected",
+        provider_ref=project_id,
+        issue_count=len(mapped_items),
+        message="Mapped Linear work loaded successfully.",
+    )
+
+
+def _linear_failure_diagnostic(
+    project_id: str,
+    error: LinearProviderError,
+) -> LinearProjectDiagnostic:
+    status_by_code = {
+        "not_configured": "not_configured",
+        "authentication": "authentication_failure",
+        "provider": "provider_failure",
+        "malformed_response": "malformed_response",
+    }
+    message_by_code = {
+        "not_configured": "Linear is not configured; existing Project Brain sources remain available.",
+        "authentication": "Linear authentication or permission failed; existing Project Brain sources remain available.",
+        "provider": "Linear could not be reached; existing Project Brain sources remain available.",
+        "malformed_response": "Linear returned an incompatible response; existing Project Brain sources remain available.",
+    }
+    return LinearProjectDiagnostic(
+        status=status_by_code[error.code],
+        provider_ref=project_id,
+        message=message_by_code[error.code],
+    )
 
 
 def _task_matches_project(
@@ -184,6 +341,11 @@ def _task_matches_project(
     registry: ProjectRegistrySnapshot,
     task_lookup: dict[str, NormalizedWorkItem] | None = None,
 ) -> bool:
+    if task.provider == "linear":
+        return bool(
+            task.canonical_project_id
+            and task.canonical_project_id == project.get("canonical_project_id")
+        )
     parent = _parent_task(task, task_lookup or {})
     if project.get("classification_bucket"):
         return _task_needs_classification(task, parent=parent, registry=registry)
@@ -336,15 +498,23 @@ def _project_rankable_task(task: NormalizedWorkItem) -> dict[str, Any]:
 def _project_ranked_tasks(recommendation, tasks: list[NormalizedWorkItem]) -> list[dict[str, Any]]:
     if recommendation is None:
         return []
-    by_id = {task.provider_record_id: task for task in tasks}
-    ordered_ids = [
-        recommendation.selected_work.provider_record_id,
-        *(alternative.work.provider_record_id for alternative in recommendation.considered_alternatives),
+    by_identity = {
+        (task.provider, task.provider_record_id): task for task in tasks
+    }
+    ordered_identities = [
+        (
+            recommendation.selected_work.provider,
+            recommendation.selected_work.provider_record_id,
+        ),
+        *(
+            (alternative.work.provider, alternative.work.provider_record_id)
+            for alternative in recommendation.considered_alternatives
+        ),
     ]
     return [
-        _project_rankable_task(by_id[provider_record_id])
-        for provider_record_id in ordered_ids
-        if provider_record_id in by_id
+        _project_rankable_task(by_identity[identity])
+        for identity in ordered_identities
+        if identity in by_identity
     ]
 
 

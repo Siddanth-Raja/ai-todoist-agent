@@ -7,6 +7,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from .dependency_evaluator import (
+    DependencyEvaluationState,
+    EvaluatedDependencyEvidence,
+)
 from .recommendation_service import (
     RecommendationAction,
     WorkRecommendation,
@@ -17,6 +21,7 @@ from .work_domain import NormalizedWorkItem, WorkDependency, WorkStatus
 
 class WorkPackageAvailability(StrEnum):
     AVAILABLE = "available"
+    NEEDS_REVIEW = "needs_review"
     EXPLICITLY_BLOCKED = "explicitly_blocked"
     NO_EXECUTABLE_ACTION = "no_executable_action"
 
@@ -52,6 +57,7 @@ class ProjectWorkPackageItem(BaseModel):
     is_executable: bool
     is_container: bool
     is_blocked: bool
+    dependency_evaluation_states: tuple[DependencyEvaluationState, ...] = ()
     explicit_dependencies: tuple[WorkDependency, ...] = ()
     parent_provider_record_id: str | None = None
     provider_url: str | None = None
@@ -90,6 +96,7 @@ class ProjectWorkPackage(BaseModel):
     open_action_count: int
     executable_action_count: int
     explicitly_blocked_action_count: int
+    needs_review_action_count: int = 0
     availability_state: WorkPackageAvailability
     work_items: tuple[ProjectWorkPackageItem, ...]
     next_action: ProjectWorkPackageAction | None = None
@@ -110,6 +117,7 @@ class ProjectWorkPackageService:
         canonical_project_id: str,
         canonical_project_key: str,
         current_time: datetime,
+        dependency_evidence: tuple[EvaluatedDependencyEvidence, ...] = (),
         limit: int = 3,
     ) -> list[ProjectWorkPackage]:
         mapped_open = [
@@ -144,6 +152,10 @@ class ProjectWorkPackageService:
                     canonical_project_id=canonical_project_id,
                     canonical_project_key=canonical_project_key,
                     current_time=current_time,
+                    dependency_evidence=_package_evidence(
+                        grouped_items,
+                        dependency_evidence,
+                    ),
                 )
             )
         for item in unmilestoned:
@@ -157,6 +169,10 @@ class ProjectWorkPackageService:
                     canonical_project_id=canonical_project_id,
                     canonical_project_key=canonical_project_key,
                     current_time=current_time,
+                    dependency_evidence=_package_evidence(
+                        [item],
+                        dependency_evidence,
+                    ),
                 )
             )
 
@@ -174,6 +190,7 @@ class ProjectWorkPackageService:
         canonical_project_id: str,
         canonical_project_key: str,
         current_time: datetime,
+        dependency_evidence: tuple[EvaluatedDependencyEvidence, ...],
     ) -> _RankedPackage:
         ordered_items = sorted(items, key=_work_item_key)
         recommendation = recommendation_service.recommend_project_next_move(
@@ -184,14 +201,41 @@ class ProjectWorkPackageService:
             item.is_executable and not item.is_container and not item.is_blocked
             for item in ordered_items
         )
-        blocked_count = sum(
-            item.is_blocked and not item.is_container for item in ordered_items
+        action_ids = {
+            item.provider_record_id for item in ordered_items if not item.is_container
+        }
+        active_ids = {
+            evidence.blocked_work.provider_record_id
+            for evidence in dependency_evidence
+            if evidence.evaluation_state == DependencyEvaluationState.ACTIVE
+            and evidence.blocked_work.provider_record_id in action_ids
+        }
+        needs_review_ids = {
+            evidence.blocked_work.provider_record_id
+            for evidence in dependency_evidence
+            if evidence.evaluation_state == DependencyEvaluationState.NEEDS_REVIEW
+            and evidence.blocked_work.provider_record_id in action_ids
+        }
+        evidenced_ids = active_ids | needs_review_ids | {
+            evidence.blocked_work.provider_record_id
+            for evidence in dependency_evidence
+        }
+        active_ids.update(
+            item.provider_record_id
+            for item in ordered_items
+            if item.is_blocked
+            and not item.is_container
+            and item.provider_record_id not in evidenced_ids
         )
+        blocked_count = len(active_ids)
+        needs_review_count = len(needs_review_ids)
         next_action = _next_action(recommendation, ordered_items)
         if next_action is not None:
             availability = WorkPackageAvailability.AVAILABLE
         elif blocked_count:
             availability = WorkPackageAvailability.EXPLICITLY_BLOCKED
+        elif needs_review_count:
+            availability = WorkPackageAvailability.NEEDS_REVIEW
         else:
             availability = WorkPackageAvailability.NO_EXECUTABLE_ACTION
 
@@ -212,8 +256,15 @@ class ProjectWorkPackageService:
                 open_action_count=sum(not item.is_container for item in ordered_items),
                 executable_action_count=executable_count,
                 explicitly_blocked_action_count=blocked_count,
+                needs_review_action_count=needs_review_count,
                 availability_state=availability,
-                work_items=tuple(_package_item(item) for item in ordered_items),
+                work_items=tuple(
+                    _package_item(
+                        item,
+                        _item_evidence(item, dependency_evidence),
+                    )
+                    for item in ordered_items
+                ),
                 next_action=next_action,
                 considered_alternatives=_alternatives(recommendation),
             ),
@@ -270,7 +321,10 @@ def _alternatives(
     )
 
 
-def _package_item(item: NormalizedWorkItem) -> ProjectWorkPackageItem:
+def _package_item(
+    item: NormalizedWorkItem,
+    dependency_evidence: tuple[EvaluatedDependencyEvidence, ...],
+) -> ProjectWorkPackageItem:
     return ProjectWorkPackageItem(
         provider=item.provider,
         provider_record_id=item.provider_record_id,
@@ -283,6 +337,9 @@ def _package_item(item: NormalizedWorkItem) -> ProjectWorkPackageItem:
         is_executable=item.is_executable,
         is_container=item.is_container,
         is_blocked=item.is_blocked,
+        dependency_evaluation_states=tuple(
+            evidence.evaluation_state for evidence in dependency_evidence
+        ),
         explicit_dependencies=item.dependencies,
         parent_provider_record_id=item.parent_provider_record_id,
         provider_url=item.provider_url,
@@ -297,8 +354,9 @@ def _provider_identifier(item: NormalizedWorkItem) -> str | None:
 def _package_ranking_key(candidate: _RankedPackage) -> tuple:
     availability_order = {
         WorkPackageAvailability.AVAILABLE: 0,
-        WorkPackageAvailability.EXPLICITLY_BLOCKED: 1,
-        WorkPackageAvailability.NO_EXECUTABLE_ACTION: 2,
+        WorkPackageAvailability.NEEDS_REVIEW: 1,
+        WorkPackageAvailability.EXPLICITLY_BLOCKED: 2,
+        WorkPackageAvailability.NO_EXECUTABLE_ACTION: 3,
     }
     score = candidate.recommendation_score
     return (
@@ -315,6 +373,34 @@ def _work_item_key(item: NormalizedWorkItem) -> tuple:
         item.created_at.isoformat() if item.created_at else "9999",
         item.provider,
         item.provider_record_id,
+    )
+
+
+def _package_evidence(
+    items: list[NormalizedWorkItem],
+    evidence: tuple[EvaluatedDependencyEvidence, ...],
+) -> tuple[EvaluatedDependencyEvidence, ...]:
+    identities = {(item.provider, item.provider_record_id) for item in items}
+    return tuple(
+        relationship
+        for relationship in evidence
+        if (
+            relationship.blocked_work.provider,
+            relationship.blocked_work.provider_record_id,
+        )
+        in identities
+    )
+
+
+def _item_evidence(
+    item: NormalizedWorkItem,
+    evidence: tuple[EvaluatedDependencyEvidence, ...],
+) -> tuple[EvaluatedDependencyEvidence, ...]:
+    return tuple(
+        relationship
+        for relationship in evidence
+        if relationship.blocked_work.provider == item.provider
+        and relationship.blocked_work.provider_record_id == item.provider_record_id
     )
 
 

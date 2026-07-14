@@ -3,6 +3,11 @@ import re
 from typing import Any
 
 from .calendar_tools import list_upcoming_events
+from .dependency_evaluator import (
+    DependencyEvaluationState,
+    EvaluatedDependencyEvidence,
+    dependency_evaluator,
+)
 from .linear_client import LinearClient, LinearProviderError
 from .linear_work_adapter import linear_work_adapter
 from .recommendation_service import (
@@ -118,7 +123,7 @@ class ProjectBrainService:
         registry: ProjectRegistrySnapshot,
         settings: Any,
     ) -> dict[str, Any]:
-        linear_tasks, linear_diagnostic = _read_mapped_linear_work(
+        linear_tasks, dependency_evidence, linear_diagnostic = _read_mapped_linear_work(
             project=project,
             registry=registry,
             settings=settings,
@@ -132,6 +137,7 @@ class ProjectBrainService:
             now=now,
             registry=registry,
             linear_diagnostic=linear_diagnostic,
+            dependency_evidence=dependency_evidence,
         )
 
     def build_project(
@@ -145,6 +151,7 @@ class ProjectBrainService:
         now: datetime,
         registry: ProjectRegistrySnapshot | None = None,
         linear_diagnostic: LinearProjectDiagnostic | None = None,
+        dependency_evidence: tuple[EvaluatedDependencyEvidence, ...] = (),
     ) -> dict[str, Any]:
         registry = registry or self.registry_service.snapshot()
         todoist_tasks = [task for task in tasks if task.provider == "todoist"]
@@ -194,18 +201,34 @@ class ProjectBrainService:
         ranked_tasks = _project_ranked_tasks(recommendation, recommendation_candidates)
         sorted_tasks = _sort_project_tasks(project_todoist_tasks)
         sorted_events = sorted(project_events, key=_event_start)
-        blockers = _project_blockers(
+        project_dependency_evidence = tuple(
+            evidence
+            for evidence in dependency_evidence
+            if evidence.canonical_project_id == project.get("canonical_project_id")
+        )
+        current_dependency_evidence = tuple(
+            evidence
+            for evidence in project_dependency_evidence
+            if evidence.blocked_work.status == WorkStatus.OPEN
+        )
+        attention_signals = _project_attention_signals(
             project=project,
             tasks=sorted_tasks,
             events=sorted_events,
             ranked_tasks=ranked_tasks,
             now=now,
         )
+        blockers = _project_dependency_blockers(current_dependency_evidence)
         work_packages = project_work_package_service.build_current_packages(
             project_linear_tasks,
             canonical_project_id=str(project.get("canonical_project_id") or ""),
             canonical_project_key=str(project["key"]),
             current_time=now,
+            dependency_evidence=project_dependency_evidence,
+        )
+        has_executable_action = bool(
+            recommendation
+            and recommendation.action == RecommendationAction.DO_WORK
         )
 
         return {
@@ -214,18 +237,21 @@ class ProjectBrainService:
             "description": project["description"],
             "task_count": len(sorted_tasks),
             "status": _project_status(
-                blockers=blockers,
+                dependency_evidence=current_dependency_evidence,
+                attention_signals=attention_signals,
+                has_executable_action=has_executable_action,
                 tasks=current_project_work,
                 events=sorted_events,
             ),
             "next_recommendation": _project_next_recommendation(
-                blockers=blockers,
                 recommendation=recommendation,
                 ranked_tasks=ranked_tasks,
                 events=sorted_events,
                 memories=project_memories,
             ),
             "blockers": blockers[:8],
+            "attention_signals": attention_signals[:8],
+            "dependency_evidence": project_dependency_evidence,
             "tasks": [_task_item(task, _todoist_task_section_for(task)) for task in sorted_tasks[:12]],
             "task_groups": task_groups[:12],
             "classification_diagnostics": _project_task_diagnostics(
@@ -252,14 +278,18 @@ def _read_mapped_linear_work(
     project: dict[str, Any],
     registry: ProjectRegistrySnapshot,
     settings: Any,
-) -> tuple[list[NormalizedWorkItem], LinearProjectDiagnostic]:
+) -> tuple[
+    list[NormalizedWorkItem],
+    tuple[EvaluatedDependencyEvidence, ...],
+    LinearProjectDiagnostic,
+]:
     mapping = registry.diagnose_canonical_project_mapping(
         str(project["key"]),
         provider="linear",
         resource_type="project",
     )
     if mapping.status != "mapped" or not mapping.provider_ref:
-        return [], LinearProjectDiagnostic(
+        return [], (), LinearProjectDiagnostic(
             status="not_mapped",
             message="This canonical project has no Linear project mapping.",
         )
@@ -268,18 +298,18 @@ def _read_mapped_linear_work(
     try:
         result = LinearClient(settings).list_issues(project_id=project_id)
     except Exception:
-        return [], LinearProjectDiagnostic(
+        return [], (), LinearProjectDiagnostic(
             status="provider_failure",
             provider_ref=project_id,
             message="Linear could not be reached; existing Project Brain sources remain available.",
         )
     if result.error:
-        return [], _linear_failure_diagnostic(project_id, result.error)
+        return [], (), _linear_failure_diagnostic(project_id, result.error)
 
     for record in result.records:
         provider_project = record.get("project") if isinstance(record, dict) else None
         if not isinstance(provider_project, dict) or str(provider_project.get("id") or "") != project_id:
-            return [], LinearProjectDiagnostic(
+            return [], (), LinearProjectDiagnostic(
                 status="malformed_response",
                 provider_ref=project_id,
                 message="Linear returned an issue outside the mapped project boundary.",
@@ -287,7 +317,7 @@ def _read_mapped_linear_work(
     try:
         adapted = linear_work_adapter.adapt_many(result.records)
     except (TypeError, ValueError):
-        return [], LinearProjectDiagnostic(
+        return [], (), LinearProjectDiagnostic(
             status="malformed_response",
             provider_ref=project_id,
             message="Linear returned issue data that could not be normalized.",
@@ -299,12 +329,13 @@ def _read_mapped_linear_work(
         for item in adapted
     ]
     if len(mapped_items) != len(result.records):
-        return [], LinearProjectDiagnostic(
+        return [], (), LinearProjectDiagnostic(
             status="malformed_response",
             provider_ref=project_id,
             message="Linear returned incomplete issue data for the mapped project.",
         )
-    return mapped_items, LinearProjectDiagnostic(
+    evaluated = dependency_evaluator.evaluate(mapped_items, registry=registry)
+    return list(evaluated.work_items), evaluated.evidence, LinearProjectDiagnostic(
         status="connected",
         provider_ref=project_id,
         issue_count=len(mapped_items),
@@ -478,7 +509,16 @@ def _project_leaf_tasks(
     tasks: list[NormalizedWorkItem],
     active_children_by_parent: dict[str, list[NormalizedWorkItem]],
 ) -> list[NormalizedWorkItem]:
-    return [task for task in tasks if task.is_executable]
+    return [
+        task
+        for task in tasks
+        if task.is_executable
+        or (
+            task.status == WorkStatus.OPEN
+            and task.is_blocked
+            and not task.is_container
+        )
+    ]
 
 
 def _project_rankable_task(task: NormalizedWorkItem) -> dict[str, Any]:
@@ -645,7 +685,7 @@ def _task_needs_classification(
     )
 
 
-def _project_blockers(
+def _project_attention_signals(
     *,
     project: dict[str, Any],
     tasks: list[NormalizedWorkItem],
@@ -653,34 +693,86 @@ def _project_blockers(
     ranked_tasks: list[dict[str, Any]],
     now: datetime,
 ) -> list[dict[str, Any]]:
-    blockers: list[dict[str, Any]] = []
+    signals: list[dict[str, Any]] = []
     for task in tasks:
         content = str(task.get("content") or "Untitled task")
         if task.get("due_status") == "overdue":
-            blockers.append({"type": "overdue_task", "title": content, "detail": "Overdue Todoist task", "severity": "critical", "source_id": task.get("id")})
+            signals.append({"type": "overdue_task", "title": content, "detail": "Overdue Todoist task", "severity": "critical", "source_id": task.get("id")})
         if _is_stale_high_priority_task(task, now):
-            blockers.append({"type": "stale_high_priority_task", "title": content, "detail": "High-priority task has been open for more than 7 days", "severity": "warning", "source_id": task.get("id")})
+            signals.append({"type": "stale_high_priority_task", "title": content, "detail": "High-priority task has been open for more than 7 days", "severity": "warning", "source_id": task.get("id")})
         blocker_word = _first_matching_phrase(_task_match_text(task), BLOCKER_WORDS)
         if blocker_word:
-            blockers.append({"type": "blocked_task", "title": content, "detail": f"Task mentions {blocker_word}", "severity": "warning", "source_id": task.get("id")})
+            signals.append({"type": "keyword_attention", "title": content, "detail": f"Todoist text mentions {blocker_word}; this is not provider-backed dependency evidence", "severity": "warning", "source_id": task.get("id")})
     for event in events:
         follow_up_word = _first_matching_phrase(_event_match_text(event), FOLLOW_UP_WORDS)
         if follow_up_word:
-            blockers.append({"type": "pending_meeting_follow_up", "title": str(event.get("title") or "Calendar event"), "detail": f"Upcoming event mentions {follow_up_word}", "severity": "warning", "source_id": event.get("id")})
+            signals.append({"type": "pending_meeting_follow_up", "title": str(event.get("title") or "Calendar event"), "detail": f"Upcoming event mentions {follow_up_word}", "severity": "warning", "source_id": event.get("id")})
     if events and not ranked_tasks:
-        blockers.append({"type": "empty_next_step", "title": "No next task before upcoming event", "detail": f"{project['name']} has calendar context but no matching Todoist next step", "severity": "warning", "source_id": None})
-    return _dedupe_blockers(blockers)
+        signals.append({"type": "empty_next_step", "title": "No next task before upcoming event", "detail": f"{project['name']} has calendar context but no executable project next step", "severity": "warning", "source_id": None})
+    return _dedupe_blockers(signals)
+
+
+def _project_dependency_blockers(
+    evidence: tuple[EvaluatedDependencyEvidence, ...],
+) -> list[dict[str, Any]]:
+    state_order = {
+        DependencyEvaluationState.ACTIVE: 0,
+        DependencyEvaluationState.NEEDS_REVIEW: 1,
+        DependencyEvaluationState.RESOLVED: 2,
+    }
+    current = sorted(
+        (
+            relationship
+            for relationship in evidence
+            if relationship.evaluation_state
+            in {
+                DependencyEvaluationState.ACTIVE,
+                DependencyEvaluationState.NEEDS_REVIEW,
+            }
+        ),
+        key=lambda relationship: (
+            state_order[relationship.evaluation_state],
+            relationship.blocked_work.provider_record_id,
+            relationship.blocking_work.provider_record_id,
+        ),
+    )
+    return [
+        {
+            "type": f"explicit_dependency_{relationship.evaluation_state.value}",
+            "title": relationship.blocked_work.title
+            or relationship.blocked_work.provider_identifier
+            or "Blocked Linear work",
+            "detail": relationship.explanation,
+            "severity": (
+                "critical"
+                if relationship.evaluation_state == DependencyEvaluationState.ACTIVE
+                else "warning"
+            ),
+            "source_id": relationship.blocked_work.provider_record_id,
+        }
+        for relationship in current
+    ]
 
 
 def _project_status(
     *,
-    blockers: list[dict[str, Any]],
+    dependency_evidence: tuple[EvaluatedDependencyEvidence, ...],
+    attention_signals: list[dict[str, Any]],
+    has_executable_action: bool,
     tasks: list[NormalizedWorkItem],
     events: list[dict[str, Any]],
 ) -> str:
-    if any(blocker.get("severity") == "critical" for blocker in blockers):
+    has_active_dependency = any(
+        evidence.evaluation_state == DependencyEvaluationState.ACTIVE
+        for evidence in dependency_evidence
+    )
+    has_needs_review = any(
+        evidence.evaluation_state == DependencyEvaluationState.NEEDS_REVIEW
+        for evidence in dependency_evidence
+    )
+    if not has_executable_action and has_active_dependency:
         return "Blocked"
-    if blockers:
+    if has_active_dependency or has_needs_review or attention_signals:
         return "Needs attention"
     if tasks or events:
         return "Active"
@@ -689,14 +781,11 @@ def _project_status(
 
 def _project_next_recommendation(
     *,
-    blockers: list[dict[str, Any]],
     recommendation: WorkRecommendation | None,
     ranked_tasks: list[dict[str, Any]],
     events: list[dict[str, Any]],
     memories: list[dict[str, Any]],
 ) -> str:
-    if blockers:
-        return f"Resolve blocker: {blockers[0]['title']}"
     if recommendation and recommendation.action == RecommendationAction.RESOLVE_BLOCKER:
         return f"Resolve blocker: {recommendation.selected_work.title}"
     if ranked_tasks:

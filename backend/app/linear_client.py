@@ -84,7 +84,11 @@ query PcosLinearIssues(
         nodes {
           id
           type
-          relatedIssue { id identifier title state { name type } }
+          relatedIssue {
+            id identifier title url
+            state { name type }
+            project { id name }
+          }
         }
         pageInfo { hasNextPage endCursor }
       }
@@ -92,7 +96,11 @@ query PcosLinearIssues(
         nodes {
           id
           type
-          issue { id identifier title state { name type } }
+          issue {
+            id identifier title url
+            state { name type }
+            project { id name }
+          }
         }
         pageInfo { hasNextPage endCursor }
       }
@@ -115,7 +123,11 @@ query PcosLinearIssueRelations(
       nodes {
         id
         type
-        relatedIssue { id identifier title state { name type } }
+        relatedIssue {
+          id identifier title url
+          state { name type }
+          project { id name }
+        }
       }
       pageInfo { hasNextPage endCursor }
     }
@@ -123,7 +135,11 @@ query PcosLinearIssueRelations(
       nodes {
         id
         type
-        issue { id identifier title state { name type } }
+        issue {
+          id identifier title url
+          state { name type }
+          project { id name }
+        }
       }
       pageInfo { hasNextPage endCursor }
     }

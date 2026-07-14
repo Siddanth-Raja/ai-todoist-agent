@@ -22,6 +22,7 @@ import {
   formatDateTime,
   type ActivityEntry,
   type CalendarEvent,
+  type EvaluatedDependencyEvidence,
   type MemoryEntry,
   type ProjectBrain,
   type ProjectBlocker,
@@ -31,6 +32,8 @@ import {
   type TaskItem,
 } from "@/lib/api";
 import {
+  currentDependencyEvidence,
+  dependencyEvidencePresentation,
   packageAvailabilityPresentation,
   workPackageSectionState,
 } from "@/lib/work-package-presentation";
@@ -278,6 +281,9 @@ function WorkPackageOption({ workPackage }: { workPackage: ProjectWorkPackage })
         {workPackage.explicitly_blocked_action_count > 0
           ? ` · ${workPackage.explicitly_blocked_action_count} explicitly blocked`
           : ""}
+        {workPackage.needs_review_action_count > 0
+          ? ` · ${workPackage.needs_review_action_count} needs review`
+          : ""}
       </p>
       {workPackage.next_action ? (
         <div className="mt-4 rounded-xl bg-white/[0.055] p-4">
@@ -303,6 +309,54 @@ function WorkPackageOption({ workPackage }: { workPackage: ProjectWorkPackage })
           <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
         </a>
       ) : null}
+    </article>
+  );
+}
+
+function DependencyEvidenceRow({ evidence }: { evidence: EvaluatedDependencyEvidence }) {
+  const presentation = dependencyEvidencePresentation(evidence.evaluation_state);
+  const stateClass = presentation.tone === "warning"
+    ? "border-gold/25 bg-gold/10 text-gold"
+    : "border-coral/25 bg-coral/10 text-coral";
+  const blockedLabel = evidence.blocked_work.provider_identifier ?? evidence.blocked_work.title ?? "Blocked work";
+  const blockerLabel = evidence.blocking_work.provider_identifier ?? evidence.blocking_work.title ?? "Unknown blocker";
+
+  return (
+    <article className="rounded-2xl border border-white/10 bg-black/20 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className={`rounded-full border px-2 py-1 text-[0.68rem] ${stateClass}`}>
+          {presentation.label}
+        </span>
+        <span className="text-[0.68rem] uppercase tracking-[0.14em] text-stone-500">Linear evidence</span>
+      </div>
+      <div className="mt-4 grid gap-3 text-sm sm:grid-cols-[1fr_auto_1fr] sm:items-center">
+        <div>
+          <p className="text-xs text-stone-500">Blocked work</p>
+          <p className="mt-1 break-words font-semibold text-pearl">{blockedLabel}</p>
+          <p className="mt-1 text-xs capitalize text-stone-500">{evidence.blocked_work.status ?? "Unknown status"}</p>
+        </div>
+        <span className="hidden text-stone-600 sm:block">←</span>
+        <div>
+          <p className="text-xs text-stone-500">Blocking work</p>
+          <p className="mt-1 break-words font-semibold text-pearl">{blockerLabel}</p>
+          <p className="mt-1 text-xs capitalize text-stone-500">{evidence.blocking_work.status ?? "Unknown status"}</p>
+        </div>
+      </div>
+      <p className="mt-3 text-xs leading-5 text-stone-400">{evidence.explanation}</p>
+      <div className="mt-3 flex flex-wrap gap-3 text-xs text-moss">
+        {evidence.blocked_work.provider_url ? (
+          <a href={evidence.blocked_work.provider_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-pearl">
+            Open {blockedLabel}
+            <ExternalLink className="h-3 w-3" aria-hidden="true" />
+          </a>
+        ) : null}
+        {evidence.blocking_work.provider_url ? (
+          <a href={evidence.blocking_work.provider_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-pearl">
+            Open {blockerLabel}
+            <ExternalLink className="h-3 w-3" aria-hidden="true" />
+          </a>
+        ) : null}
+      </div>
     </article>
   );
 }
@@ -346,6 +400,9 @@ export default function ProjectDetailPage() {
   const packageSectionState = project
     ? workPackageSectionState(project.work_packages ?? [], project.linear_diagnostic ?? null)
     : "hidden";
+  const currentDependencyBlockers = currentDependencyEvidence(
+    project?.dependency_evidence ?? [],
+  );
 
   if (isLoading) {
     return (
@@ -439,7 +496,7 @@ export default function ProjectDetailPage() {
         </section>
       ) : null}
 
-      <section className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+      <section className="grid gap-4 xl:grid-cols-3">
         <Card title="Next move" icon={<Target className="h-5 w-5" aria-hidden="true" />}>
           <div className="rounded-2xl bg-moss/10 p-5">
             <p className="text-xs uppercase tracking-[0.18em] text-moss">Next move</p>
@@ -449,15 +506,30 @@ export default function ProjectDetailPage() {
           </div>
         </Card>
 
-        <Card title="Blocked by" icon={<AlertTriangle className="h-5 w-5" aria-hidden="true" />}>
-          {project.blockers.length === 0 ? (
-            <EmptyState text="No blockers detected." />
+        <Card title="Explicit blockers" icon={<AlertTriangle className="h-5 w-5" aria-hidden="true" />}>
+          {currentDependencyBlockers.length === 0 ? (
+            <EmptyState text="No active or needs-review dependencies." />
           ) : (
             <div className="space-y-3">
-              {project.blockers.map((blocker, index) => (
-                <article key={`${blocker.type}-${blocker.source_id ?? index}`} className={`rounded-2xl border p-4 ${blockerClass(blocker)}`}>
-                  <p className="text-sm font-semibold">{blocker.title}</p>
-                  {blocker.detail ? <p className="mt-2 text-xs leading-5 text-stone-200">{blocker.detail}</p> : null}
+              {currentDependencyBlockers.map((evidence) => (
+                <DependencyEvidenceRow
+                  key={`${evidence.blocked_work.provider_record_id}-${evidence.blocking_work.provider_record_id}`}
+                  evidence={evidence}
+                />
+              ))}
+            </div>
+          )}
+        </Card>
+
+        <Card title="Attention signals" icon={<AlertTriangle className="h-5 w-5" aria-hidden="true" />}>
+          {project.attention_signals.length === 0 ? (
+            <EmptyState text="No heuristic attention signals." />
+          ) : (
+            <div className="space-y-3">
+              {project.attention_signals.map((signal, index) => (
+                <article key={`${signal.type}-${signal.source_id ?? index}`} className={`rounded-2xl border p-4 ${blockerClass(signal)}`}>
+                  <p className="text-sm font-semibold">{signal.title}</p>
+                  {signal.detail ? <p className="mt-2 text-xs leading-5 text-stone-200">{signal.detail}</p> : null}
                 </article>
               ))}
             </div>

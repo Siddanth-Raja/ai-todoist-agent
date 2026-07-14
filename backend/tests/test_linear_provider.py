@@ -282,7 +282,8 @@ class LinearWorkAdapterTests(unittest.TestCase):
             {(dependency.provider_record_id, dependency.dependency_type) for dependency in work.dependencies},
             {("downstream", "blocks"), ("blocker", "blocked_by")},
         )
-        self.assertTrue(work.is_blocked)
+        self.assertFalse(work.is_blocked)
+        self.assertTrue(work.is_executable)
 
     def test_no_dependencies_or_blocked_state_are_invented_from_text_or_status_name(self):
         source = issue(

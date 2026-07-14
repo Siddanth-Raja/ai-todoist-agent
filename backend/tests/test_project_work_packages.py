@@ -5,6 +5,11 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.dependency_evaluator import (  # noqa: E402
+    DependencyEvaluationState,
+    DependencyWorkEvidence,
+    EvaluatedDependencyEvidence,
+)
 from app.project_work_packages import (  # noqa: E402
     WorkPackageAvailability,
     project_work_package_service,
@@ -71,12 +76,13 @@ def work_item(
 
 
 class ProjectWorkPackageServiceTests(unittest.TestCase):
-    def build(self, items, *, limit=3):
+    def build(self, items, *, evidence=(), limit=3):
         return project_work_package_service.build_current_packages(
             items,
             canonical_project_id=CANONICAL_PROJECT_ID,
             canonical_project_key="pcos-ai-todoist-agent",
             current_time=NOW,
+            dependency_evidence=evidence,
             limit=limit,
         )
 
@@ -149,15 +155,89 @@ class ProjectWorkPackageServiceTests(unittest.TestCase):
             "blocked_by",
         )
 
+    def test_needs_review_evidence_is_distinct_from_active_blocking(self):
+        blocked = work_item("blocked", "Blocked action", blocked_by="blocker")
+        evidence = (
+            EvaluatedDependencyEvidence(
+                relationship_provider="linear",
+                canonical_project_id=CANONICAL_PROJECT_ID,
+                blocked_work=DependencyWorkEvidence(
+                    provider="linear",
+                    provider_record_id="blocked",
+                    provider_identifier="BLOCKED",
+                    title="Blocked action",
+                    status=WorkStatus.OPEN,
+                    canonical_project_id=CANONICAL_PROJECT_ID,
+                ),
+                blocking_work=DependencyWorkEvidence(
+                    provider="linear",
+                    provider_record_id="blocker",
+                    provider_identifier="BLOCKER",
+                    status=WorkStatus.CANCELED,
+                ),
+                evaluation_state=DependencyEvaluationState.NEEDS_REVIEW,
+                explanation="Canceled blocker needs review.",
+            ),
+        )
+
+        package = self.build([blocked], evidence=evidence)[0]
+
+        self.assertEqual(package.availability_state, WorkPackageAvailability.NEEDS_REVIEW)
+        self.assertEqual(package.needs_review_action_count, 1)
+        self.assertEqual(package.explicitly_blocked_action_count, 0)
+        self.assertIsNone(package.next_action)
+        self.assertEqual(
+            package.work_items[0].dependency_evaluation_states,
+            (DependencyEvaluationState.NEEDS_REVIEW,),
+        )
+
+    def test_resolved_evidence_does_not_block_package_next_action(self):
+        released = work_item("released", "Released action", blocked_by="completed")
+        released = released.model_copy(update={"is_blocked": False, "is_executable": True})
+        evidence = (
+            EvaluatedDependencyEvidence(
+                relationship_provider="linear",
+                canonical_project_id=CANONICAL_PROJECT_ID,
+                blocked_work=DependencyWorkEvidence(
+                    provider="linear",
+                    provider_record_id="released",
+                    provider_identifier="RELEASED",
+                    title="Released action",
+                    status=WorkStatus.OPEN,
+                    canonical_project_id=CANONICAL_PROJECT_ID,
+                ),
+                blocking_work=DependencyWorkEvidence(
+                    provider="linear",
+                    provider_record_id="completed",
+                    provider_identifier="COMPLETED",
+                    status=WorkStatus.COMPLETED,
+                ),
+                evaluation_state=DependencyEvaluationState.RESOLVED,
+                explanation="Completed blocker is resolved.",
+            ),
+        )
+
+        package = self.build([released], evidence=evidence)[0]
+
+        self.assertEqual(package.availability_state, WorkPackageAvailability.AVAILABLE)
+        self.assertEqual(package.next_action.provider_record_id, "released")
+        self.assertEqual(package.explicitly_blocked_action_count, 0)
+
     def test_parent_containers_never_become_next_actions(self):
         package = self.build(
             [
-                work_item("parent", "Container", container=True),
+                work_item(
+                    "parent",
+                    "Container",
+                    container=True,
+                    blocked_by="container-blocker",
+                ),
                 work_item("child", "Concrete action", parent_id="parent"),
             ]
         )[0]
         self.assertEqual(package.next_action.provider_record_id, "child")
         self.assertEqual(package.open_action_count, 1)
+        self.assertEqual(package.explicitly_blocked_action_count, 0)
         parent = next(item for item in package.work_items if item.provider_record_id == "parent")
         self.assertTrue(parent.is_container)
         self.assertFalse(parent.is_executable)

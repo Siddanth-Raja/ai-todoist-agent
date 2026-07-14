@@ -215,6 +215,7 @@ export type ProjectWorkPackageItem = {
   is_executable: boolean;
   is_container: boolean;
   is_blocked: boolean;
+  dependency_evaluation_states: Array<"active" | "resolved" | "needs_review">;
   explicit_dependencies: Array<{
     provider: string;
     provider_record_id: string;
@@ -245,7 +246,12 @@ export type ProjectWorkPackage = {
   open_action_count: number;
   executable_action_count: number;
   explicitly_blocked_action_count: number;
-  availability_state: "available" | "explicitly_blocked" | "no_executable_action";
+  needs_review_action_count: number;
+  availability_state:
+    | "available"
+    | "needs_review"
+    | "explicitly_blocked"
+    | "no_executable_action";
   work_items: ProjectWorkPackageItem[];
   next_action: ProjectWorkPackageAction | null;
   considered_alternatives: Array<{
@@ -253,6 +259,29 @@ export type ProjectWorkPackage = {
     provider_record_id: string;
     title: string;
   }>;
+};
+
+export type DependencyWorkEvidence = {
+  provider: string;
+  provider_record_id: string;
+  provider_identifier: string | null;
+  title: string | null;
+  status: "open" | "completed" | "canceled" | null;
+  provider_status: string | null;
+  provider_url: string | null;
+  canonical_project_id: string | null;
+  provider_project_id: string | null;
+};
+
+export type EvaluatedDependencyEvidence = {
+  relationship_provider: string;
+  relationship_id: string | null;
+  dependency_type: "blocked_by";
+  canonical_project_id: string | null;
+  blocked_work: DependencyWorkEvidence;
+  blocking_work: DependencyWorkEvidence;
+  evaluation_state: "active" | "resolved" | "needs_review";
+  explanation: string;
 };
 
 export type ProjectBrain = {
@@ -263,6 +292,8 @@ export type ProjectBrain = {
   task_count: number;
   next_recommendation: string;
   blockers: ProjectBlocker[];
+  attention_signals: ProjectBlocker[];
+  dependency_evidence: EvaluatedDependencyEvidence[];
   tasks: TaskItem[];
   task_groups: ProjectTaskGroup[];
   classification_diagnostics: ProjectTaskDiagnostic[];

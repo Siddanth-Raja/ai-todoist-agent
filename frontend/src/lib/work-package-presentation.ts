@@ -1,7 +1,26 @@
 import type {
+  EvaluatedDependencyEvidence,
   LinearProjectDiagnostic,
   ProjectWorkPackage,
 } from "@/lib/api";
+
+export function currentDependencyEvidence(
+  evidence: EvaluatedDependencyEvidence[],
+): EvaluatedDependencyEvidence[] {
+  return evidence.filter((relationship) => relationship.evaluation_state !== "resolved");
+}
+
+export function dependencyEvidencePresentation(
+  state: EvaluatedDependencyEvidence["evaluation_state"],
+): { label: string; tone: "active" | "warning" | "resolved" } {
+  if (state === "active") {
+    return { label: "Active dependency", tone: "active" };
+  }
+  if (state === "needs_review") {
+    return { label: "Needs review", tone: "warning" };
+  }
+  return { label: "Resolved", tone: "resolved" };
+}
 
 export type WorkPackageSectionState =
   | "hidden"
@@ -36,6 +55,13 @@ export function packageAvailabilityPresentation(
     return {
       label: "Explicitly blocked",
       detail: "Every open action in this package is explicitly blocked in Linear.",
+      tone: "warning",
+    };
+  }
+  if (availability === "needs_review") {
+    return {
+      label: "Needs review",
+      detail: "Dependency evidence is incomplete or canceled and must be reviewed before proceeding.",
       tone: "warning",
     };
   }

@@ -3439,6 +3439,40 @@ Verification for SID-135 reached 149 backend tests passing, including 38 focused
 
 SID-136 remains the boundary for grounded project-level blocker interpretation and presentation. SID-135 preserves explicit dependencies and prevents blocked work from becoming a next action, but it does not add milestone-order inference, keyword reinterpretation of Linear work, or a new blocker scoring path.
 
+## 17.23 Trustworthy Linear Dependency Evaluation
+
+SID-136 replaces raw relation-presence blocking with a shared typed dependency evaluator. The evaluator runs once after mapped Linear normalization and before Project Brain recommendations, Project Work Packages, project status, and project next-action selection. Every consumer therefore sees the same executable state.
+
+For each explicit Linear `blocked_by` relation, the evaluator preserves the raw provider relation and produces structured evidence containing the relation identity, blocked and blocking work UUIDs and human identifiers, titles, workflow statuses, URLs, canonical project associations, evaluation state, and a human-readable explanation. Evaluation is intentionally conservative:
+
+```text
+blocking issue open                  -> active; downstream is non-executable
+blocking issue completed             -> resolved; downstream may execute
+blocking issue canceled              -> needs_review; downstream is non-executable
+blocking issue missing or malformed  -> needs_review; downstream is non-executable
+```
+
+Resolved relationships remain available in the additive API evidence for traceability but are omitted from the current blocker UI. Titles, descriptions, milestone sequence, milestone names, and status wording never create dependency evidence. Cross-project relationships retain both canonical project associations; they do not move either work item into another project.
+
+Project status now follows explicit state. A project is `Blocked` only when it has no executable work and at least one active explicit dependency. It is `Needs attention` when an explicit relationship needs review, or when active dependencies coexist with executable work elsewhere. Existing Todoist and Calendar overdue, stale, keyword, follow-up, and scheduling observations are exposed separately as additive `attention_signals`; they are not provider-backed blockers and cannot override an executable Linear recommendation.
+
+Project Work Packages expose active and needs-review counts separately. Available executable work remains preferred, active dependencies produce `explicitly_blocked`, and conservative dependency uncertainty produces `needs_review`. The Project Workspace renders only current active or needs-review dependency evidence, distinguishes the two states, and links to underlying Linear records where URLs are available.
+
+Live read-only verification exercised the exact UUID-mapped projects with the ignored local credential and current Linear GraphQL schema:
+
+| Canonical project | Linear project UUID | Issues read | Dependency evaluation | Grounded result |
+| --- | --- | ---: | --- | --- |
+| PCOS | `8622937e-f05d-48b7-ba54-43604a8aa733` | 56 | 54 active, 35 resolved, 0 needs review | Calendar Trust, Canonical Project Intelligence, and Linear PM Integration remained grounded current packages |
+| XO | `6752d640-2f40-423f-b86f-ef11e0c4deda` | 30 | 8 active, 0 resolved, 0 needs review | SID-91 remained executable while Product Direction retained explicit blocking evidence |
+| Nebulo | `d9fdfe44-3e66-4dc0-b564-b2bcb646e635` | 9 | 8 active, 0 resolved, 0 needs review | Demo 1 selected SID-103 and kept its seven downstream actions blocked |
+| Freelance | `2bde590c-a8ab-4f4e-81eb-f7a8da8c1833` | 34 | 23 active, 4 resolved, 1 needs review | SID-173 resolved SID-174; SID-174 became executable while SID-175 through SID-178 remained blocked |
+
+All four reads remained exact-project scoped with zero cross-project issue leakage. Linear health reported `connected`; relation URLs, workflow states, priorities, milestones, parents, and timestamps remained schema-compatible. The verification performed no Linear writes and exposed no credential.
+
+SID-136 does not add Linear writes, synchronization, SQLite mirroring, Chat changes, milestone-order dependencies, or new recommendation weights. Controlled Linear actions remain a later boundary.
+
+Verification for SID-136 reached 163 backend tests passing, including focused dependency, Linear provider, package, Project Brain, and API tests, plus 5 frontend presentation tests. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, ignored-secret checks, and live read-only verification passed.
+
 ---
 
 # 18. Current Verification History
@@ -3461,6 +3495,7 @@ Recorded development checkpoints include:
 | Linear read provider and adapter | 129 tests passing | Build passing | Passing |
 | Durable Linear project mappings | 134 tests passing | Build passing | Passing |
 | Mapped Linear Project Brain and work packages | 149 tests passing | 3 frontend tests and build passing | Passing |
+| Trustworthy Linear dependency evaluation | 163 tests passing | 5 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -6181,17 +6216,13 @@ Grounded project-level blocker interpretation remains deferred to SID-136. SID-1
 
 ## Issue: Compute Trustworthy Project Blockers From Linear State
 
-**Status:** Todo
+**Status:** Done
 
 **Priority:** High
 
 **Description:**
 
-Make the “What's blocking Nebulo?” experience a grounded Project Brain capability.
-
-Blockers should use explicit provider relationships and structured work state where available.
-
-Keyword heuristics may supplement missing data but should not override explicit Linear dependency state.
+Evaluate explicit Linear relationships against the blocking issue's normalized workflow state before Project Brain, package, status, and recommendation decisions. Preserve grounded evidence, distinguish active, resolved, and needs-review relationships, and keep heuristic attention signals separate from provider-backed blockers.
 
 **Dependencies / blockers:**
 
@@ -6202,12 +6233,12 @@ Shared Recommendation Service.
 **Acceptance criteria:**
 
 - Explicit Linear blocked relationships are recognized.
-- Incomplete dependencies can be recognized.
+- Completed dependencies release downstream work.
+- Canceled, missing, and malformed dependencies require review and remain fail-closed.
 - Blocked work is associated with the correct canonical project.
 - Project Workspace displays meaningful blockers.
-- Chat blocker questions use the same blocker state.
 - Blocker evidence identifies the underlying work records.
-- Keyword-based blocker inference is distinguishable from explicit provider evidence.
+- Keyword-based attention is distinguishable from explicit provider evidence.
 - PCOS does not invent a blocker when evidence is absent.
 - Nebulo blocker questions have dedicated tests.
 

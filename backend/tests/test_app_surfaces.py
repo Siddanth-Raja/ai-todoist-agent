@@ -474,17 +474,21 @@ class AppSurfaceEndpointTests(unittest.TestCase):
 
         self.assertEqual(len(projects), 7)
         self.assertEqual(nebulo["name"], "Nebulo")
-        self.assertEqual(nebulo["status"], "Blocked")
+        self.assertEqual(nebulo["status"], "Needs attention")
         self.assertEqual(nebulo["tasks"][0]["content"], "Waiting on Brandon feedback")
         self.assertEqual(nebulo["upcoming_events"][0]["title"], "Nebulo review with Brandon")
         self.assertIn("Brandon", nebulo["people"])
         self.assertTrue(any(memory["title"] == "Nebulo" for memory in nebulo["memories"]))
         self.assertTrue(any(activity["title"].startswith("Calendar event updated") for activity in nebulo["recent_activity"]))
-        blocker_types = {blocker["type"] for blocker in nebulo["blockers"]}
-        self.assertIn("overdue_task", blocker_types)
-        self.assertIn("blocked_task", blocker_types)
-        self.assertIn("stale_high_priority_task", blocker_types)
-        self.assertTrue(nebulo["next_recommendation"].startswith("Resolve blocker:"))
+        self.assertEqual(nebulo["blockers"], [])
+        attention_types = {signal["type"] for signal in nebulo["attention_signals"]}
+        self.assertIn("overdue_task", attention_types)
+        self.assertIn("keyword_attention", attention_types)
+        self.assertIn("stale_high_priority_task", attention_types)
+        self.assertEqual(
+            nebulo["next_recommendation"],
+            "Work next: Waiting on Brandon feedback",
+        )
         self.assertEqual(am["key"], "am")
 
     def test_projects_include_subtask_hierarchy_and_rank_leaf_tasks(self):

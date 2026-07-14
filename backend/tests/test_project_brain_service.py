@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.calendar_tools import CalendarReadResult  # noqa: E402
+from app.dependency_evaluator import dependency_evaluator  # noqa: E402
 from app.linear_client import LinearProviderError, LinearReadResult  # noqa: E402
 from app.linear_work_adapter import linear_work_adapter  # noqa: E402
 from app.project_brain import ProjectBrainService  # noqa: E402
@@ -73,6 +74,45 @@ def linear_issue(
         "relations": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
         "inverseRelations": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
     }
+
+
+def normalized_linear_item(
+    project_id: str,
+    record_id: str,
+    identifier: str,
+    title: str,
+    *,
+    status: WorkStatus = WorkStatus.OPEN,
+    priority: WorkPriority = WorkPriority.MEDIUM,
+    blocked_by: tuple[str, ...] = (),
+    container: bool = False,
+    milestone_id: str = "milestone",
+):
+    return NormalizedWorkItem(
+        provider="linear",
+        provider_record_id=record_id,
+        canonical_project_id=project_id,
+        title=title,
+        status=status,
+        priority=priority,
+        is_container=container,
+        is_executable=status == WorkStatus.OPEN and not container,
+        dependencies=tuple(
+            WorkDependency(
+                provider="linear",
+                provider_record_id=blocker,
+                dependency_type="blocked_by",
+            )
+            for blocker in blocked_by
+        ),
+        provider_url=f"https://linear.app/example/issue/{identifier}",
+        provider_metadata={
+            "issue_identifier": identifier,
+            "provider_project_id": "provider-project",
+            "project_milestone": {"id": milestone_id, "name": "Sendable audit"},
+            "inverse_relations": [],
+        },
+    )
 
 
 class ProjectBrainServiceTests(unittest.TestCase):
@@ -252,6 +292,187 @@ class ProjectBrainServiceTests(unittest.TestCase):
             "Resolve blocker: Ship release",
         )
 
+    def test_available_work_outranks_unrelated_blocked_future_work(self):
+        project = self.registry.get_project_definition("nebulo")
+        canonical_id = project["canonical_project_id"]
+        blocker = normalized_linear_item(
+            canonical_id,
+            "blocker",
+            "SID-103",
+            "External prerequisite",
+            container=True,
+        )
+        blocked = normalized_linear_item(
+            canonical_id,
+            "blocked",
+            "SID-104",
+            "Future blocked work",
+            blocked_by=("blocker",),
+        )
+        available = normalized_linear_item(
+            canonical_id,
+            "available",
+            "SID-105",
+            "Available Nebulo action",
+            priority=WorkPriority.URGENT,
+        )
+        evaluated = dependency_evaluator.evaluate(
+            [blocker, blocked, available],
+            registry=self.registry,
+        )
+
+        brain = self.service.build_project(
+            project=project,
+            tasks=list(evaluated.work_items),
+            events=[],
+            memories=[],
+            activity=[],
+            now=self.now,
+            registry=self.registry,
+            dependency_evidence=evaluated.evidence,
+        )
+
+        self.assertEqual(brain["status"], "Needs attention")
+        self.assertEqual(brain["next_recommendation"], "Work next: Available Nebulo action")
+        self.assertEqual(brain["blockers"][0]["type"], "explicit_dependency_active")
+
+    def test_no_executable_work_produces_grounded_blocker_resolution(self):
+        project = self.registry.get_project_definition("nebulo")
+        canonical_id = project["canonical_project_id"]
+        blocker = normalized_linear_item(
+            canonical_id,
+            "blocker",
+            "SID-103",
+            "External prerequisite",
+            container=True,
+        )
+        blocked = normalized_linear_item(
+            canonical_id,
+            "blocked",
+            "SID-104",
+            "Only blocked action",
+            blocked_by=("blocker",),
+        )
+        evaluated = dependency_evaluator.evaluate(
+            [blocker, blocked],
+            registry=self.registry,
+        )
+
+        brain = self.service.build_project(
+            project=project,
+            tasks=list(evaluated.work_items),
+            events=[],
+            memories=[],
+            activity=[],
+            now=self.now,
+            registry=self.registry,
+            dependency_evidence=evaluated.evidence,
+        )
+
+        self.assertEqual(brain["status"], "Blocked")
+        self.assertEqual(brain["next_recommendation"], "Resolve blocker: Only blocked action")
+
+    def test_unevaluable_dependency_needs_attention_instead_of_blocked(self):
+        project = self.registry.get_project_definition("nebulo")
+        canonical_id = project["canonical_project_id"]
+        canceled_blocker = normalized_linear_item(
+            canonical_id,
+            "canceled-blocker",
+            "SID-103",
+            "Canceled prerequisite",
+            status=WorkStatus.CANCELED,
+        )
+        downstream = normalized_linear_item(
+            canonical_id,
+            "downstream",
+            "SID-104",
+            "Review the canceled dependency",
+            blocked_by=("canceled-blocker",),
+        )
+        evaluated = dependency_evaluator.evaluate(
+            [canceled_blocker, downstream],
+            registry=self.registry,
+        )
+
+        brain = self.service.build_project(
+            project=project,
+            tasks=list(evaluated.work_items),
+            events=[],
+            memories=[],
+            activity=[],
+            now=self.now,
+            registry=self.registry,
+            dependency_evidence=evaluated.evidence,
+        )
+
+        self.assertEqual(brain["status"], "Needs attention")
+        self.assertEqual(
+            brain["blockers"][0]["type"],
+            "explicit_dependency_needs_review",
+        )
+        self.assertEqual(
+            brain["work_packages"][0].availability_state.value,
+            "needs_review",
+        )
+
+    def test_freelance_resolved_chain_drives_package_and_project_consistently(self):
+        project = self.registry.get_project_definition("freelance")
+        canonical_id = project["canonical_project_id"]
+        sid_173 = normalized_linear_item(
+            canonical_id,
+            "sid-173",
+            "SID-173",
+            "Run sendability review",
+            status=WorkStatus.COMPLETED,
+        )
+        sid_174 = normalized_linear_item(
+            canonical_id,
+            "sid-174",
+            "SID-174",
+            "Export and visually verify the final audit PDF",
+            priority=WorkPriority.URGENT,
+            blocked_by=("sid-173",),
+        )
+        sid_175 = normalized_linear_item(
+            canonical_id,
+            "sid-175",
+            "SID-175",
+            "Send the audit",
+            blocked_by=("sid-174",),
+        )
+        evaluated = dependency_evaluator.evaluate(
+            [sid_173, sid_174, sid_175],
+            registry=self.registry,
+        )
+
+        brain = self.service.build_project(
+            project=project,
+            tasks=list(evaluated.work_items),
+            events=[],
+            memories=[],
+            activity=[],
+            now=self.now,
+            registry=self.registry,
+            dependency_evidence=evaluated.evidence,
+        )
+
+        package = brain["work_packages"][0]
+        self.assertEqual(package.next_action.provider_identifier, "SID-174")
+        self.assertEqual(
+            brain["next_recommendation"],
+            "Work next: Export and visually verify the final audit PDF",
+        )
+        states = {
+            evidence.evaluation_state.value for evidence in brain["dependency_evidence"]
+        }
+        self.assertEqual(states, {"resolved", "active"})
+        self.assertTrue(
+            all(
+                blocker["source_id"] != "sid-174"
+                for blocker in brain["blockers"]
+            )
+        )
+
     def test_mixed_todoist_and_linear_work_uses_shared_recommendation_without_deduping(self):
         project = self.registry.get_project_definition("pcos")
         todoist = todoist_work_adapter.adapt_many(
@@ -382,12 +603,22 @@ class ProjectBrainServiceTests(unittest.TestCase):
             projects = self.service.list_projects(settings=FakeSettings(), current_time=self.now)
 
         nebulo = next(project for project in projects if project["key"] == "nebulo")
-        self.assertEqual(nebulo["status"], "Blocked")
+        self.assertEqual(nebulo["status"], "Needs attention")
         self.assertEqual(nebulo["upcoming_events"][0]["id"], "nebulo-event")
         self.assertEqual(nebulo["recent_activity"][0]["id"], "activity-nebulo")
         self.assertIn("Brandon", nebulo["people"])
         self.assertEqual({memory["id"] for memory in nebulo["memories"]}, {"memory-nebulo", "memory-brandon"})
-        self.assertTrue(nebulo["next_recommendation"].startswith("Resolve blocker:"))
+        self.assertEqual(
+            nebulo["next_recommendation"],
+            "Work next: Waiting on Brandon feedback",
+        )
+        self.assertEqual(nebulo["blockers"], [])
+        self.assertTrue(
+            any(
+                signal["type"] == "keyword_attention"
+                for signal in nebulo["attention_signals"]
+            )
+        )
 
     def test_all_four_exact_mappings_are_read_without_name_matching(self):
         expected = {

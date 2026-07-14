@@ -61,7 +61,7 @@ class LinearWorkAdapter:
             is_container=False,
             is_executable=status == WorkStatus.OPEN,
             explicitly_completable=False,
-            is_blocked=any(dependency.dependency_type == "blocked_by" for dependency in dependencies),
+            is_blocked=False,
             dependencies=tuple(dependencies),
             created_at=_parse_datetime(issue.get("createdAt")),
             updated_at=_parse_datetime(issue.get("updatedAt")),

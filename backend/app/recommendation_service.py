@@ -313,7 +313,7 @@ def _eligible(item: NormalizedWorkItem) -> bool:
 
 
 def _blocked_candidate(item: NormalizedWorkItem) -> bool:
-    return item.status == WorkStatus.OPEN and item.is_executable and not item.is_container and item.is_blocked
+    return item.status == WorkStatus.OPEN and not item.is_container and item.is_blocked
 
 
 def _identity(item: NormalizedWorkItem) -> RecommendationWorkIdentity:

@@ -37,7 +37,14 @@ DEFAULT_CANONICAL_PROJECTS = (
             ("keyword", "assistant behavior"),
             ("keyword", "settings health"),
         ),
-        "provider_mappings": (),
+        "provider_mappings": (
+            (
+                "linear",
+                "project",
+                "8622937e-f05d-48b7-ba54-43604a8aa733",
+                {"source": "sid-134"},
+            ),
+        ),
     },
     {
         "id": "project-nebulo",
@@ -55,7 +62,15 @@ DEFAULT_CANONICAL_PROJECTS = (
             ("keyword", "private storage"),
             ("person", "Brandon"),
         ),
-        "provider_mappings": (("todoist", "section", "Nebulo", None),),
+        "provider_mappings": (
+            ("todoist", "section", "Nebulo", None),
+            (
+                "linear",
+                "project",
+                "d9fdfe44-3e66-4dc0-b564-b2bcb646e635",
+                {"source": "sid-134"},
+            ),
+        ),
     },
     {
         "id": "project-xo",
@@ -76,7 +91,15 @@ DEFAULT_CANONICAL_PROJECTS = (
             ("person", "Ashwin"),
             ("person", "Charlie"),
         ),
-        "provider_mappings": (("todoist", "section", "XO Collective", None),),
+        "provider_mappings": (
+            ("todoist", "section", "XO Collective", None),
+            (
+                "linear",
+                "project",
+                "6752d640-2f40-423f-b86f-ef11e0c4deda",
+                {"source": "sid-134"},
+            ),
+        ),
     },
     {
         "id": "project-freelance",
@@ -96,7 +119,15 @@ DEFAULT_CANONICAL_PROJECTS = (
             ("keyword", "invoice"),
             ("keyword", "proposal"),
         ),
-        "provider_mappings": (("todoist", "section", "Freelance Web Design", None),),
+        "provider_mappings": (
+            ("todoist", "section", "Freelance Web Design", None),
+            (
+                "linear",
+                "project",
+                "2bde590c-a8ab-4f4e-81eb-f7a8da8c1833",
+                {"source": "sid-134"},
+            ),
+        ),
     },
     {
         "id": "project-am",
@@ -1048,6 +1079,82 @@ def add_canonical_project_provider_mapping(
     return get_canonical_project(project_id)
 
 
+def get_canonical_project_provider_mapping(mapping_id: str) -> dict[str, Any] | None:
+    ensure_database()
+    with _connect() as connection:
+        row = connection.execute(
+            """
+            SELECT id, project_id, provider, resource_type, provider_ref,
+                metadata, enabled, created_at, updated_at
+            FROM canonical_project_provider_mappings
+            WHERE id = ?
+            """,
+            (mapping_id,),
+        ).fetchone()
+        return _canonical_project_provider_mapping_from_row(row) if row else None
+
+
+def update_canonical_project_provider_mapping(
+    mapping_id: str,
+    updates: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Update a durable provider mapping without changing source-defined seeds."""
+    ensure_database()
+    allowed = {
+        "project_id",
+        "provider",
+        "resource_type",
+        "provider_ref",
+        "metadata",
+        "enabled",
+    }
+    changes = {key: value for key, value in updates.items() if key in allowed}
+    if not changes:
+        return get_canonical_project_provider_mapping(mapping_id)
+
+    for required in ("project_id", "provider", "resource_type", "provider_ref"):
+        if required in changes and not str(changes[required] or "").strip():
+            raise ValueError(f"{required} is required")
+    if "metadata" in changes:
+        metadata = changes["metadata"]
+        if metadata is not None and not isinstance(metadata, dict):
+            raise ValueError("metadata must be an object or null")
+        changes["metadata"] = (
+            json.dumps(metadata, ensure_ascii=False) if metadata is not None else None
+        )
+    if "enabled" in changes:
+        changes["enabled"] = 1 if changes["enabled"] else 0
+    changes["updated_at"] = _utc_now()
+    assignments = ", ".join(f"{key} = ?" for key in changes)
+
+    with _connect() as connection:
+        if "project_id" in changes and not _project_exists(
+            connection,
+            str(changes["project_id"]),
+        ):
+            raise ValueError("unknown canonical project")
+        cursor = connection.execute(
+            f"""
+            UPDATE canonical_project_provider_mappings
+            SET {assignments}
+            WHERE id = ?
+            """,
+            [*changes.values(), mapping_id],
+        )
+        if cursor.rowcount == 0:
+            return None
+        row = connection.execute(
+            """
+            SELECT id, project_id, provider, resource_type, provider_ref,
+                metadata, enabled, created_at, updated_at
+            FROM canonical_project_provider_mappings
+            WHERE id = ?
+            """,
+            (mapping_id,),
+        ).fetchone()
+        return _canonical_project_provider_mapping_from_row(row)
+
+
 def resolve_canonical_project_provider_mapping(
     *,
     provider: str,
@@ -1115,15 +1222,23 @@ def _canonical_project_from_row(
     ]
     item["provider_mappings"] = []
     for mapping in mappings:
-        provider_mapping = dict(mapping)
-        provider_mapping["enabled"] = bool(provider_mapping["enabled"])
-        provider_mapping["metadata"] = (
-            json.loads(provider_mapping["metadata"])
-            if provider_mapping.get("metadata")
-            else None
-        )
+        provider_mapping = _canonical_project_provider_mapping_from_row(mapping)
+        provider_mapping.pop("project_id", None)
         item["provider_mappings"].append(provider_mapping)
     return item
+
+
+def _canonical_project_provider_mapping_from_row(
+    row: sqlite3.Row,
+) -> dict[str, Any]:
+    provider_mapping = dict(row)
+    provider_mapping["enabled"] = bool(provider_mapping["enabled"])
+    provider_mapping["metadata"] = (
+        json.loads(provider_mapping["metadata"])
+        if provider_mapping.get("metadata")
+        else None
+    )
+    return provider_mapping
 
 
 def _project_exists(connection: sqlite3.Connection, project_id: str) -> bool:

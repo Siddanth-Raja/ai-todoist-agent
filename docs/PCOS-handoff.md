@@ -3369,6 +3369,38 @@ SID-133 does not create canonical Linear project mappings, combine Linear and To
 
 Verification for SID-133 reached 129 backend tests passing, including 16 focused mocked Linear tests. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, and a no-credential runtime health smoke check passed. No local `LINEAR_API_KEY` was available, so live authenticated GraphQL verification remains pending and no credential was manufactured.
 
+## 17.21 Durable Linear Project Mappings
+
+SID-134 links the four initial Linear projects to canonical PCOS project identity through the existing `canonical_project_provider_mappings` table:
+
+```text
+pcos       -> linear / project / 8622937e-f05d-48b7-ba54-43604a8aa733
+xo         -> linear / project / 6752d640-2f40-423f-b86f-ef11e0c4deda
+nebulo     -> linear / project / d9fdfe44-3e66-4dc0-b564-b2bcb646e635
+freelance  -> linear / project / 2bde590c-a8ab-4f4e-81eb-f7a8da8c1833
+```
+
+The `pcos` reference resolves through the existing alias to the durable canonical key `pcos-ai-todoist-agent` and ID `project-pcos-ai-todoist-agent`. No new project row or mapping store was created.
+
+Initialization uses the registry's existing `INSERT OR IGNORE` seed convention. Mapping IDs are deterministic, so initialization is idempotent and a mapping edited through the durable API is not reset on the next startup. `get_canonical_project_provider_mapping` and `update_canonical_project_provider_mapping` provide data-layer inspection and updates without source edits.
+
+`ProjectRegistrySnapshot` continues to resolve exact `(provider, resource_type, provider_ref)` identity and now exposes diagnostics for:
+
+- `mapped`;
+- `unmapped_provider_ref`;
+- `canonical_project_unmapped`;
+- `unknown_canonical_project`.
+
+Resolution never accepts a provider project name. Renaming a Linear project therefore does not break its UUID mapping, and a duplicate or similar name with an unknown UUID cannot create or resolve another canonical project.
+
+A&M, Personal, and the synthesized Needs Classification state have no Linear mapping. Existing Todoist section mappings remain unchanged.
+
+Live read-only verification used the configured local `LINEAR_API_KEY` without exposing it. Linear returned PCOS, XO VR, Nebulo, and Freelance with the exact UUIDs above; all four resolved to their durable canonical IDs. A deliberately unknown UUID returned `unmapped_provider_ref` with no canonical ID. The local registry contained exactly four Linear project mappings.
+
+SID-134 does not call Linear from Project Brain, combine Linear and Todoist work, or change recommendations or frontend behavior. Feeding mapped normalized Linear work into Project Brain remains exclusively SID-135.
+
+Verification for SID-134 reached 134 backend tests passing. Focused registry tests, Python compilation, the Next.js 15.5.19 production build, `git diff --check`, ignored-secret checks, and the live mapping smoke check passed.
+
 ---
 
 # 18. Current Verification History
@@ -3389,6 +3421,7 @@ Recorded development checkpoints include:
 | Normalized work model | 100 tests passing | Build passing | Passing |
 | Shared recommendation service | 113 tests passing | Build passing | Passing |
 | Linear read provider and adapter | 129 tests passing | Build passing | Passing |
+| Durable Linear project mappings | 134 tests passing | Build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -4393,7 +4426,7 @@ The implemented registry represents:
 - classification hints;
 - enabled state.
 
-The provider mapping boundary stores provider, resource type, and provider reference against a durable canonical project ID. It is ready to represent Linear project and repository links, but neither provider integration is implemented here.
+The provider mapping boundary stores provider, resource type, and provider reference against a durable canonical project ID. Exact Linear project UUID mappings are implemented for PCOS, XO, Nebulo, and Freelance. Project Brain ingestion remains deferred to SID-135; repository mappings remain available through the same boundary when needed.
 
 Needs Classification is synthesized outside the editable registry as a system/unresolved state.
 
@@ -6018,7 +6051,7 @@ Linear authentication and API access.
 
 ## Issue: Link Linear Projects to Canonical PCOS Projects
 
-**Status:** Todo
+**Status:** Done
 
 **Priority:** High
 
@@ -6047,10 +6080,12 @@ Linear read adapter.
 - XO can store a Linear project mapping.
 - Nebulo can store a Linear project mapping.
 - Freelance can store a Linear project mapping.
-- Project Brain retrieves Linear work through the canonical project mapping.
+- The registry resolves each Linear UUID to the intended canonical project.
 - Renaming a Linear project does not silently create a second PCOS project when provider identity remains stable.
 - Missing mappings are diagnosable.
 - Provider mappings can be changed without editing backend source code.
+
+Project Brain ingestion is intentionally deferred to SID-135, `Feed Linear Work Into Project Brain`.
 
 ---
 
@@ -8700,11 +8735,12 @@ Implemented systems include:
 - Memory Center;
 - Settings and provider health diagnostics;
 - Linear read provider and normalized adapter;
+- durable Linear project-to-canonical-project mappings;
 - local startup and shutdown scripts.
 
 “Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, confirmation still has a legacy process-global path, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
 
-The Linear read-provider checkpoint reached 129 tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, and no-credential runtime health smoke checks passing. Live authenticated Linear verification remains pending because no local `LINEAR_API_KEY` was available. The shared recommendation checkpoint reached 113 tests, and the normalized work checkpoint reached 100 tests. Earlier 8-, 56-, 75-, 85-, 86-, 90-, and 95-test checkpoints remain recorded as implementation history rather than current feature claims.
+The durable Linear mapping checkpoint reached 134 tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, ignored-secret checks, and live UUID-to-canonical-project resolution passing. The Linear read-provider checkpoint reached 129 tests. The shared recommendation checkpoint reached 113 tests, and the normalized work checkpoint reached 100 tests. Earlier 8-, 56-, 75-, 85-, 86-, 90-, and 95-test checkpoints remain recorded as implementation history rather than current feature claims.
 
 The current product is not yet the full Personal Operating System described in the vision.
 

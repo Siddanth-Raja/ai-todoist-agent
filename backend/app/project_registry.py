@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 import re
-from typing import Any
+from typing import Any, Literal
 
 from .storage import list_canonical_projects
 
@@ -11,6 +11,22 @@ NEEDS_CLASSIFICATION_ALIASES = (
     "needs classification",
     "uncategorized",
 )
+
+
+@dataclass(frozen=True)
+class ProviderMappingDiagnostic:
+    status: Literal[
+        "mapped",
+        "unmapped_provider_ref",
+        "canonical_project_unmapped",
+        "unknown_canonical_project",
+    ]
+    provider: str
+    resource_type: str
+    provider_ref: str | None = None
+    canonical_project_id: str | None = None
+    canonical_project_key: str | None = None
+    mapping_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -43,14 +59,90 @@ class ProjectRegistrySnapshot:
             for mapping in project.get("provider_mappings", ()):
                 if not mapping.get("enabled", True):
                     continue
-                if (
-                    str(mapping.get("provider") or "").lower() == provider.lower()
-                    and str(mapping.get("resource_type") or "").lower()
-                    == resource_type.lower()
-                    and str(mapping.get("provider_ref") or "") == provider_ref
+                if _mapping_matches(
+                    mapping,
+                    provider=provider,
+                    resource_type=resource_type,
+                    provider_ref=provider_ref,
                 ):
                     return str(canonical_project_id)
         return None
+
+    def diagnose_provider_mapping(
+        self,
+        *,
+        provider: str,
+        resource_type: str,
+        provider_ref: str,
+    ) -> ProviderMappingDiagnostic:
+        for project in self.projects:
+            canonical_project_id = project.get("canonical_project_id")
+            if canonical_project_id is None:
+                continue
+            for mapping in project.get("provider_mappings", ()):
+                if not mapping.get("enabled", True):
+                    continue
+                if _mapping_matches(
+                    mapping,
+                    provider=provider,
+                    resource_type=resource_type,
+                    provider_ref=provider_ref,
+                ):
+                    return ProviderMappingDiagnostic(
+                        status="mapped",
+                        provider=provider,
+                        resource_type=resource_type,
+                        provider_ref=provider_ref,
+                        canonical_project_id=str(canonical_project_id),
+                        canonical_project_key=str(project["key"]),
+                        mapping_id=str(mapping["id"]),
+                    )
+        return ProviderMappingDiagnostic(
+            status="unmapped_provider_ref",
+            provider=provider,
+            resource_type=resource_type,
+            provider_ref=provider_ref,
+        )
+
+    def diagnose_canonical_project_mapping(
+        self,
+        project_reference: str,
+        *,
+        provider: str,
+        resource_type: str,
+    ) -> ProviderMappingDiagnostic:
+        project = self.get_project_definition(project_reference)
+        if project is None or project.get("canonical_project_id") is None:
+            return ProviderMappingDiagnostic(
+                status="unknown_canonical_project",
+                provider=provider,
+                resource_type=resource_type,
+                canonical_project_key=self.resolve_key(project_reference),
+            )
+        for mapping in project.get("provider_mappings", ()):
+            if not mapping.get("enabled", True):
+                continue
+            if _mapping_matches(
+                mapping,
+                provider=provider,
+                resource_type=resource_type,
+            ):
+                return ProviderMappingDiagnostic(
+                    status="mapped",
+                    provider=provider,
+                    resource_type=resource_type,
+                    provider_ref=str(mapping["provider_ref"]),
+                    canonical_project_id=str(project["canonical_project_id"]),
+                    canonical_project_key=str(project["key"]),
+                    mapping_id=str(mapping["id"]),
+                )
+        return ProviderMappingDiagnostic(
+            status="canonical_project_unmapped",
+            provider=provider,
+            resource_type=resource_type,
+            canonical_project_id=str(project["canonical_project_id"]),
+            canonical_project_key=str(project["key"]),
+        )
 
 
 class ProjectRegistryService:
@@ -111,6 +203,20 @@ def normalize_project_reference(value: str) -> str:
     text = value.lower().replace("&", " and ")
     text = text.replace("_", " ").replace("-", " ")
     return "-".join(re.sub(r"[^a-z0-9]+", " ", text).split())
+
+
+def _mapping_matches(
+    mapping: dict[str, Any],
+    *,
+    provider: str,
+    resource_type: str,
+    provider_ref: str | None = None,
+) -> bool:
+    if str(mapping.get("provider") or "").lower() != provider.lower():
+        return False
+    if str(mapping.get("resource_type") or "").lower() != resource_type.lower():
+        return False
+    return provider_ref is None or str(mapping.get("provider_ref") or "") == provider_ref
 
 
 project_registry_service = ProjectRegistryService()

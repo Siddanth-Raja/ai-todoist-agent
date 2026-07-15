@@ -1207,7 +1207,7 @@ This is implemented infrastructure, but the current interaction model is not con
 
 The Tasks endpoint reads active Todoist tasks and returns normalized task state for the frontend.
 
-The Todoist provider normalizes `created_at`, and the API schema includes it, but the current `main.py` response mapper omits the value. Pydantic therefore returns `created_at: null` from `GET /tasks`, which disables the Tasks page's intended task-age ranking signal.
+SID-225 repairs the endpoint's date contract. The response mapper now returns a normalized ISO `created_at` when Todoist supplies a valid timestamp and returns `null` for null, missing, empty, or malformed values. Normalized due dates follow the same absent-on-invalid behavior.
 
 Todoist remains the currently implemented task provider.
 
@@ -1658,7 +1658,7 @@ Ranking signals in the Tasks page include concepts such as:
 - unblocking or foundation language;
 - project momentum.
 
-The page flattens and ranks the returned tasks without Project Brain's parent-container filtering. In addition, `GET /tasks` currently returns `created_at: null`, so the age branch exists in frontend code but does not receive the source value it needs.
+The page flattens and ranks the returned tasks without Project Brain's parent-container filtering. Its date parsing, sorting, age scoring, refresh-state display, and due-date rendering now share a guarded date boundary. Missing or invalid timestamps do not receive invented ages or reach `Intl.DateTimeFormat`.
 
 The page persists recommendation timing/state in `localStorage` and can show recommendation changes.
 
@@ -1990,7 +1990,7 @@ The backend exposes Memory and Habits `PATCH` and `DELETE` routes but currently 
 
 ## 14.11 Task ranking inputs and priority semantics are inconsistent
 
-The Todoist provider normalizes creation time, but `GET /tasks` currently drops it, disabling the Tasks page's age signal. Priority is also interpreted through several incompatible scales across Todoist normalization, planner logic, Today, Project Brain, and deterministic capture. A normalized work model must define one explicit priority contract rather than preserve these accidental translations.
+SID-225 restores valid normalized creation time to `GET /tasks` and makes absent or invalid date values non-fatal. Priority is still interpreted through several incompatible scales across Todoist normalization, planner logic, Today, Project Brain, and deterministic capture. A normalized work model must define one explicit priority contract rather than preserve these accidental translations.
 
 ## 14.12 Pending actions are process-local and only partly typed
 
@@ -3473,6 +3473,28 @@ SID-136 does not add Linear writes, synchronization, SQLite mirroring, Chat chan
 
 Verification for SID-136 reached 163 backend tests passing, including focused dependency, Linear provider, package, Project Brain, and API tests, plus 5 frontend presentation tests. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, ignored-secret checks, and live read-only verification passed.
 
+## 17.24 Tasks Date Safety
+
+SID-225 fixes a Tasks-page runtime `RangeError` caused by invalid provider dates reaching `Intl.DateTimeFormat` while task cards and recommendations were mapped.
+
+`frontend/src/lib/task-date.ts` is the shared Tasks date boundary. It accepts only valid ISO calendar dates or timestamps, verifies that `date.getTime()` is finite before formatting, and treats null, undefined, empty, malformed, and impossible values as absent. The Tasks page uses the same boundary for:
+
+- due-date rendering;
+- due-date sorting and recommendation tie-breaking;
+- due urgency;
+- task-age scoring;
+- persisted recommendation refresh timestamps.
+
+Absent creation times contribute no age. Invalid normalized `due_date` values can fall back to a valid provider `due.date`; when neither is valid, the UI displays `No due date` and remains usable. No date is inferred from task content or other fields.
+
+`GET /tasks` now includes a normalized ISO `created_at` when the Todoist record provides a valid string or datetime. Null, missing, empty, and malformed creation times serialize as `null`. This preserves the existing Tasks API and recommendation behavior while restoring the intended age input when provider data exists.
+
+Regression coverage includes valid, epoch-zero, null, undefined, empty, missing, malformed, and impossible creation and due values. Live read-only verification against the configured Todoist dataset returned 21 tasks across six sections with four valid due dates, 17 absent due dates, no provider errors, and zero date-format exceptions. Todoist supplied no `created_at` values in that snapshot, and all 21 were safely treated as absent. The local `/tasks` page returned HTTP 200 and rendered the Tasks command-center shell.
+
+SID-225 does not begin SID-218, SID-226, parent-container changes, shared recommendation migration, or any new ranking behavior.
+
+Verification for SID-225 reached 164 backend tests and 9 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, and the live `/tasks` smoke check passed.
+
 ---
 
 # 18. Current Verification History
@@ -3496,6 +3518,7 @@ Recorded development checkpoints include:
 | Durable Linear project mappings | 134 tests passing | Build passing | Passing |
 | Mapped Linear Project Brain and work packages | 149 tests passing | 3 frontend tests and build passing | Passing |
 | Trustworthy Linear dependency evaluation | 163 tests passing | 5 frontend tests and build passing | Passing |
+| Tasks date safety | 164 tests passing | 9 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 

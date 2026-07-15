@@ -15,6 +15,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { apiRequest, type TaskItem, type TaskSection, type TasksResponse } from "@/lib/api";
+import { formatTaskDate, taskDateTime, taskDueDateValue } from "@/lib/task-date";
 
 type TaskView = "today" | "upcoming" | "life-area";
 type TaskFilter = "all" | "today" | "overdue" | "high";
@@ -122,24 +123,25 @@ function taskSectionName(task: TaskItem): string {
   return task.todoist_section_name || task.section_name || task.section || lifeAreaToSection[taskLifeArea(task)];
 }
 
-function dueDateValue(task: TaskItem): string | null {
-  if (task.due_date) {
-    return task.due_date;
+function compareTaskDates(first: TaskItem, second: TaskItem): number {
+  const firstDate = taskDateTime(taskDueDateValue(first));
+  const secondDate = taskDateTime(taskDueDateValue(second));
+  if (firstDate === null) {
+    return secondDate === null ? 0 : 1;
   }
-  const dueDate = task.due?.date;
-  return typeof dueDate === "string" ? dueDate : null;
+  if (secondDate === null) {
+    return -1;
+  }
+  return firstDate - secondDate;
 }
 
 function formatDue(task: TaskItem): string {
-  const dueDate = dueDateValue(task);
-  if (!dueDate) {
-    return "No due date";
-  }
-
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-  }).format(new Date(`${dueDate}T12:00:00`));
+  const dueDate = taskDueDateValue(task);
+  return formatTaskDate(
+    dueDate,
+    { month: "short", day: "numeric" },
+    "No due date",
+  );
 }
 
 function priorityLabel(priority?: number | null) {
@@ -207,9 +209,7 @@ function sortTasks(tasks: TaskItem[]) {
       return priorityDelta;
     }
 
-    const firstDate = dueDateValue(first) ?? "9999-12-31";
-    const secondDate = dueDateValue(second) ?? "9999-12-31";
-    return firstDate.localeCompare(secondDate);
+    return compareTaskDates(first, second);
   });
 }
 
@@ -234,7 +234,7 @@ function dueUrgencyScore(task: TaskItem) {
   if (task.due_status === "this_week") {
     return 2;
   }
-  if (task.due_status === "later" || dueDateValue(task)) {
+  if (task.due_status === "later" || taskDueDateValue(task)) {
     return 1;
   }
   return 0;
@@ -242,7 +242,7 @@ function dueUrgencyScore(task: TaskItem) {
 
 function ageScore(task: TaskItem) {
   const createdAt = createdAtTime(task);
-  if (!createdAt) {
+  if (createdAt === null) {
     return 0;
   }
 
@@ -293,11 +293,7 @@ function projectMomentumScore(task: TaskItem, areaTasks: TaskItem[]) {
 }
 
 function createdAtTime(task: TaskItem) {
-  if (!task.created_at) {
-    return 0;
-  }
-  const parsed = new Date(task.created_at).getTime();
-  return Number.isFinite(parsed) ? parsed : 0;
+  return taskDateTime(task.created_at);
 }
 
 function recommendationScore(task: TaskItem, areaTasks: TaskItem[]): RecommendationScore {
@@ -347,9 +343,7 @@ function rankRecommendedTasks(tasks: TaskItem[]) {
       return scoreDelta;
     }
 
-    const firstDate = dueDateValue(first) ?? "9999-12-31";
-    const secondDate = dueDateValue(second) ?? "9999-12-31";
-    const dueDateDelta = firstDate.localeCompare(secondDate);
+    const dueDateDelta = compareTaskDates(first, second);
     if (dueDateDelta !== 0) {
       return dueDateDelta;
     }
@@ -510,8 +504,8 @@ function formatUpdatedAgo(updatedAt: string | null, nowMs: number) {
     return "Not refreshed yet";
   }
 
-  const updatedMs = new Date(updatedAt).getTime();
-  if (!Number.isFinite(updatedMs)) {
+  const updatedMs = taskDateTime(updatedAt);
+  if (updatedMs === null) {
     return "Updated recently";
   }
 

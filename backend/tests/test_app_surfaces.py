@@ -249,6 +249,55 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         self.assertTrue(sections["Personal"][0]["completed"])
         self.assertEqual(payload["errors"], [])
 
+    def test_tasks_endpoint_normalizes_optional_created_and_due_dates(self):
+        tasks = [
+            {
+                "id": "valid-dates",
+                "content": "Valid dates",
+                "todoist_section_name": "Personal",
+                "due": {"date": "2026-06-05"},
+                "created_at": "2026-06-01T10:30:00Z",
+            },
+            {
+                "id": "null-dates",
+                "content": "Null dates",
+                "todoist_section_name": "Personal",
+                "due": None,
+                "created_at": None,
+            },
+            {
+                "id": "missing-dates",
+                "content": "Missing dates",
+                "todoist_section_name": "Personal",
+            },
+            {
+                "id": "malformed-dates",
+                "content": "Malformed dates",
+                "todoist_section_name": "Personal",
+                "due": {"date": "not-a-date"},
+                "created_at": "not-a-date",
+            },
+        ]
+        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)):
+            payload = main.tasks_index(
+                current_time=datetime(2026, 6, 5, 12, 0, tzinfo=ZoneInfo("America/Chicago")),
+                authorization=self.authorization,
+            )
+
+        by_id = {
+            task["id"]: task
+            for section in payload["sections"]
+            for task in section["tasks"]
+        }
+        self.assertEqual(by_id["valid-dates"]["due_date"], "2026-06-05")
+        self.assertEqual(
+            by_id["valid-dates"]["created_at"],
+            "2026-06-01T10:30:00+00:00",
+        )
+        for task_id in ("null-dates", "missing-dates", "malformed-dates"):
+            self.assertIsNone(by_id[task_id]["due_date"])
+            self.assertIsNone(by_id[task_id]["created_at"])
+
     def test_today_endpoint_summarizes_life_areas_from_todoist(self):
         tasks = [
             {

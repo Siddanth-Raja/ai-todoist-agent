@@ -1102,10 +1102,24 @@ def _task_item(task: dict[str, Any], section: str) -> dict[str, Any]:
         "due_status": task.get("due_status"),
         "priority": task.get("priority"),
         "todoist_priority": task.get("todoist_priority"),
+        "created_at": _normalized_task_created_at(task.get("created_at")),
         "completed": _task_completed(task),
         "labels": task.get("labels") or [],
         "url": task.get("url"),
     }
+
+
+def _normalized_task_created_at(value: Any) -> str | None:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if not isinstance(value, str) or not value.strip():
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.isoformat()
 
 
 def _life_area_summary(section: str, tasks: list[dict[str, Any]]) -> dict[str, Any]:

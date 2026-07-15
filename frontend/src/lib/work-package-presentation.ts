@@ -1,8 +1,21 @@
 import type {
+  DependencySummary,
   EvaluatedDependencyEvidence,
   LinearProjectDiagnostic,
   ProjectWorkPackage,
 } from "@/lib/api";
+
+export function projectDependencyMetricLabels(
+  summary: DependencySummary,
+): string[] {
+  const labels = [
+    `${summary.active_dependency_count} active ${summary.active_dependency_count === 1 ? "dependency" : "dependencies"}`,
+  ];
+  if (summary.needs_review_dependency_count > 0) {
+    labels.push(`${summary.needs_review_dependency_count} needs review`);
+  }
+  return labels;
+}
 
 export function currentDependencyEvidence(
   evidence: EvaluatedDependencyEvidence[],

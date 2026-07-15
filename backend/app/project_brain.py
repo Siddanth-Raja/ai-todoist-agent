@@ -7,6 +7,7 @@ from .dependency_evaluator import (
     DependencyEvaluationState,
     EvaluatedDependencyEvidence,
     dependency_evaluator,
+    summarize_dependency_evidence,
 )
 from .linear_client import LinearClient, LinearProviderError
 from .linear_work_adapter import linear_work_adapter
@@ -219,6 +220,10 @@ class ProjectBrainService:
             now=now,
         )
         blockers = _project_dependency_blockers(current_dependency_evidence)
+        dependency_summary = summarize_dependency_evidence(
+            project_dependency_evidence,
+            canonical_project_id=str(project.get("canonical_project_id") or ""),
+        )
         work_packages = project_work_package_service.build_current_packages(
             project_linear_tasks,
             canonical_project_id=str(project.get("canonical_project_id") or ""),
@@ -251,6 +256,7 @@ class ProjectBrainService:
             ),
             "blockers": blockers[:8],
             "attention_signals": attention_signals[:8],
+            "dependency_summary": dependency_summary,
             "dependency_evidence": project_dependency_evidence,
             "tasks": [_task_item(task, _todoist_task_section_for(task)) for task in sorted_tasks[:12]],
             "task_groups": task_groups[:12],

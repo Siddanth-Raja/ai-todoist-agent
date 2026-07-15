@@ -12,6 +12,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { apiRequest, type ProjectBrain } from "@/lib/api";
+import { projectDependencyMetricLabels } from "@/lib/work-package-presentation";
 
 function statusClass(status: string) {
   if (status === "Blocked") {
@@ -30,7 +31,7 @@ function projectMetricLabel(project: ProjectBrain) {
   const parts = [
     `${project.task_count ?? project.tasks.length} tasks`,
     `${project.upcoming_events.length} events`,
-    `${project.blockers.length} blockers`,
+    ...projectDependencyMetricLabels(project.dependency_summary),
   ];
   return parts.join(" - ");
 }

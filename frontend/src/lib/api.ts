@@ -284,6 +284,14 @@ export type EvaluatedDependencyEvidence = {
   explanation: string;
 };
 
+export type DependencySummary = {
+  active_dependency_count: number;
+  active_blocked_work_count: number;
+  needs_review_dependency_count: number;
+  needs_review_blocked_work_count: number;
+  resolved_dependency_count: number;
+};
+
 export type ProjectBrain = {
   key: string;
   name: string;
@@ -293,6 +301,7 @@ export type ProjectBrain = {
   next_recommendation: string;
   blockers: ProjectBlocker[];
   attention_signals: ProjectBlocker[];
+  dependency_summary: DependencySummary;
   dependency_evidence: EvaluatedDependencyEvidence[];
   tasks: TaskItem[];
   task_groups: ProjectTaskGroup[];

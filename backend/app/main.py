@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from .agent import MODE, confirm_pending_action, handle_chat
 from .calendar_tools import check_google_auth, categories_conflict, list_remaining_today_events, list_upcoming_events
 from .config import get_settings
-from .dependency_evaluator import EvaluatedDependencyEvidence
+from .dependency_evaluator import DependencySummary, EvaluatedDependencyEvidence
 from .linear_client import LinearClient
 from .planner import enrich_task, rank_tasks
 from .project_brain import project_brain_service
@@ -336,6 +336,7 @@ class ProjectBrain(BaseModel):
     next_recommendation: str
     blockers: list[ProjectBlocker] = Field(default_factory=list)
     attention_signals: list[ProjectBlocker] = Field(default_factory=list)
+    dependency_summary: DependencySummary = Field(default_factory=DependencySummary)
     dependency_evidence: list[EvaluatedDependencyEvidence] = Field(default_factory=list)
     tasks: list[TaskItem] = Field(default_factory=list)
     task_groups: list[ProjectTaskGroup] = Field(default_factory=list)

@@ -43,6 +43,16 @@ class EvaluatedDependencyEvidence(BaseModel):
     explanation: str
 
 
+class DependencySummary(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    active_dependency_count: int = 0
+    active_blocked_work_count: int = 0
+    needs_review_dependency_count: int = 0
+    needs_review_blocked_work_count: int = 0
+    resolved_dependency_count: int = 0
+
+
 @dataclass(frozen=True)
 class DependencyEvaluationResult:
     work_items: tuple[NormalizedWorkItem, ...]
@@ -63,7 +73,7 @@ class DependencyEvaluator:
         evaluated_items: list[NormalizedWorkItem] = []
 
         for item in work_items:
-            item_evidence = [
+            item_evidence = _dedupe_evidence([
                 self._evaluate_dependency(
                     item,
                     dependency,
@@ -72,7 +82,7 @@ class DependencyEvaluator:
                 )
                 for dependency in item.dependencies
                 if dependency.dependency_type == "blocked_by"
-            ]
+            ])
             evidence.extend(item_evidence)
             prevents_execution = any(
                 relationship.evaluation_state
@@ -96,6 +106,7 @@ class DependencyEvaluator:
                 )
             )
 
+        evidence = _dedupe_evidence(evidence)
         evidence.sort(key=_evidence_sort_key)
         return DependencyEvaluationResult(
             work_items=tuple(evaluated_items),
@@ -278,6 +289,76 @@ def _evidence_sort_key(evidence: EvaluatedDependencyEvidence) -> tuple[str, ...]
         evidence.blocked_work.provider_record_id,
         evidence.blocking_work.provider,
         evidence.blocking_work.provider_record_id,
+    )
+
+
+def summarize_dependency_evidence(
+    evidence: tuple[EvaluatedDependencyEvidence, ...],
+    *,
+    canonical_project_id: str | None = None,
+) -> DependencySummary:
+    scoped = _dedupe_evidence(
+        [
+            relationship
+            for relationship in evidence
+            if canonical_project_id is None
+            or relationship.canonical_project_id == canonical_project_id
+        ]
+    )
+    active = [
+        relationship
+        for relationship in scoped
+        if relationship.evaluation_state == DependencyEvaluationState.ACTIVE
+        and relationship.blocked_work.status == WorkStatus.OPEN
+    ]
+    needs_review = [
+        relationship
+        for relationship in scoped
+        if relationship.evaluation_state == DependencyEvaluationState.NEEDS_REVIEW
+        and relationship.blocked_work.status == WorkStatus.OPEN
+    ]
+    return DependencySummary(
+        active_dependency_count=len(active),
+        active_blocked_work_count=len({_blocked_work_identity(item) for item in active}),
+        needs_review_dependency_count=len(needs_review),
+        needs_review_blocked_work_count=len(
+            {_blocked_work_identity(item) for item in needs_review}
+        ),
+        resolved_dependency_count=sum(
+            relationship.evaluation_state == DependencyEvaluationState.RESOLVED
+            for relationship in scoped
+        ),
+    )
+
+
+def _dedupe_evidence(
+    evidence: list[EvaluatedDependencyEvidence],
+) -> list[EvaluatedDependencyEvidence]:
+    deduped: dict[tuple[str, ...], EvaluatedDependencyEvidence] = {}
+    for relationship in evidence:
+        deduped.setdefault(_dependency_edge_identity(relationship), relationship)
+    return list(deduped.values())
+
+
+def _dependency_edge_identity(
+    evidence: EvaluatedDependencyEvidence,
+) -> tuple[str, ...]:
+    return (
+        evidence.relationship_provider,
+        evidence.dependency_type,
+        evidence.blocked_work.provider,
+        evidence.blocked_work.provider_record_id,
+        evidence.blocking_work.provider,
+        evidence.blocking_work.provider_record_id,
+    )
+
+
+def _blocked_work_identity(
+    evidence: EvaluatedDependencyEvidence,
+) -> tuple[str, str]:
+    return (
+        evidence.blocked_work.provider,
+        evidence.blocked_work.provider_record_id,
     )
 
 

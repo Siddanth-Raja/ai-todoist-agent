@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.dependency_evaluator import (  # noqa: E402
     DependencyEvaluationState,
     dependency_evaluator,
+    summarize_dependency_evidence,
 )
 from app.project_registry import ProjectRegistrySnapshot  # noqa: E402
 from app.work_domain import (  # noqa: E402
@@ -237,6 +238,61 @@ class DependencyEvaluatorTests(unittest.TestCase):
             },
         )
         self.assertFalse(result.work_items[-1].is_executable)
+
+    def test_duplicate_dependency_edges_are_evaluated_and_counted_once(self):
+        blocker = item("blocker", "SID-173")
+        blocked = item(
+            "blocked",
+            "SID-174",
+            blocked_by=("blocker", "blocker"),
+            relations=[
+                relation("blocker", "SID-173", state_type="started"),
+                relation("blocker", "SID-173", state_type="started"),
+            ],
+        )
+
+        result = self.evaluate([blocker, blocked])
+        summary = summarize_dependency_evidence(result.evidence)
+
+        self.assertEqual(len(result.evidence), 1)
+        self.assertEqual(summary.active_dependency_count, 1)
+        self.assertEqual(summary.active_blocked_work_count, 1)
+        self.assertTrue(result.work_items[1].is_blocked)
+
+    def test_summary_separates_active_review_and_resolved_evidence(self):
+        completed = item("completed", "SID-170", status=WorkStatus.COMPLETED)
+        canceled = item("canceled", "SID-171", status=WorkStatus.CANCELED)
+        open_blocker = item("open", "SID-172")
+        blocked = item(
+            "blocked",
+            "SID-174",
+            blocked_by=("completed", "canceled", "open"),
+        )
+
+        result = self.evaluate([completed, canceled, open_blocker, blocked])
+        summary = summarize_dependency_evidence(result.evidence)
+
+        self.assertEqual(summary.active_dependency_count, 1)
+        self.assertEqual(summary.needs_review_dependency_count, 1)
+        self.assertEqual(summary.resolved_dependency_count, 1)
+        self.assertEqual(summary.active_blocked_work_count, 1)
+        self.assertEqual(summary.needs_review_blocked_work_count, 1)
+
+    def test_summary_excludes_noncurrent_downstream_work_from_current_counts(self):
+        open_blocker = item("open", "SID-170")
+        canceled_blocker = item("canceled", "SID-171", status=WorkStatus.CANCELED)
+        completed_downstream = item(
+            "completed-downstream",
+            "SID-172",
+            status=WorkStatus.COMPLETED,
+            blocked_by=("open", "canceled"),
+        )
+
+        result = self.evaluate([open_blocker, canceled_blocker, completed_downstream])
+        summary = summarize_dependency_evidence(result.evidence)
+
+        self.assertEqual(summary.active_dependency_count, 0)
+        self.assertEqual(summary.needs_review_dependency_count, 0)
 
     def test_live_freelance_chain_releases_174_but_keeps_downstream_blocked(self):
         sid_173 = item("sid-173-uuid", "SID-173", status=WorkStatus.COMPLETED)

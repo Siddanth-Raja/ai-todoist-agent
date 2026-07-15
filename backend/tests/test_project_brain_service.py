@@ -336,6 +336,58 @@ class ProjectBrainServiceTests(unittest.TestCase):
         self.assertEqual(brain["next_recommendation"], "Work next: Available Nebulo action")
         self.assertEqual(brain["blockers"][0]["type"], "explicit_dependency_active")
 
+    def test_dependency_summary_is_project_scoped_and_not_limited_by_blocker_preview(self):
+        project = self.registry.get_project_definition("nebulo")
+        canonical_id = project["canonical_project_id"]
+        blockers = [
+            normalized_linear_item(
+                canonical_id,
+                f"blocker-{index}",
+                f"SID-{index}",
+                f"Blocker {index}",
+                container=True,
+            )
+            for index in range(9)
+        ]
+        blocked = [
+            normalized_linear_item(
+                canonical_id,
+                f"blocked-{index}",
+                f"SID-{index + 100}",
+                f"Blocked {index}",
+                blocked_by=(f"blocker-{index}",),
+            )
+            for index in range(9)
+        ]
+        evaluated = dependency_evaluator.evaluate(
+            [*blockers, *blocked],
+            registry=self.registry,
+        )
+        foreign_evidence = evaluated.evidence[0].model_copy(
+            update={"canonical_project_id": "project-freelance"}
+        )
+
+        brain = self.service.build_project(
+            project=project,
+            tasks=list(evaluated.work_items),
+            events=[],
+            memories=[],
+            activity=[],
+            now=self.now,
+            registry=self.registry,
+            dependency_evidence=(*evaluated.evidence, foreign_evidence),
+        )
+
+        self.assertEqual(len(brain["blockers"]), 8)
+        self.assertEqual(brain["dependency_summary"].active_dependency_count, 9)
+        self.assertEqual(brain["dependency_summary"].active_blocked_work_count, 9)
+        self.assertTrue(
+            all(
+                evidence.canonical_project_id == canonical_id
+                for evidence in brain["dependency_evidence"]
+            )
+        )
+
     def test_no_executable_work_produces_grounded_blocker_resolution(self):
         project = self.registry.get_project_definition("nebulo")
         canonical_id = project["canonical_project_id"]

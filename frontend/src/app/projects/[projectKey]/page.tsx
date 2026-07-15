@@ -392,7 +392,8 @@ export default function ProjectDetailPage() {
     return [
       { label: "Tasks", value: project.task_count ?? project.tasks.length },
       { label: "Events", value: project.upcoming_events.length },
-      { label: "Blockers", value: project.blockers.length },
+      { label: "Active deps", value: project.dependency_summary.active_dependency_count },
+      { label: "Needs review", value: project.dependency_summary.needs_review_dependency_count },
       { label: "Memories", value: project.memories.length },
     ];
   }, [project]);
@@ -456,7 +457,7 @@ export default function ProjectDetailPage() {
             </div>
             <p className="mt-4 max-w-2xl text-sm leading-6 text-stone-400">{project.description}</p>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:min-w-[26rem] sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:min-w-[26rem] sm:grid-cols-5">
             {heroStats.map((stat) => (
               <div key={stat.label} className="rounded-2xl bg-black/20 p-4">
                 <p className="text-xs uppercase tracking-[0.18em] text-stone-500">{stat.label}</p>
@@ -506,7 +507,10 @@ export default function ProjectDetailPage() {
           </div>
         </Card>
 
-        <Card title="Explicit blockers" icon={<AlertTriangle className="h-5 w-5" aria-hidden="true" />}>
+        <Card title="Explicit dependencies" icon={<AlertTriangle className="h-5 w-5" aria-hidden="true" />}>
+          <p className="mb-3 text-xs leading-5 text-stone-500">
+            {project.dependency_summary.active_dependency_count} active · {project.dependency_summary.needs_review_dependency_count} needs review
+          </p>
           {currentDependencyBlockers.length === 0 ? (
             <EmptyState text="No active or needs-review dependencies." />
           ) : (

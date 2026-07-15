@@ -3495,6 +3495,38 @@ SID-225 does not begin SID-218, SID-226, parent-container changes, shared recomm
 
 Verification for SID-225 reached 164 backend tests and 9 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, and the live `/tasks` smoke check passed.
 
+## 17.25 Scoped Project Dependency Metrics
+
+SID-226 traces the Project blocker metric from Linear relations through normalized work, shared dependency evaluation, Project Brain aggregation, the API contract, and both Projects frontend surfaces.
+
+The repeated `8 blockers` display had two different causes. XO and Nebulo genuinely had eight current active dependency edges at the earlier SID-136 checkpoint. PCOS and Freelance had more than eight, but Project Brain intentionally bounded the `blockers` evidence preview to eight rows and the Projects frontend incorrectly used that preview length as the total. The preview cap remains, while the metric now comes from a separate full `dependency_summary` computed from evaluated evidence.
+
+The summary contract exposes:
+
+- full active dependency-edge count;
+- unique currently blocked work-item count;
+- needs-review dependency and work-item counts separately;
+- resolved dependency count for traceability.
+
+Active and needs-review totals include only relationships whose downstream work is still open. Resolved relationships remain auditable but never count as active. Evaluator-level identity deduplicates a relationship by provider, dependency type, blocked work identity, and blocking work identity before any Project Brain, package, status, or recommendation consumer sees it. Project Brain then scopes the summary to the selected canonical project. Todoist and Calendar attention signals remain separate and do not enter the Linear dependency summary.
+
+Projects cards now label the metric as `active dependencies` and show `needs review` separately when nonzero. Project Workspaces show the same full counts next to the current evidence, while keeping the detailed preview bounded. Work Packages continue to count unique affected actions within each package, and recommendations continue to use the evaluator-updated executable state; neither derives state from the frontend preview.
+
+Live read-only verification used the exact durable Linear project mappings and the actual Project Brain projection:
+
+| Canonical project | Issues read | Current active dependencies | Unique active blocked work | Needs review | Resolved evidence | Grounded Project Brain result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| PCOS | 66 | 63 | 33 | 0 | 35 | Available packages remained selectable; SID-219 was the top surfaced package action in the isolated Linear projection |
+| XO | 35 | 18 | 8 | 0 | 4 | Product Direction and deployment packages retained grounded blocker counts while SID-220 remained executable |
+| Nebulo | 9 | 8 | 7 | 0 | 0 | The repeated count of eight was genuine; SID-103 remained the executable next action ahead of seven blocked downstream actions |
+| Freelance | 34 | 23 | 19 | 0 | 4 | SID-174 remained executable; the next two surfaced packages remained explicitly blocked with six and seven affected actions |
+
+All four reads returned only their exact mapped Linear project records and had no duplicate evaluated edges. XO also had two active raw relations attached to non-current downstream work, and Freelance had one needs-review raw relation attached to non-current downstream work; neither is included in the current summary. This distinction is intentional rather than silently rewriting provider history.
+
+SID-226 does not begin SID-218, SID-129, Linear writes, recommendation-weight changes, or visual redesign work.
+
+Verification for SID-226 reached 168 backend tests and 10 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, ignored-secret checks, exact-project live Linear reads, Project Brain summaries, package availability, and recommendation projection all passed.
+
 ---
 
 # 18. Current Verification History
@@ -3519,6 +3551,7 @@ Recorded development checkpoints include:
 | Mapped Linear Project Brain and work packages | 149 tests passing | 3 frontend tests and build passing | Passing |
 | Trustworthy Linear dependency evaluation | 163 tests passing | 5 frontend tests and build passing | Passing |
 | Tasks date safety | 164 tests passing | 9 frontend tests and build passing | Passing |
+| Scoped project dependency metrics | 168 tests passing | 10 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 

@@ -5,8 +5,22 @@ import {
   currentDependencyEvidence,
   dependencyEvidencePresentation,
   packageAvailabilityPresentation,
+  projectDependencyMetricLabels,
   workPackageSectionState,
 } from "../src/lib/work-package-presentation.ts";
+
+test("project dependency metrics use full evaluated counts and separate review state", () => {
+  assert.deepEqual(
+    projectDependencyMetricLabels({
+      active_dependency_count: 63,
+      active_blocked_work_count: 33,
+      needs_review_dependency_count: 1,
+      needs_review_blocked_work_count: 1,
+      resolved_dependency_count: 35,
+    }),
+    ["63 active dependencies", "1 needs review"],
+  );
+});
 
 const mappedDiagnostic = {
   provider: "linear",

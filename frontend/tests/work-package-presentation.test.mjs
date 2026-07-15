@@ -8,6 +8,43 @@ import {
   projectDependencyMetricLabels,
   workPackageSectionState,
 } from "../src/lib/work-package-presentation.ts";
+import { projectCollectionPresentation } from "../src/lib/project-panel-presentation.ts";
+
+test("live SID-226 dependency volumes activate responsive bounded scrolling", () => {
+  for (const recordCount of [63, 18, 8, 23]) {
+    const presentation = projectCollectionPresentation({
+      recordCount,
+      overflowThreshold: 4,
+    });
+    assert.equal(presentation.isBounded, true);
+    assert.equal(presentation.tabIndex, 0);
+    assert.match(presentation.className, /md:max-h/);
+    assert.match(presentation.className, /md:overflow-y-auto/);
+    assert.doesNotMatch(presentation.className, /(^|\s)max-h/);
+    assert.doesNotMatch(presentation.className, /(^|\s)overflow-y-auto/);
+  }
+});
+
+test("empty and short collections remain compact and naturally sized", () => {
+  for (const recordCount of [0, 1, 4]) {
+    assert.deepEqual(
+      projectCollectionPresentation({ recordCount, overflowThreshold: 4 }),
+      { className: "", isBounded: false, tabIndex: undefined },
+    );
+  }
+});
+
+test("diagnostic collections use the taller responsive bound", () => {
+  const presentation = projectCollectionPresentation({
+    recordCount: 40,
+    overflowThreshold: 6,
+    density: "diagnostics",
+  });
+  assert.equal(presentation.isBounded, true);
+  assert.match(presentation.className, /42rem/);
+  assert.match(presentation.className, /scrollbar-gutter:stable/);
+  assert.match(presentation.className, /focus-visible:ring-2/);
+});
 
 test("project dependency metrics use full evaluated counts and separate review state", () => {
   assert.deepEqual(

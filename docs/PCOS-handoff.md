@@ -1547,7 +1547,7 @@ Current project detail surfaces include:
 - memories;
 - recent activity where data exists.
 
-The detail view also exposes classification diagnostics. The backend returns the full diagnostic list, while the frontend renders only the first 40 records.
+The detail view also exposes the full classification diagnostic list in a responsive bounded collection on wider screens. Narrow layouts keep natural page flow so diagnostics remain reachable without a nested scroll region.
 
 Parent tasks with active children can be displayed as expandable task groups.
 
@@ -3527,6 +3527,38 @@ SID-226 does not begin SID-218, SID-129, Linear writes, recommendation-weight ch
 
 Verification for SID-226 reached 168 backend tests and 10 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, ignored-secret checks, exact-project live Linear reads, Project Brain summaries, package availability, and recommendation projection all passed.
 
+## 17.26 Responsive Project Brain Collection Bounds
+
+SID-218 constrains provider-driven Project Workspace collections without changing Project Brain data, dependency evaluation, counts, packages, status, or recommendations.
+
+Populated collections now activate a responsive max height only after a record-count threshold and only at the medium breakpoint or wider. Overflowing desktop collections scroll vertically with contained overscroll, stable scrollbar space, a visible focus ring, an accessible region label, and keyboard focus. Panel titles and dependency counts remain outside the scroll region. Empty and short collections receive no max height, overflow behavior, or extra tab stop.
+
+The presentation boundary applies to:
+
+- Project Work Packages;
+- explicit dependency evidence;
+- attention signals;
+- upcoming events and Todoist task groups;
+- people, Memory/context, and recent Activity;
+- classification diagnostics.
+
+Project grids use start alignment and cards use content height, so a tall collection no longer stretches empty or short sibling cards. The frontend no longer slices classification diagnostics to 40 rows, and it no longer slices the already bounded Work Package response; every record received from Project Brain remains rendered and reachable.
+
+Below the medium breakpoint, the overflow max heights and internal scrolling do not activate. Collections expand in normal document flow, preserving page-level scrolling and avoiding nested-scroll traps on narrow devices.
+
+Live visual verification used the SID-226 PCOS overflow data with 63 current active dependency records and 21 classification diagnostics:
+
+| Viewport | Explicit dependency collection | Diagnostics collection | Sibling behavior | Keyboard / scroll result |
+| --- | --- | --- | --- | --- |
+| 1440 × 1000 | 63 records; 544px client height; 13,112px scroll height; `overflow-y: auto` | 21 records; 672px client height; 2,123px scroll height; `overflow-y: auto` | Empty Attention signals card stayed 154px; Next move stayed 290px | Focused PageDown moved the dependency region to `scrollTop = 85` |
+| 390 × 844 | 63 records; natural 17,648px height; no max height; `overflow-y: visible` | 21 records; natural 6,287px height; no max height; `overflow-y: visible` | Cards stacked independently | No internal scroll region; page-level flow retained |
+
+The browser returned the live Project Brain route with no framework error overlay and no failed HTTP responses. Presentation tests use the live SID-226 active-dependency fixture sizes for PCOS (63), XO (18), Nebulo (8), and Freelance (23), plus empty, short, and diagnostic-heavy cases.
+
+SID-218 does not begin SID-227, change visual hierarchy beyond overflow containment, or alter dependency semantics, counts, Project status, Work Package availability, or recommendation logic.
+
+Verification for SID-218 reached 168 backend tests and 13 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, live desktop and narrow browser checks, and keyboard scrolling verification passed.
+
 ---
 
 # 18. Current Verification History
@@ -3552,6 +3584,7 @@ Recorded development checkpoints include:
 | Trustworthy Linear dependency evaluation | 163 tests passing | 5 frontend tests and build passing | Passing |
 | Tasks date safety | 164 tests passing | 9 frontend tests and build passing | Passing |
 | Scoped project dependency metrics | 168 tests passing | 10 frontend tests and build passing | Passing |
+| Responsive Project Brain collection bounds | 168 tests passing | 13 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 

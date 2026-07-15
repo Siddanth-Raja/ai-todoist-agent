@@ -37,6 +37,10 @@ import {
   packageAvailabilityPresentation,
   workPackageSectionState,
 } from "@/lib/work-package-presentation";
+import {
+  projectCollectionPresentation,
+  type ProjectCollectionDensity,
+} from "@/lib/project-panel-presentation";
 
 function statusClass(status: string) {
   if (status === "Blocked") {
@@ -67,7 +71,7 @@ function Card({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-[1.5rem] border border-white/10 bg-white/[0.055] p-5 shadow-card backdrop-blur-2xl">
+    <section className="h-fit rounded-[1.5rem] border border-white/10 bg-white/[0.055] p-5 shadow-card backdrop-blur-2xl">
       <div className="mb-5 flex items-center justify-between gap-4">
         <h4 className="text-lg font-semibold text-pearl">{title}</h4>
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/[0.07] text-moss">
@@ -76,6 +80,40 @@ function Card({
       </div>
       {children}
     </section>
+  );
+}
+
+function ScrollableCollection({
+  label,
+  recordCount,
+  overflowThreshold,
+  density = "standard",
+  className = "",
+  children,
+}: {
+  label: string;
+  recordCount: number;
+  overflowThreshold: number;
+  density?: ProjectCollectionDensity;
+  className?: string;
+  children: ReactNode;
+}) {
+  const presentation = projectCollectionPresentation({
+    recordCount,
+    overflowThreshold,
+    density,
+  });
+  return (
+    <div
+      aria-label={presentation.isBounded ? `${label}, scrollable collection` : undefined}
+      className={[className, presentation.className].filter(Boolean).join(" ")}
+      data-project-collection={label}
+      data-scroll-state={presentation.isBounded ? "bounded" : "natural"}
+      role={presentation.isBounded ? "region" : undefined}
+      tabIndex={presentation.tabIndex}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -482,11 +520,16 @@ export default function ProjectDetailPage() {
             ) : null}
           </div>
           {packageSectionState === "options" ? (
-            <div className="grid gap-3 lg:grid-cols-3">
-              {project.work_packages.slice(0, 3).map((workPackage) => (
+            <ScrollableCollection
+              label="Project work packages"
+              recordCount={project.work_packages.length}
+              overflowThreshold={3}
+              className="grid items-start gap-3 lg:grid-cols-3"
+            >
+              {project.work_packages.map((workPackage) => (
                 <WorkPackageOption key={workPackage.package_id} workPackage={workPackage} />
               ))}
-            </div>
+            </ScrollableCollection>
           ) : packageSectionState === "unavailable" ? (
             <div className="rounded-2xl border border-gold/20 bg-gold/10 p-4 text-sm leading-6 text-gold">
               {project.linear_diagnostic?.message ?? "Linear work is temporarily unavailable."}
@@ -497,7 +540,7 @@ export default function ProjectDetailPage() {
         </section>
       ) : null}
 
-      <section className="grid gap-4 xl:grid-cols-3">
+      <section className="grid items-start gap-4 xl:grid-cols-3">
         <Card title="Next move" icon={<Target className="h-5 w-5" aria-hidden="true" />}>
           <div className="rounded-2xl bg-moss/10 p-5">
             <p className="text-xs uppercase tracking-[0.18em] text-moss">Next move</p>
@@ -514,14 +557,19 @@ export default function ProjectDetailPage() {
           {currentDependencyBlockers.length === 0 ? (
             <EmptyState text="No active or needs-review dependencies." />
           ) : (
-            <div className="space-y-3">
+            <ScrollableCollection
+              label="Explicit dependency evidence"
+              recordCount={currentDependencyBlockers.length}
+              overflowThreshold={4}
+              className="space-y-3"
+            >
               {currentDependencyBlockers.map((evidence) => (
                 <DependencyEvidenceRow
                   key={`${evidence.blocked_work.provider_record_id}-${evidence.blocking_work.provider_record_id}`}
                   evidence={evidence}
                 />
               ))}
-            </div>
+            </ScrollableCollection>
           )}
         </Card>
 
@@ -529,24 +577,34 @@ export default function ProjectDetailPage() {
           {project.attention_signals.length === 0 ? (
             <EmptyState text="No heuristic attention signals." />
           ) : (
-            <div className="space-y-3">
+            <ScrollableCollection
+              label="Attention signals"
+              recordCount={project.attention_signals.length}
+              overflowThreshold={4}
+              className="space-y-3"
+            >
               {project.attention_signals.map((signal, index) => (
                 <article key={`${signal.type}-${signal.source_id ?? index}`} className={`rounded-2xl border p-4 ${blockerClass(signal)}`}>
                   <p className="text-sm font-semibold">{signal.title}</p>
                   {signal.detail ? <p className="mt-2 text-xs leading-5 text-stone-200">{signal.detail}</p> : null}
                 </article>
               ))}
-            </div>
+            </ScrollableCollection>
           )}
         </Card>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-2">
+      <section className="grid items-start gap-4 xl:grid-cols-2">
         <Card title="Upcoming events" icon={<CalendarClock className="h-5 w-5" aria-hidden="true" />}>
           {project.upcoming_events.length === 0 ? (
             <EmptyState text="No upcoming events found." />
           ) : (
-            <div className="space-y-3">
+            <ScrollableCollection
+              label="Upcoming events"
+              recordCount={project.upcoming_events.length}
+              overflowThreshold={4}
+              className="space-y-3"
+            >
               {project.upcoming_events.map((event) => (
                 <article key={event.id ?? `${event.title}-${event.start}`} className="rounded-2xl bg-black/20 p-4">
                   <div className="flex items-start justify-between gap-3">
@@ -574,7 +632,7 @@ export default function ProjectDetailPage() {
                   ) : null}
                 </article>
               ))}
-            </div>
+            </ScrollableCollection>
           )}
         </Card>
 
@@ -582,27 +640,37 @@ export default function ProjectDetailPage() {
           {project.task_groups.length === 0 ? (
             <EmptyState text="No matching Todoist tasks." />
           ) : (
-            <div className="space-y-3">
+            <ScrollableCollection
+              label="Project tasks"
+              recordCount={project.task_groups.length}
+              overflowThreshold={5}
+              className="space-y-3"
+            >
               {project.task_groups.map((group) => (
                 <TaskGroup key={group.parent_task.id ?? group.parent_task.content} group={group} />
               ))}
-            </div>
+            </ScrollableCollection>
           )}
         </Card>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-3">
+      <section className="grid items-start gap-4 xl:grid-cols-3">
         <Card title="People" icon={<UserRound className="h-5 w-5" aria-hidden="true" />}>
           {project.people.length === 0 ? (
             <EmptyState text="No people attached." />
           ) : (
-            <div className="flex flex-wrap gap-2">
+            <ScrollableCollection
+              label="Project people"
+              recordCount={project.people.length}
+              overflowThreshold={12}
+              className="flex flex-wrap gap-2"
+            >
               {project.people.map((person) => (
                 <span key={person} className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-2 text-sm text-stone-300">
                   {person}
                 </span>
               ))}
-            </div>
+            </ScrollableCollection>
           )}
         </Card>
 
@@ -610,11 +678,16 @@ export default function ProjectDetailPage() {
           {project.memories.length === 0 ? (
             <EmptyState text="No matching memory entries." />
           ) : (
-            <div className="space-y-3">
+            <ScrollableCollection
+              label="Project memory and context"
+              recordCount={project.memories.length}
+              overflowThreshold={4}
+              className="space-y-3"
+            >
               {project.memories.map((memory) => (
                 <MemoryRow key={memory.id} memory={memory} />
               ))}
-            </div>
+            </ScrollableCollection>
           )}
         </Card>
 
@@ -622,25 +695,36 @@ export default function ProjectDetailPage() {
           {project.recent_activity.length === 0 ? (
             <EmptyState text="No recent activity found." />
           ) : (
-            <div className="space-y-3">
+            <ScrollableCollection
+              label="Recent project activity"
+              recordCount={project.recent_activity.length}
+              overflowThreshold={4}
+              className="space-y-3"
+            >
               {project.recent_activity.map((activity) => (
                 <ActivityRow key={activity.id} activity={activity} />
               ))}
-            </div>
+            </ScrollableCollection>
           )}
         </Card>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-1">
+      <section className="grid items-start gap-4 xl:grid-cols-1">
         <Card title="Classification diagnostics" icon={<ListTodo className="h-5 w-5" aria-hidden="true" />}>
           {project.classification_diagnostics.length === 0 ? (
             <EmptyState text="No task diagnostics available." />
           ) : (
-            <div className="grid gap-3 xl:grid-cols-2">
-              {project.classification_diagnostics.slice(0, 40).map((diagnostic, index) => (
+            <ScrollableCollection
+              label="Classification diagnostics"
+              recordCount={project.classification_diagnostics.length}
+              overflowThreshold={6}
+              density="diagnostics"
+              className="grid items-start gap-3 xl:grid-cols-2"
+            >
+              {project.classification_diagnostics.map((diagnostic, index) => (
                 <DiagnosticRow key={`${diagnostic.task_title}-${diagnostic.parent_title ?? "root"}-${index}`} diagnostic={diagnostic} />
               ))}
-            </div>
+            </ScrollableCollection>
           )}
         </Card>
       </section>

@@ -15,6 +15,7 @@ import app.agent as agent  # noqa: E402
 from app.agent import _decision_schema, _sanitize_decision, confirm_pending_action, handle_chat  # noqa: E402
 from app.calendar_tools import CalendarReadResult, CalendarWriteResult  # noqa: E402
 from app.main import ChatRequest, chat, require_agent_api_key  # noqa: E402
+from app.project_chat_grounding import ProjectChatGrounding, ProjectQuestionKind  # noqa: E402
 from app.todoist_tools import (  # noqa: E402
     TodoistReadResult,
     TodoistSectionResult,
@@ -300,6 +301,29 @@ class AgentExampleTests(unittest.TestCase):
         self.assertIsNone(response["pending_action"])
         self.assertIn("Start with", response["answer"])
         self.assertIn("recommended_tasks", response)
+
+    def test_project_question_uses_deterministic_grounding_without_openai(self):
+        settings = FakeSettings(openai_api_key=None)
+        grounding = ProjectChatGrounding(
+            answer="XO: Start SID-129 from Linear.",
+            question_kind=ProjectQuestionKind.NEXT_MOVE,
+            canonical_project_key="xo",
+            evidence=({"next_recommendation": "Start SID-129 from Linear."},),
+        )
+        with patch("app.agent.get_settings", return_value=settings), patch.object(
+            agent.project_chat_grounding_service,
+            "ground",
+            return_value=grounding,
+        ) as ground_mock, patch("app.agent._get_llm_decision") as llm_mock:
+            response = handle_chat("What should I work on next for XO?", self.now, session_id="project-chat")
+
+        self.assertEqual(response["answer"], grounding.answer)
+        self.assertEqual(response["intent"], "question")
+        self.assertEqual(response["actions_taken"], [])
+        self.assertFalse(response["needs_confirmation"])
+        self.assertEqual(response["conversation_state"]["context"]["canonical_project_key"], "xo")
+        ground_mock.assert_called_once()
+        llm_mock.assert_not_called()
 
     def test_planning_question_action_none_even_if_model_proposes_tool(self):
         with patch("app.agent._get_llm_decision", return_value=(

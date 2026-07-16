@@ -3559,6 +3559,42 @@ SID-218 does not begin SID-227, change visual hierarchy beyond overflow containm
 
 Verification for SID-218 reached 168 backend tests and 13 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, live desktop and narrow browser checks, and keyboard scrolling verification passed.
 
+## 17.27 Project Brain-Grounded Chat Questions
+
+SID-129 makes the existing Project Brain snapshot authoritative for supported project-state questions in Chat without adding another provider interpretation or recommendation path to `agent.py`.
+
+`backend/app/project_chat_grounding.py` owns the focused read-only boundary. It:
+
+- identifies overview/status, canonical next-move, explicit blocker, Work Package/feature-option, and people/context questions;
+- resolves explicit names through the durable canonical project registry and its aliases;
+- can reuse an unambiguous canonical project key from the existing session conversation state;
+- calls the same `ProjectBrainService.get_project()` entry point used by `GET /projects/{project_key}`;
+- selects already-computed summary, recommendation, dependency evidence, Work Package, people, Memory, and provider-diagnostic fields;
+- returns deterministic grounded copy and evidence without calling OpenAI or performing writes.
+
+The `agent.py` integration is intentionally thin. It runs after existing confirmation, bulk-roadmap, conversation-follow-up, and Calendar-question routing, and before the OpenAI/fallback branch. Existing Chat response fields remain unchanged. Project answers retain the existing planner payload and Calendar summary, while the session context stores only the resolved canonical project key for a later question such as `Who is involved in this project?`
+
+A generic `What should I work on right now?` continues to use the global planner unless the message explicitly names a canonical project or the active conversation supplies one unambiguously. Unknown projects and questions naming multiple projects receive deterministic clarification rather than a guessed match.
+
+Trust behavior follows Project Brain provider diagnostics. Missing mappings, missing credentials, authentication failures, provider failures, malformed responses, and absent diagnostics are described as degraded or unknown. In particular, a failed Linear read is never rendered as zero blockers, no packages, or no activity. Connected blocker answers use the full scoped `dependency_summary` and show current active or needs-review `dependency_evidence`; resolved evidence is not presented as a current blocker. Next-move wording includes the shared `next_recommendation` unchanged, and Work Packages retain their provider identity, availability state, and grounded next action.
+
+Live read-only Chat verification against the four durable Linear mappings returned zero provider errors:
+
+| Canonical project | Prompt | Grounded result |
+| --- | --- | --- |
+| PCOS | `What is the PCOS project status?` | `Needs attention`; 66 active dependencies affecting 34 blocked work items; three current Linear packages; canonical next move preserved |
+| XO | `What should I work on next for XO?` | Canonical Project Brain next move: `Archive World v1 and Establish a Clean Core v2 Baseline` |
+| Nebulo | `What is blocking Nebulo?` | Eight active dependencies affecting seven blocked work items, with SID-108/SID-106, SID-105/SID-104, and SID-107/SID-105 Linear evidence |
+| Freelance | `What are my Freelance feature options right now?` | Three Linear milestone packages with availability state and the SID-179 executable next action preserved |
+
+The counts above are the live state at SID-129 verification time and intentionally supersede older fixture counts when the Linear issue graph has changed. Chat consumes the current Project Brain result; it does not pin or reinterpret those values.
+
+Browser verification submitted the Nebulo blocker prompt through the unchanged `/chat` UI and rendered the same eight/seven answer. A second prompt, `Who is involved in this project?`, resolved the stored Nebulo context and rendered Brandon plus attached Project Brain context. Both API requests returned HTTP 200, and the browser console had no errors.
+
+SID-129 does not begin SID-227, add provider writes or synchronization, alter recommendation scoring, decompose `agent.py` broadly, redesign Chat, or change Calendar behavior.
+
+Verification for SID-129 reached 179 backend tests and 13 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, all-four-project live Chat smokes, deterministic OpenAI-unavailable coverage, and the browser/API/rendering flow passed.
+
 ---
 
 # 18. Current Verification History
@@ -3585,6 +3621,7 @@ Recorded development checkpoints include:
 | Tasks date safety | 164 tests passing | 9 frontend tests and build passing | Passing |
 | Scoped project dependency metrics | 168 tests passing | 10 frontend tests and build passing | Passing |
 | Responsive Project Brain collection bounds | 168 tests passing | 13 frontend tests and build passing | Passing |
+| Project Brain-grounded Chat questions | 179 tests passing | 13 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -4623,7 +4660,7 @@ Compatibility logic remains split across:
 - Project Brain;
 - Tasks frontend logic.
 
-Today, Tasks, and Chat migrations remain assigned to SID-127, SID-128, and SID-129. `planner.py` remains because existing callers still depend on it.
+Chat project-state questions now consume Project Brain through SID-129. Today and Tasks migrations remain assigned to SID-127 and SID-128. `planner.py` remains because existing global-planning and other callers still depend on it.
 
 ---
 
@@ -5968,13 +6005,13 @@ Shared Recommendation Service.
 
 ## Issue: Ground Chat Project Questions in Project Brain
 
-**Status:** Todo
+**Status:** Done
 
 **Priority:** High
 
 **Description:**
 
-Make Project Brain the first source for project-state questions in Chat.
+Project Brain is now the authoritative source for supported project-state questions in Chat.
 
 Project Brain should ground questions such as:
 
@@ -5983,11 +6020,9 @@ Project Brain should ground questions such as:
 - What's going on with PCOS?
 - Who is involved in this project?
 
-The model should use computed project state before it improvises from raw provider records or generic context.
+The focused project-chat grounding service resolves canonical projects and reads the same Project Brain snapshot as the project API.
 
-The model may summarize or explain Project Brain state.
-
-It should not independently invent a competing project interpretation.
+Deterministic answers cover overview, blockers, next moves, Work Packages, and people/context without independently reading or reinterpreting provider records.
 
 **Dependencies / blockers:**
 
@@ -5997,16 +6032,15 @@ Shared Recommendation Service for next-move questions.
 
 **Acceptance criteria:**
 
-- Project-state intents can be identified.
-- Canonical project resolution is used.
-- Project Brain state is retrieved.
-- Blocker questions use Project Brain blockers.
-- Next-move questions use canonical project recommendations.
-- People questions use Project Brain people/context.
-- Unknown project names can trigger classification or clarification.
-- Chat does not silently invent project state absent from the computed model.
-- Project answers can include the evidence behind recommendations.
-- Tests cover PCOS, XO, Nebulo, and Freelance project questions.
+- Project-state intents are identified without hijacking generic planning.
+- Canonical registry names, aliases, and unambiguous session context are used.
+- The shared Project Brain service supplies the snapshot.
+- Blocker questions use scoped summaries and current evaluated evidence.
+- Next-move questions preserve canonical project recommendations unchanged.
+- Package and people questions preserve provider and attached context evidence.
+- Unknown or ambiguous project names trigger clarification.
+- Provider degradation remains unknown rather than becoming a false empty state.
+- Tests and live smokes cover PCOS, XO, Nebulo, and Freelance.
 
 ---
 
@@ -8946,7 +8980,7 @@ build shared recommendation service                 │
                    shared trustworthy state
 ```
 
-Mapped Linear ingestion and Project Work Packages now provide the first proof of the multi-provider model. Today, Tasks, and Chat still need to converge on the shared intelligence path in later roadmap work.
+Mapped Linear ingestion and Project Work Packages now provide the first proof of the multi-provider model. Chat project-state questions now consume that shared Project Brain path. Today and Tasks still need to converge in later roadmap work, while generic Chat planning intentionally remains on the existing planner until separately migrated.
 
 The active deep project-management provider is:
 

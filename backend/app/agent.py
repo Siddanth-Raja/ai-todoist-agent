@@ -15,6 +15,7 @@ from .calendar_tools import (
 )
 from .config import get_settings
 from .planner import build_plan, enrich_task
+from .project_chat_grounding import project_chat_grounding_service
 from .storage import list_memory_entries
 from .todoist_tools import (
     LIFE_AREA_TO_TODOIST_SECTION,
@@ -342,6 +343,32 @@ def handle_chat(
     )
     if calendar_question_response:
         response, next_state = calendar_question_response
+        return _with_conversation_state(session_key, response, next_state)
+
+    project_grounding = project_chat_grounding_service.ground(
+        cleaned_message,
+        settings=settings,
+        current_time=current_time,
+        conversation_context=conversation_state.get("context"),
+    )
+    if project_grounding:
+        errors.extend(project_grounding.warnings)
+        response = _conversation_answer(
+            answer=project_grounding.answer,
+            intent="question",
+            plan=plan,
+            calendar_events=calendar_result.events,
+            errors=errors,
+        )
+        next_state = {
+            "last_question": _last_question(project_grounding.answer),
+            "awaiting": None,
+            "context": (
+                {"canonical_project_key": project_grounding.canonical_project_key}
+                if project_grounding.canonical_project_key
+                else {}
+            ),
+        }
         return _with_conversation_state(session_key, response, next_state)
 
     if not settings.openai_api_key:

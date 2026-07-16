@@ -719,6 +719,50 @@ class ProjectBrainServiceTests(unittest.TestCase):
                 )
             )
 
+    def test_snapshot_preserves_summaries_structured_recommendations_and_normalized_work(self):
+        task = {
+            "id": "xo-task",
+            "content": "Review Quest controller notes",
+            "description": "",
+            "section_name": "XO Collective",
+            "todoist_section_name": "XO Collective",
+            "priority": 4,
+            "todoist_priority": 4,
+            "labels": [],
+        }
+        client = unittest.mock.Mock()
+        client.list_issues.return_value = LinearReadResult(records=[])
+        with patch("app.project_brain.LinearClient", return_value=client), patch(
+            "app.project_brain.list_active_tasks",
+            return_value=TodoistReadResult(tasks=[task]),
+        ), patch(
+            "app.project_brain.list_upcoming_events",
+            return_value=CalendarReadResult(events=[]),
+        ), patch("app.project_brain.list_memory_entries", return_value=[]), patch(
+            "app.project_brain.list_activity", return_value=[]
+        ):
+            snapshot = self.service.snapshot(
+                settings=FakeSettings(linear_api_key="configured"),
+                current_time=self.now,
+            )
+
+        xo = snapshot.project_for_key("xo")
+        self.assertIsNotNone(xo)
+        self.assertEqual(xo.summary["status"], "Needs attention")
+        self.assertEqual(
+            xo.summary["next_recommendation"],
+            "Work next: Review Quest controller notes",
+        )
+        self.assertEqual(
+            xo.canonical_recommendation.selected_work.provider_record_id,
+            "xo-task",
+        )
+        self.assertEqual(
+            [(item.provider, item.provider_record_id) for item in snapshot.normalized_work],
+            [("todoist", "xo-task")],
+        )
+        self.assertEqual(snapshot.warnings, ())
+
     def test_linear_failures_are_additive_and_preserve_existing_project_context(self):
         todoist_task = {
             "id": "pcos-todoist",

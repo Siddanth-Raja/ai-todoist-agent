@@ -155,7 +155,7 @@ Future native surfaces
 
 Important current-state distinction: this is the target architecture and a major product decision, but the repository does not yet implement it completely.
 
-Project Brain V1 exists, while Today and some recommendation behavior still compute state through separate paths.
+Project Brain V1 now supplies Today and Chat project-state intelligence, while Tasks and generic planning behavior still compute state through separate paths.
 
 Consolidating those paths is active roadmap work and must not be documented as already complete.
 
@@ -660,11 +660,11 @@ Configuration is cached through `functools.lru_cache`.
 - Memory routes.
 - Habit routes.
 - Task API routes.
-- Today aggregation.
+- Today route adapter and response schemas.
 - Calendar API route.
 - Activity routes.
 
-`main.py` delegates `GET /projects` and `GET /projects/{project_key}` to `backend/app/project_brain.py`. Project Brain reads canonical project definitions and aliases from the SQLite-backed registry in `backend/app/project_registry.py`, then owns provider aggregation, project classification, Todoist hierarchy and container handling, blockers, status, diagnostics, and next-recommendation behavior. The HTTP module retains the Project Brain response schemas and route adapters.
+`main.py` delegates `GET /projects` and `GET /projects/{project_key}` to `backend/app/project_brain.py`, and delegates `GET /today` to `backend/app/today_projection.py`. Project Brain reads canonical project definitions and aliases from the SQLite-backed registry in `backend/app/project_registry.py`, then owns provider aggregation, project classification, hierarchy and container handling, blockers, status, diagnostics, and next-recommendation behavior. The HTTP module retains response schemas and thin route adapters.
 
 The FastAPI application metadata currently describes PCOS as `Personal Chief of Staff` with application version `0.2.0`.
 
@@ -1236,17 +1236,11 @@ recommendation
 
 It also returns life-area state used by the Today frontend.
 
-### Important architectural limitation
+### Shared-intelligence projection
 
-Today does **not** currently consume Project Brain as its sole source of project intelligence.
+Today consumes one structured Project Brain snapshot for project summaries and normalized provider work. It sends that normalized work to the shared Recommendation Service with SID-130 Calendar context and does not independently rank enriched Todoist dictionaries or recompute project next moves.
 
-This is a key gap between implementation and accepted architecture direction.
-
-Today and Project Brain currently have overlapping aggregation and recommendation responsibilities.
-
-Today ranks the enriched task set independently and does not apply Project Brain's parent-container/leaf-task filtering, so a roadmap container can still become Today's recommendation.
-
-Unifying these paths is active roadmap work.
+Calendar-first preparation remains an explicit Today projection rule inside the 60-minute window. Otherwise, a context-aware shared-service result may differ from a project's canonical next move only when the returned evidence identifies a Calendar-derived fit or commitment reason.
 
 ---
 
@@ -1497,15 +1491,11 @@ It renders information such as:
 
 The life-area cards are clickable. Resolved A&M, XO, Nebulo, Freelance, and Personal areas link to their Project Workspaces, while Misc links to the Projects index.
 
-### Current limitation
+### Shared-intelligence behavior
 
-The Today page is visually connected to Projects but is not yet architecturally driven by Project Brain as the only project-state source.
+The Today page is a focused projection over the same Project Brain status and canonical next-move output rendered by Project Workspaces. Its cards retain their existing links and presentation while consuming those shared summaries directly.
 
-This difference matters.
-
-A clickable Project card does not mean Today and Projects share identical ranking and aggregation logic.
-
-The current accepted direction is to make Today a projection of Project Brain.
+Today's current-action recommendation is separately context-aware through the shared Recommendation Service. It preserves provider record identity, canonical project identity, alternatives, degradation state, and structured evidence when the current action differs from the canonical project move.
 
 The page fetches `GET /today` and `GET /activity?limit=5` once when it mounts. Only the local clock updates every 30 seconds; provider-derived free blocks, events, recommendations, life areas, and Activity do not auto-refresh or poll.
 
@@ -1805,14 +1795,14 @@ Instead, data flows through several overlapping paths.
 A simplified current-state model is:
 
 ```text
-Todoist
+Todoist / mapped Linear work
    ├── /tasks ────────────────> Tasks page
-   ├── planner.py ────────────> Chat / Today ranking
-   └── Project aggregation ───> Project Brain
+   ├── planner.py ────────────> generic Chat planning
+   └── normalized work ───────> Project Brain ──> Today
 
 Google Calendar
    ├── /calendar ─────────────> Calendar page
-   ├── Today aggregation ─────> Today
+   ├── Calendar contract ─────> Today projection / Chat planning
    ├── agent.py ──────────────> Chat and actions
    ├── Calendar Intelligence ─> conflict/buffer analysis
    └── Project aggregation ───> Project Brain
@@ -1919,7 +1909,7 @@ They are documented here without yet converting them into roadmap issues; the Li
 
 ## 14.1 Project Brain is not yet the universal intelligence source
 
-Today, Tasks, backend planning, and Project Brain still contain overlapping logic.
+Tasks and generic backend planning still contain logic that overlaps with Project Brain's shared recommendation path. Today no longer owns an independent ranking path.
 
 This can produce inconsistent recommendations.
 
@@ -1933,7 +1923,7 @@ Future providers will worsen this without decomposition.
 
 Project definitions and aliases now come from the durable registry. Task aggregation, project classification, hierarchy, blockers, diagnostics, and next-move computation remain in `backend/app/project_brain.py`.
 
-`main.py` still owns the HTTP response schemas and route adapters, while Today remains a separate aggregation path. Moving schemas is optional cleanup; consolidating Today is separate roadmap work and was intentionally not combined with the service extraction.
+`main.py` still owns the HTTP response schemas and route adapters, while Today orchestration now lives in `backend/app/today_projection.py`. Moving schemas remains optional cleanup and was intentionally not combined with SID-127.
 
 ## 14.4 Provider abstraction is incomplete
 
@@ -3611,6 +3601,20 @@ SID-130 does not begin SID-127 Today shared-intelligence migration, SID-132 conn
 
 Verification for SID-130 reached 184 backend tests and 13 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, and `git diff --check` passed.
 
+## 17.29 Today Projection over Shared Intelligence
+
+SID-127 replaces Today's independent task enrichment, life-area status calculation, and planner ranking with `backend/app/today_projection.py`, a focused application service behind the unchanged `GET /today` route. `main.py` now limits the route to authentication and projection invocation.
+
+The projection consumes one structured Project Brain snapshot containing exact project summaries, normalized provider work, provider identities, and canonical shared-service recommendations. It uses the shared Recommendation Service for context-aware `current_action` selection and SID-130's Calendar contract for remaining-today events, the next commitment, and the current free block. No medium-energy assumption or inferred availability is supplied.
+
+Project cards preserve the existing Today UX and links while displaying the same status and canonical next move as their Project Workspaces. Recommendation responses preserve provider record identity, canonical project identity, structured evidence, considered alternatives, explicit contextual-override state, and provider degradation. Provider failures produce an unavailable/degraded state rather than a false “nothing to do” result.
+
+Calendar-first preparation remains a deterministic Today projection rule inside 60 minutes of an approaching commitment. Historical past-free-block and approaching-event failures remain covered by SID-130's shared contract regressions, and SID-127 adds focused coverage for preparation behavior, context-fit overrides, canonical project-state projection, provider failure, and the absence of legacy planner ranking.
+
+SID-127 does not begin Tasks recommendation migration, generic Calendar Chat grounding, Finance, Habits, Email Intelligence, or visual redesign work. Generic planning callers intentionally remain on `planner.py` until their own migrations.
+
+Verification for SID-127 reached 190 backend tests and 16 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, a live authenticated `/today` API smoke, and a headless Chrome render of the unchanged Today route passed.
+
 ---
 
 # 18. Current Verification History
@@ -3639,6 +3643,7 @@ Recorded development checkpoints include:
 | Responsive Project Brain collection bounds | 168 tests passing | 13 frontend tests and build passing | Passing |
 | Project Brain-grounded Chat questions | 179 tests passing | 13 frontend tests and build passing | Passing |
 | Shared Calendar time and free-block correctness | 184 tests passing | 13 frontend tests and build passing | Passing |
+| Today projection over shared intelligence | 190 tests passing | 16 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -3651,6 +3656,7 @@ The current backend test suite includes:
 - `backend/tests/test_project_brain_service.py`
 - `backend/tests/test_project_registry.py`
 - `backend/tests/test_recommendation_service.py`
+- `backend/tests/test_today_projection.py`
 - `backend/tests/test_work_domain.py`
 - `backend/tests/test_linear_provider.py`
 - `backend/tests/test_project_work_packages.py`
@@ -3687,9 +3693,9 @@ The current objective is to make PCOS's existing intelligence architecture coher
 
 **Status:** Active direction / highest-priority architecture work
 
-Project Brain V1 exists, but it is not yet the canonical source of project intelligence across PCOS.
+Project Brain V1 is now the canonical project-state source for Projects, Today, and project-grounded Chat questions, but not yet for every PCOS surface.
 
-Today, Tasks, backend planning, and Project Brain still compute overlapping state through different paths.
+Tasks and generic backend planning still compute overlapping recommendation state through different paths.
 
 The current fragmentation is conceptually:
 
@@ -3697,8 +3703,6 @@ The current fragmentation is conceptually:
 Tasks frontend ranking
         !=
 backend planner ranking
-        !=
-Today recommendation logic
         !=
 Project Brain next-move logic
 ```
@@ -3764,7 +3768,7 @@ Tasks should inspect executable work and ranking evidence from backend intellige
 
 Do not rewrite every existing subsystem at once.
 
-The existing Project Brain V1, planner, Today aggregation, and Tasks ranking contain working behavior and verified history.
+The existing Project Brain V1, planner, Today projection, and Tasks ranking contain working behavior and verified history.
 
 The consolidation should preserve working behavior while progressively moving the source of intelligence into shared backend services.
 
@@ -3896,13 +3900,13 @@ Write actions can be introduced after the read and normalization path is trustwo
 
 ## 19.4 Today as a Project Brain Projection
 
-**Status:** Active direction
+**Status:** Implemented by SID-127
 
-The Today page currently computes its own live state.
+The Today page now consumes one structured Project Brain snapshot and renders it as a context-specific projection of shared intelligence.
 
-Its life-area cards are clickable into Projects, but that visual connection should not be confused with architectural integration.
+Its life-area cards retain their links into Projects and use the exact shared project status and canonical next move rather than recomputing those values.
 
-Today should become a context-specific projection of shared intelligence.
+The projection owns only Today-specific presentation and Calendar-first preparation behavior. Context-aware task selection delegates to the shared Recommendation Service over normalized work, and Calendar fields delegate to SID-130's contract.
 
 The intended Today role is:
 
@@ -3927,17 +3931,17 @@ A Project Brain summary on Today may contain:
 - blocker indicator;
 - meaningful change indicator.
 
-The underlying project next move should match the detailed Project Workspace unless Today has an explicit contextual reason to choose something else.
+The underlying project next move matches the detailed Project Workspace unless Today has an explicit contextual reason to choose something else.
 
 For example, a 20-minute free block may make a smaller executable task more appropriate than the project's canonical next move.
 
-If Today overrides the canonical project next move for contextual reasons, the reason should be explicit and deterministic.
+When Today overrides the canonical project next move for contextual reasons, the response exposes the deterministic reason and structured evidence.
 
 ---
 
 ## 19.5 Recommendation Engine Consolidation
 
-**Status:** Shared service implemented for Project Brain / remaining consumers planned
+**Status:** Shared service implemented for Project Brain and Today / remaining consumers planned
 
 PCOS currently has useful ranking behavior but no single recommendation engine.
 
@@ -3993,14 +3997,14 @@ The backend should preserve enough structured evidence for debugging.
 
 ### Existing recommendation-path audit
 
-The shared-service implementation began by auditing all four existing paths. They remain present until their dedicated migration issues:
+The shared-service implementation began by auditing all four existing paths. Two remaining compatibility paths await dedicated migration issues:
 
-- `backend/app/planner.py` enriches raw task dictionaries and scores due urgency, Todoist priority, estimated-duration/free-block fit, inferred task energy versus inferred user energy, and Calendar focus category. It still serves existing planner and Today callers.
+- `backend/app/planner.py` enriches raw task dictionaries and scores due urgency, Todoist priority, estimated-duration/free-block fit, inferred task energy versus inferred user energy, and Calendar focus category. It still serves existing generic planning callers but no longer serves Today.
 - `backend/app/project_brain.py` previously projected normalized Todoist work back into planner dictionaries, ranked executable leaves through `rank_tasks`, and formatted the first result as `Work next: ...`. It now sends typed `NormalizedWorkItem` records to the shared service while retaining the same public wording and response shape.
-- `backend/app/main.py` Today aggregation still has a separate orchestration path. It prioritizes preparation inside 60 minutes of an upcoming commitment, computes a current free block, invokes planner ranking, filters for fit, and emits task/calendar/open fallback responses. SID-127 owns this migration.
+- `backend/app/today_projection.py` consumes a structured Project Brain snapshot, normalized work, the shared Recommendation Service, and the Calendar contract. It preserves preparation inside 60 minutes without creating another independent ranking path; `backend/app/main.py` is only the route adapter.
 - `frontend/src/app/tasks/page.tsx` still computes per-life-area recommendations using normalized Todoist priority, task age, due urgency, foundation/unblocking language, and project momentum. It also preserves recommendation-change snapshots in localStorage. SID-128 owns the backend migration, and localStorage change behavior is intentionally not ported by the shared-service issue.
 
-This audit avoids creating a fifth ranking path: the new backend service is the canonical destination, Project Brain is its first consumer, and the other three paths remain compatibility consumers until their dedicated issues.
+This audit avoids creating another ranking path: the shared backend service is the canonical destination, Project Brain and Today consume it, and Tasks plus generic planning remain compatibility consumers until their dedicated issues.
 
 ### Implemented recommendation contract
 
@@ -4190,9 +4194,9 @@ PCOS should:
 
 ## 20.6 Project Intelligence Can Disagree Across Surfaces
 
-**Status:** Known architecture bug
+**Status:** Partially resolved by SID-127
 
-Because Today, Tasks, planner logic, and Project Brain do not use one canonical recommendation path, the system can produce inconsistent next moves.
+Today and Project Brain now use one canonical recommendation path. Tasks and generic planner logic can still produce inconsistent next moves until their dedicated migrations.
 
 Even if each local ranking algorithm is individually reasonable, disagreement damages the Chief of Staff experience.
 
@@ -4373,18 +4377,18 @@ It currently combines:
 - schemas;
 - authentication;
 - health diagnostics;
-- Today aggregation;
+- Today route adapter;
 - memory routes;
 - habit routes;
 - task routes;
 - calendar routes;
 - activity routes.
 
-Project Brain no longer grows inside the HTTP application module, but the remaining route, schema, Today, and provider-health responsibilities still make `main.py` broad.
+Project Brain and Today orchestration no longer grow inside the HTTP application module, but the remaining route, schema, task, and provider-health responsibilities still make `main.py` broad.
 
 ### Direction
 
-Continue moving shared application logic behind dedicated services without folding the separate Today, normalized work model, registry, or recommendation consolidation into unrelated refactors.
+Continue moving shared application logic behind dedicated services without folding Tasks, normalized work, registry, or remaining recommendation consolidation into unrelated refactors.
 
 HTTP routes should primarily validate requests, invoke application services, and return schemas.
 
@@ -4415,7 +4419,7 @@ The frontend should render:
 
 Project Brain now has a typed normalized work model and a Todoist adapter. Provider identity, original status and priority, provider record IDs, and provider metadata are preserved.
 
-Today, Tasks, Chat, and agent behavior still consume older task dictionaries, and Linear has no adapter yet. Provider normalization is therefore implemented for Project Brain but not universal across PCOS.
+Today consumes Project Brain's typed normalized work. Tasks, generic Chat planning, and agent behavior still consume older task dictionaries, so provider normalization is not yet universal across PCOS.
 
 ### Direction
 
@@ -4661,24 +4665,22 @@ Linear issues are planned.
 
 The model can represent Linear-style dependencies and blocked state, but the Todoist adapter intentionally leaves those fields empty/false because Todoist does not provide them.
 
-The remaining plumbing is a Linear adapter and any later migration of Today, Tasks, or Chat. Normalized provider work is intentionally not persisted or synchronized.
+The remaining plumbing includes later migration of Tasks and generic Chat planning. Normalized provider work is intentionally not persisted or synchronized.
 
 ---
 
 ## 22.4 Shared Recommendation Service
 
-**Status:** Implemented for typed domain computation and Project Brain
+**Status:** Implemented for typed domain computation, Project Brain, and Today
 
-The typed shared service now owns canonical project-next-move and context-aware current-action computation over `NormalizedWorkItem` records. Project Brain is the first migrated consumer and preserves its existing response contract.
+The typed shared service now owns canonical project-next-move and context-aware current-action computation over `NormalizedWorkItem` records. Project Brain preserves its existing response contract, and Today consumes the same structured snapshot and service through a focused projection.
 
 Compatibility logic remains split across:
 
 - `planner.py`;
-- Today aggregation;
-- Project Brain;
 - Tasks frontend logic.
 
-Chat project-state questions now consume Project Brain through SID-129. Today and Tasks migrations remain assigned to SID-127 and SID-128. `planner.py` remains because existing global-planning and other callers still depend on it.
+Chat project-state questions consume Project Brain through SID-129, and Today consumes it through SID-127. Tasks migration remains assigned to SID-128. `planner.py` remains because existing global-planning and other callers still depend on it.
 
 ---
 
@@ -5945,7 +5947,7 @@ Existing ranking behavior must be audited before removal from frontend or planne
 
 ## Issue: Make Today a Projection of Shared Intelligence
 
-**Status:** Todo
+**Status:** Completed (SID-127)
 
 **Priority:** High
 
@@ -8549,7 +8551,7 @@ Any feature using current time, free blocks, next events, preparation windows, o
 
 ## 54.2 Recommendation Fragmentation
 
-Today, Project Brain, backend planner logic, and Tasks frontend logic currently overlap.
+Today and Project Brain now share typed recommendation computation. Generic backend planner logic and Tasks frontend logic still overlap with that shared path.
 
 Adding another recommendation path is a regression in architecture even if the isolated feature appears intelligent.
 
@@ -9000,7 +9002,7 @@ build shared recommendation service                 │
                    shared trustworthy state
 ```
 
-Mapped Linear ingestion and Project Work Packages now provide the first proof of the multi-provider model. Chat project-state questions now consume that shared Project Brain path. Today and Tasks still need to converge in later roadmap work, while generic Chat planning intentionally remains on the existing planner until separately migrated.
+Mapped Linear ingestion and Project Work Packages provide the first proof of the multi-provider model. Chat project-state questions and Today now consume that shared Project Brain path. Tasks still needs to converge in later roadmap work, while generic Chat planning intentionally remains on the existing planner until separately migrated.
 
 The active deep project-management provider is:
 

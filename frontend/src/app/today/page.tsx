@@ -25,6 +25,10 @@ import {
   type LifeArea,
   type TodayResponse,
 } from "@/lib/api";
+import {
+  todayProjectCardPresentation,
+  todayRecommendationBadge,
+} from "@/lib/today-projection-presentation";
 
 const lifeAreaGradients: Record<string, string> = {
   "A&M": "from-rose-300/20 via-white/[0.055] to-white/[0.035]",
@@ -201,6 +205,7 @@ export default function TodayPage() {
   const commitments = todayData?.today_remaining_events ?? [];
   const minutesUntilNext = todayData?.minutes_until_next_event ?? null;
   const recommendation = todayData?.recommendation ?? null;
+  const recommendationBadge = todayRecommendationBadge(recommendation);
   const shouldPrepare = recommendation?.type === "prepare";
   const isTodayLoading = !todayData && isLifeAreasLoading;
   const isTodayUnavailable = !todayData && !isLifeAreasLoading;
@@ -360,7 +365,7 @@ export default function TodayPage() {
               </span>
               <span className="inline-flex min-h-11 items-center rounded-full border border-white/10 bg-white/[0.07] px-4 text-sm text-stone-300">
                 <Waves className="mr-2 h-4 w-4 text-iris" aria-hidden="true" />
-                {shouldPrepare ? "Calendar-first" : "Task-fit recommendation"}
+                {recommendationBadge}
               </span>
             </div>
           </div>
@@ -428,37 +433,50 @@ export default function TodayPage() {
                   </div>
                 </article>
               ))
-            : lifeAreas.map((area) => (
-                <Link
-                  key={area.name}
-                  href={projectHrefByLifeArea[area.name] ?? "/projects"}
-                  className={`min-h-60 rounded-[2rem] border border-white/10 bg-gradient-to-br ${gradientForLifeArea(area.name)} p-5 shadow-card backdrop-blur-2xl`}
-                >
-                  <div className="flex h-full flex-col justify-between gap-8">
-                    <div>
-                      <div className="mb-8 flex items-start justify-between gap-3">
-                        <div>
-                          <h4 className="text-3xl font-semibold text-pearl">{area.name}</h4>
-                          <p className="mt-3 text-sm leading-6 text-stone-400">{area.description}</p>
+            : lifeAreas.map((area) => {
+                const projection = todayProjectCardPresentation(area);
+                return (
+                  <Link
+                    key={area.name}
+                    href={projectHrefByLifeArea[area.name] ?? "/projects"}
+                    className={`min-h-60 rounded-[2rem] border border-white/10 bg-gradient-to-br ${gradientForLifeArea(area.name)} p-5 shadow-card backdrop-blur-2xl`}
+                  >
+                    <div className="flex h-full flex-col justify-between gap-8">
+                      <div>
+                        <div className="mb-8 flex items-start justify-between gap-3">
+                          <div>
+                            <h4 className="text-3xl font-semibold text-pearl">{area.name}</h4>
+                            <p className="mt-3 text-sm leading-6 text-stone-400">{area.description}</p>
+                          </div>
+                          <ArrowRight className="h-5 w-5 text-stone-500" aria-hidden="true" />
                         </div>
-                        <ArrowRight className="h-5 w-5 text-stone-500" aria-hidden="true" />
+                        <p className="rounded-full border border-white/10 bg-black/20 px-3 py-2 text-sm text-stone-300">
+                          {projection.status}
+                        </p>
+                        {projection.nextMove ? (
+                          <p className="mt-3 text-sm leading-6 text-stone-300">
+                            {projection.nextMove}
+                          </p>
+                        ) : null}
+                        {projection.failure ? (
+                          <p className="mt-3 text-sm leading-6 text-gold">
+                            {projection.failure}
+                          </p>
+                        ) : null}
                       </div>
-                      <p className="rounded-full border border-white/10 bg-black/20 px-3 py-2 text-sm text-stone-300">
-                        {area.status}
-                      </p>
-                    </div>
 
-                    <div className="grid grid-cols-2 gap-3">
-                      {metricsForLifeArea(area).map((metric) => (
-                        <div key={metric.label} className="rounded-2xl bg-black/20 p-4">
-                          <p className="text-xs uppercase tracking-[0.18em] text-stone-500">{metric.label}</p>
-                          <p className="mt-2 text-3xl font-semibold text-pearl">{metric.value}</p>
-                        </div>
-                      ))}
+                      <div className="grid grid-cols-2 gap-3">
+                        {metricsForLifeArea(area).map((metric) => (
+                          <div key={metric.label} className="rounded-2xl bg-black/20 p-4">
+                            <p className="text-xs uppercase tracking-[0.18em] text-stone-500">{metric.label}</p>
+                            <p className="mt-2 text-3xl font-semibold text-pearl">{metric.value}</p>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                </Link>
-              ))}
+                  </Link>
+                );
+              })}
         </div>
       </section>
 

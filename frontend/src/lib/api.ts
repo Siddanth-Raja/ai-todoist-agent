@@ -124,10 +124,29 @@ export type TodayFreeBlock = {
 
 export type TodayRecommendation = {
   type: string;
+  source: "calendar" | "shared_recommendation" | "fallback";
   title: string;
   detail: string;
+  reason?: string | null;
   task?: TaskItem | Record<string, unknown> | null;
   event?: TodayEvent | null;
+  evidence: Array<{
+    signal: string;
+    value: unknown;
+    score_delta: number;
+    explanation: string;
+  }>;
+  alternatives: Array<{
+    work: { provider: string; provider_record_id: string; title: string };
+    score: number;
+    action: string;
+  }>;
+  provider?: string | null;
+  provider_record_id?: string | null;
+  canonical_project_id?: string | null;
+  canonical_project_key?: string | null;
+  canonical_project_next_move?: string | null;
+  contextual_override: boolean;
 };
 
 export type ActivityEntry = {
@@ -146,11 +165,17 @@ export type ActivityEntry = {
 export type LifeArea = {
   name: string;
   description: string;
+  project_key?: string | null;
+  canonical_project_id?: string | null;
   status: string;
+  next_recommendation?: string | null;
   task_count: number;
   overdue_count: number;
   today_count: number;
   high_priority_count: number;
+  provider_status?: string | null;
+  provider_message?: string | null;
+  degraded: boolean;
 };
 
 export type TodayResponse = {

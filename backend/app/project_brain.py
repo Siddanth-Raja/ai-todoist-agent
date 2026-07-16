@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 import re
 from typing import Any
@@ -39,15 +40,68 @@ BLOCKER_WORDS = ("blocked", "blocking", "waiting", "review", "feedback")
 FOLLOW_UP_WORDS = ("follow up", "follow-up", "waiting", "pending", "review", "feedback")
 
 
+@dataclass(frozen=True)
+class ProjectBrainProjectSnapshot:
+    definition: dict[str, Any]
+    summary: dict[str, Any]
+    work_items: tuple[NormalizedWorkItem, ...]
+    recommendation_candidates: tuple[NormalizedWorkItem, ...]
+    canonical_recommendation: WorkRecommendation | None
+
+
+@dataclass(frozen=True)
+class ProjectBrainSnapshot:
+    now: datetime
+    projects: tuple[ProjectBrainProjectSnapshot, ...]
+    normalized_work: tuple[NormalizedWorkItem, ...]
+    warnings: tuple[str, ...] = ()
+
+    def project_for_key(self, key: str) -> ProjectBrainProjectSnapshot | None:
+        return next(
+            (project for project in self.projects if project.definition["key"] == key),
+            None,
+        )
+
+    def project_for_canonical_id(
+        self,
+        canonical_project_id: str | None,
+    ) -> ProjectBrainProjectSnapshot | None:
+        if not canonical_project_id:
+            return None
+        return next(
+            (
+                project
+                for project in self.projects
+                if project.definition.get("canonical_project_id")
+                == canonical_project_id
+            ),
+            None,
+        )
+
+
 class ProjectBrainService:
     def __init__(self, registry_service=project_registry_service):
         self.registry_service = registry_service
 
     def list_projects(self, *, settings: Any, current_time: datetime | None = None) -> list[dict[str, Any]]:
+        return [
+            project.summary
+            for project in self.snapshot(
+                settings=settings,
+                current_time=current_time,
+            ).projects
+        ]
+
+    def snapshot(
+        self,
+        *,
+        settings: Any,
+        current_time: datetime | None = None,
+    ) -> ProjectBrainSnapshot:
         registry = self.registry_service.snapshot()
         local_now = current_time.astimezone(settings.local_tz) if current_time else datetime.now(settings.local_tz)
         todoist_result = list_active_tasks(settings)
-        tasks = todoist_work_adapter.adapt_many(
+        todoist_tasks = todoist_work_adapter.adapt_many(
             todoist_result.tasks,
             registry=registry,
             today=local_now.date(),
@@ -56,20 +110,43 @@ class ProjectBrainService:
         events = _future_events(calendar_result.events, local_now)
         memories = [memory for memory in list_memory_entries() if memory.get("enabled")]
         activity = list_activity(limit=200)
+        project_snapshots: list[ProjectBrainProjectSnapshot] = []
+        linear_work: list[NormalizedWorkItem] = []
+        warnings = [
+            error
+            for error in (todoist_result.error, calendar_result.error)
+            if error
+        ]
 
-        return [
-            self._build_project_with_linear(
+        for project in registry.projects:
+            linear_tasks, dependency_evidence, linear_diagnostic = _read_mapped_linear_work(
                 project=project,
-                todoist_tasks=tasks,
-                events=events,
-                memories=memories,
-                activity=activity,
-                now=local_now,
                 registry=registry,
                 settings=settings,
             )
-            for project in registry.projects
-        ]
+            linear_work.extend(linear_tasks)
+            project_snapshots.append(
+                self.build_project_snapshot(
+                    project=project,
+                    tasks=[*todoist_tasks, *linear_tasks],
+                    events=events,
+                    memories=memories,
+                    activity=activity,
+                    now=local_now,
+                    registry=registry,
+                    linear_diagnostic=linear_diagnostic,
+                    dependency_evidence=dependency_evidence,
+                )
+            )
+            if linear_diagnostic.status not in {"connected", "not_mapped"}:
+                warnings.append(linear_diagnostic.message)
+
+        return ProjectBrainSnapshot(
+            now=local_now,
+            projects=tuple(project_snapshots),
+            normalized_work=tuple([*todoist_tasks, *linear_work]),
+            warnings=tuple(dict.fromkeys(warnings)),
+        )
 
     def get_project(
         self,
@@ -154,6 +231,31 @@ class ProjectBrainService:
         linear_diagnostic: LinearProjectDiagnostic | None = None,
         dependency_evidence: tuple[EvaluatedDependencyEvidence, ...] = (),
     ) -> dict[str, Any]:
+        return self.build_project_snapshot(
+            project=project,
+            tasks=tasks,
+            events=events,
+            memories=memories,
+            activity=activity,
+            now=now,
+            registry=registry,
+            linear_diagnostic=linear_diagnostic,
+            dependency_evidence=dependency_evidence,
+        ).summary
+
+    def build_project_snapshot(
+        self,
+        *,
+        project: dict[str, Any],
+        tasks: list[NormalizedWorkItem],
+        events: list[dict[str, Any]],
+        memories: list[dict[str, Any]],
+        activity: list[dict[str, Any]],
+        now: datetime,
+        registry: ProjectRegistrySnapshot | None = None,
+        linear_diagnostic: LinearProjectDiagnostic | None = None,
+        dependency_evidence: tuple[EvaluatedDependencyEvidence, ...] = (),
+    ) -> ProjectBrainProjectSnapshot:
         registry = registry or self.registry_service.snapshot()
         todoist_tasks = [task for task in tasks if task.provider == "todoist"]
         task_lookup = {
@@ -236,7 +338,7 @@ class ProjectBrainService:
             and recommendation.action == RecommendationAction.DO_WORK
         )
 
-        return {
+        summary = {
             "key": project["key"],
             "name": project["name"],
             "description": project["description"],
@@ -274,6 +376,13 @@ class ProjectBrainService:
             "work_packages": work_packages,
             "linear_diagnostic": linear_diagnostic,
         }
+        return ProjectBrainProjectSnapshot(
+            definition=project,
+            summary=summary,
+            work_items=tuple(project_work),
+            recommendation_candidates=tuple(recommendation_candidates),
+            canonical_recommendation=recommendation,
+        )
 
 
 project_brain_service = ProjectBrainService()

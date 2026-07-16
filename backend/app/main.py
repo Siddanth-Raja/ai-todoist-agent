@@ -1,4 +1,4 @@
-from datetime import datetime, time, timedelta
+from datetime import datetime
 from typing import Any, Literal
 
 import requests
@@ -8,12 +8,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .agent import MODE, confirm_pending_action, handle_chat
-from .calendar_time import normalize_calendar_time
-from .calendar_tools import check_google_auth, categories_conflict, list_remaining_today_events, list_upcoming_events
+from .calendar_tools import check_google_auth, categories_conflict, list_upcoming_events
 from .config import get_settings
 from .dependency_evaluator import DependencySummary, EvaluatedDependencyEvidence
 from .linear_client import LinearClient
-from .planner import enrich_task, rank_tasks
+from .planner import enrich_task
 from .project_brain import project_brain_service
 from .project_work_packages import LinearProjectDiagnostic, ProjectWorkPackage
 from .storage import (
@@ -33,6 +32,7 @@ from .storage import (
 )
 from .todoist_tools import list_active_tasks
 from .todoist_tools import LIFE_AREA_TO_TODOIST_SECTION, TODOIST_SECTION_TO_LIFE_AREA, life_area_for_todoist_section, list_todoist_sections
+from .today_projection import today_projection_service
 
 
 app = FastAPI(
@@ -82,15 +82,6 @@ class ConfirmRequest(BaseModel):
 
 TASK_SECTION_NAMES = ("A&M", "XO", "Freelance", "Nebulo", "Personal", "Misc")
 TODOIST_TASK_SECTION_NAMES = tuple(LIFE_AREA_TO_TODOIST_SECTION.values())
-LIFE_AREA_DESCRIPTIONS = {
-    "A&M": "College, TAMU, Blinn, housing, registration",
-    "XO": "VR, prototype, headset, Ashwin, Charlie",
-    "Nebulo": "AI context control, private storage, product work",
-    "Freelance": "clients, outreach, websites, invoices",
-    "Personal": "gym, health, shopping, errands, car, life admin",
-    "Misc": "uncategorized",
-}
-
 class MemoryCreate(BaseModel):
     type: str = Field(..., min_length=1, max_length=80)
     title: str = Field(..., min_length=1, max_length=160)
@@ -276,20 +267,36 @@ class TodayFreeBlock(BaseModel):
 
 class TodayRecommendation(BaseModel):
     type: str
+    source: Literal["calendar", "shared_recommendation", "fallback"] = "fallback"
     title: str
     detail: str
+    reason: str | None = None
     task: dict[str, Any] | None = None
     event: TodayEvent | None = None
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    alternatives: list[dict[str, Any]] = Field(default_factory=list)
+    provider: str | None = None
+    provider_record_id: str | None = None
+    canonical_project_id: str | None = None
+    canonical_project_key: str | None = None
+    canonical_project_next_move: str | None = None
+    contextual_override: bool = False
 
 
 class LifeArea(BaseModel):
     name: str
     description: str
+    project_key: str | None = None
+    canonical_project_id: str | None = None
     status: str
+    next_recommendation: str | None = None
     task_count: int
     overdue_count: int
     today_count: int
     high_priority_count: int
+    provider_status: str | None = None
+    provider_message: str | None = None
+    degraded: bool = False
 
 
 class TodayResponse(BaseModel):
@@ -749,58 +756,10 @@ def today_index(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     require_agent_api_key(authorization)
-    settings = get_settings()
-    todoist_result = list_active_tasks(settings)
-    calendar_result = list_remaining_today_events(settings, now=current_time)
-    local_now = current_time.astimezone(settings.local_tz) if current_time else datetime.now(settings.local_tz)
-    enriched_tasks = [
-        enrich_task(task, local_now.date()) for task in todoist_result.tasks if task.get("content")
-    ]
-    calendar_time = normalize_calendar_time(
-        calendar_result.events,
-        now=local_now,
-        local_tz=settings.local_tz,
+    return today_projection_service.build(
+        settings=get_settings(),
+        current_time=current_time,
     )
-    local_now = calendar_time.now
-    today_remaining_events = list(calendar_time.remaining_events)
-    next_event = calendar_time.next_event
-    minutes_until_next_event = calendar_time.minutes_until_next_event
-    current_free_block = _today_free_block_payload(
-        calendar_time.current_free_block,
-        minutes_until_next_event=minutes_until_next_event,
-    )
-    recommendation = _today_recommendation(
-        tasks=enriched_tasks,
-        now=local_now,
-        next_event=next_event,
-        minutes_until_next_event=minutes_until_next_event,
-        current_free_block=current_free_block,
-    )
-
-    grouped: dict[str, list[dict[str, Any]]] = {section: [] for section in TASK_SECTION_NAMES}
-    for task in enriched_tasks:
-        grouped[_task_section_for(task)].append(task)
-
-    errors = [
-        error
-        for error in (todoist_result.error, calendar_result.error)
-        if error
-    ]
-    return {
-        "now": local_now.isoformat(),
-        "now_display": _format_datetime_display(local_now),
-        "next_event": _today_event_payload(next_event, settings.local_tz) if next_event else None,
-        "minutes_until_next_event": minutes_until_next_event,
-        "current_free_block": current_free_block,
-        "today_remaining_events": [
-            _today_event_payload(event, settings.local_tz) for event in today_remaining_events
-        ],
-        "recommendation": recommendation,
-        "life_areas": [
-            _life_area_summary(section, grouped[section]) for section in TASK_SECTION_NAMES
-        ],
-        "errors": errors,
-    }
 
 
 @app.get("/projects", response_model=list[ProjectBrain])
@@ -830,159 +789,6 @@ def project_detail(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return project
-
-
-def _today_free_block_payload(
-    block: dict[str, Any] | None,
-    *,
-    minutes_until_next_event: int | None,
-) -> dict[str, Any] | None:
-    if not block or (minutes_until_next_event is not None and minutes_until_next_event <= 30):
-        return None
-    start = datetime.fromisoformat(block["start"])
-    end = datetime.fromisoformat(block["end"])
-    return {
-        "start": block["start"],
-        "end": block["end"],
-        "start_display": _format_time_display(start),
-        "end_display": _format_time_display(end),
-        "time_range_display": f"{_format_time_display(start)}-{_format_time_display(end)}",
-        "duration_minutes": block["duration_minutes"],
-        "low_usefulness": bool(minutes_until_next_event is not None and minutes_until_next_event <= 60),
-    }
-
-
-def _today_recommendation(
-    *,
-    tasks: list[dict[str, Any]],
-    now: datetime,
-    next_event: dict[str, Any] | None,
-    minutes_until_next_event: int | None,
-    current_free_block: dict[str, Any] | None,
-) -> dict[str, Any]:
-    if next_event and minutes_until_next_event is not None and minutes_until_next_event <= 60:
-        event_payload = _today_event_payload(next_event, now.tzinfo)
-        if minutes_until_next_event <= 30:
-            return {
-                "type": "prepare",
-                "title": f"Prepare to leave for {next_event.get('title')}",
-                "detail": "This is inside 30 minutes, so only preparation, packing, notes, or travel should be considered.",
-                "task": None,
-                "event": event_payload,
-            }
-        return {
-            "type": "prepare",
-            "title": f"Prepare for {next_event.get('title')}",
-            "detail": "The next commitment starts within 60 minutes. Review context, agenda, materials, and travel buffer now.",
-            "task": None,
-            "event": event_payload,
-        }
-
-    ranked_tasks = rank_tasks(
-        tasks,
-        free_block=_free_block_for_planner(current_free_block),
-        user_energy="medium",
-        focus_category=None,
-        today=now.date(),
-    )
-    if current_free_block:
-        ranked_tasks = [
-            task
-            for task in ranked_tasks
-            if int(task.get("estimated_duration") or 0) <= int(current_free_block["duration_minutes"])
-        ] or ranked_tasks
-
-    if ranked_tasks:
-        task = ranked_tasks[0]
-        if current_free_block and next_event:
-            detail = (
-                f"This fits the {current_free_block['duration_minutes']}-minute block before "
-                f"{next_event.get('title')}."
-            )
-        elif current_free_block:
-            detail = f"No blocking events remain today. Use the {current_free_block['duration_minutes']}-minute open block."
-        else:
-            detail = "No blocking calendar events remain, so this is chosen from Todoist priority and due-date signals."
-        return {
-            "type": "task",
-            "title": str(task.get("content") or "Work the top Todoist task"),
-            "detail": detail,
-            "task": task,
-            "event": None,
-        }
-
-    if next_event:
-        return {
-            "type": "calendar",
-            "title": f"Protect the buffer before {next_event.get('title')}",
-            "detail": "No Todoist task clearly fits the available block, so keep the calendar transition clean.",
-            "task": None,
-            "event": _today_event_payload(next_event, now.tzinfo),
-        }
-
-    return {
-        "type": "open",
-        "title": "No remaining calendar commitments",
-        "detail": "No Todoist task is available, so keep the rest of the day open or add the next concrete task.",
-        "task": None,
-        "event": None,
-    }
-
-
-def _free_block_for_planner(block: dict[str, Any] | None) -> dict[str, Any] | None:
-    if not block:
-        return None
-    return {
-        "start": block["start"],
-        "end": block["end"],
-        "duration_minutes": block["duration_minutes"],
-        "is_current": True,
-    }
-
-
-def _today_event_payload(event: dict[str, Any], local_tz) -> dict[str, Any]:
-    start = _event_start(event).astimezone(local_tz)
-    end = _event_end(event).astimezone(local_tz)
-    return {
-        "id": event.get("id"),
-        "title": event.get("title") or "(No title)",
-        "start": start.isoformat(),
-        "end": end.isoformat(),
-        "start_display": _format_time_display(start),
-        "end_display": _format_time_display(end),
-        "time_range_display": f"{_format_time_display(start)}-{_format_time_display(end)}",
-        "duration_minutes": int(event.get("duration_minutes") or _ceil_minutes_between(start, end)),
-        "event_category": _today_event_category(event),
-        "location": event.get("location"),
-        "html_link": event.get("html_link"),
-    }
-
-
-def _today_event_category(event: dict[str, Any]) -> str:
-    category = event.get("event_category") or event.get("event_type")
-    return str(category or "flexible")
-
-
-def _event_start(event: dict[str, Any]) -> datetime:
-    value = event.get("start")
-    return value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
-
-
-def _event_end(event: dict[str, Any]) -> datetime:
-    value = event.get("end")
-    return value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
-
-
-def _ceil_minutes_between(start: datetime, end: datetime) -> int:
-    return max(0, int((end - start).total_seconds() // 60 + (1 if (end - start).total_seconds() % 60 else 0)))
-
-
-def _format_time_display(value: datetime) -> str:
-    return value.strftime("%I:%M %p").lstrip("0")
-
-
-def _format_datetime_display(value: datetime) -> str:
-    return f"{value.strftime('%A, %B')} {value.day} at {_format_time_display(value)}"
 
 
 @app.get("/calendar", response_model=CalendarResponse)
@@ -1092,60 +898,6 @@ def _normalized_task_created_at(value: Any) -> str | None:
     except ValueError:
         return None
     return parsed.isoformat()
-
-
-def _life_area_summary(section: str, tasks: list[dict[str, Any]]) -> dict[str, Any]:
-    overdue_count = sum(1 for task in tasks if task.get("due_status") == "overdue")
-    today_count = sum(1 for task in tasks if task.get("due_status") == "today")
-    high_priority_count = sum(1 for task in tasks if _is_high_priority_task(task))
-
-    return {
-        "name": section,
-        "description": LIFE_AREA_DESCRIPTIONS[section],
-        "status": _life_area_status(
-            task_count=len(tasks),
-            overdue_count=overdue_count,
-            today_count=today_count,
-            high_priority_count=high_priority_count,
-        ),
-        "task_count": len(tasks),
-        "overdue_count": overdue_count,
-        "today_count": today_count,
-        "high_priority_count": high_priority_count,
-    }
-
-
-def _life_area_status(
-    *,
-    task_count: int,
-    overdue_count: int,
-    today_count: int,
-    high_priority_count: int,
-) -> str:
-    if overdue_count > 0:
-        return "Needs attention"
-    if high_priority_count > 0:
-        return "High priority active"
-    if today_count > 0:
-        return "Due today"
-    if task_count > 0:
-        return "Clear for steady work"
-    return "Clear"
-
-
-def _is_high_priority_task(task: dict[str, Any]) -> bool:
-    raw_priority = task.get("todoist_priority")
-    if raw_priority is not None:
-        try:
-            return int(raw_priority) >= 4
-        except (TypeError, ValueError):
-            return False
-
-    priority = task.get("priority")
-    try:
-        return int(priority) >= 4
-    except (TypeError, ValueError):
-        return False
 
 
 def _detect_calendar_conflicts(events: list[dict[str, Any]]) -> list[dict[str, Any]]:

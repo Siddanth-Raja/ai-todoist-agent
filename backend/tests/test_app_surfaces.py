@@ -20,6 +20,7 @@ from app.calendar_tools import (  # noqa: E402
     infer_event_category,
 )
 from app.storage import DEFAULT_MEMORIES, ensure_database  # noqa: E402
+from app.project_work_packages import LinearProjectDiagnostic  # noqa: E402
 from app.todoist_tools import TodoistReadResult  # noqa: E402
 
 
@@ -56,15 +57,34 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         self.env_patch = patch.dict(os.environ, {"APP_DB_PATH": self.db_path})
         self.settings_patch = patch("app.main.get_settings", return_value=FakeSettings())
         self.calendar_patch = patch(
-            "app.main.list_remaining_today_events",
+            "app.today_projection.list_remaining_today_events",
             return_value=CalendarReadResult(events=[]),
+        )
+        self.project_calendar_patch = patch(
+            "app.project_brain.list_upcoming_events",
+            return_value=CalendarReadResult(events=[]),
+        )
+        self.linear_patch = patch(
+            "app.project_brain._read_mapped_linear_work",
+            return_value=(
+                [],
+                (),
+                LinearProjectDiagnostic(
+                    status="not_mapped",
+                    message="No Linear mapping in this endpoint fixture.",
+                ),
+            ),
         )
         self.env_patch.start()
         self.settings_patch.start()
         self.calendar_patch.start()
+        self.project_calendar_patch.start()
+        self.linear_patch.start()
         self.addCleanup(self.env_patch.stop)
         self.addCleanup(self.settings_patch.stop)
         self.addCleanup(self.calendar_patch.stop)
+        self.addCleanup(self.project_calendar_patch.stop)
+        self.addCleanup(self.linear_patch.stop)
         self.authorization = "Bearer test-agent-key"
 
     def test_default_memories_are_seeded_once(self):
@@ -341,7 +361,7 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                 "labels": [],
             },
         ]
-        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)):
+        with patch("app.project_brain.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)):
             payload = main.today_index(
                 current_time=datetime(2026, 6, 5, 12, 0, tzinfo=ZoneInfo("America/Chicago")),
                 authorization=self.authorization,
@@ -353,12 +373,17 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         self.assertEqual(areas["A&M"]["overdue_count"], 1)
         self.assertEqual(areas["A&M"]["status"], "Needs attention")
         self.assertEqual(areas["XO"]["today_count"], 1)
-        self.assertEqual(areas["XO"]["status"], "Due today")
+        self.assertEqual(areas["XO"]["status"], "Needs attention")
         self.assertEqual(areas["Freelance"]["high_priority_count"], 1)
-        self.assertEqual(areas["Freelance"]["status"], "High priority active")
-        self.assertEqual(areas["Personal"]["status"], "Clear for steady work")
+        self.assertEqual(areas["Freelance"]["status"], "Active")
+        self.assertEqual(areas["Personal"]["status"], "Active")
         self.assertEqual(areas["Misc"]["task_count"], 0)
-        self.assertEqual(areas["Misc"]["status"], "Clear")
+        self.assertEqual(areas["Misc"]["status"], "Quiet")
+        self.assertEqual(areas["A&M"]["project_key"], "am")
+        self.assertEqual(
+            areas["A&M"]["next_recommendation"],
+            "Work next: Submit housing form",
+        )
         self.assertIsNone(payload["next_event"])
         self.assertEqual(payload["today_remaining_events"], [])
         self.assertEqual(payload["errors"], [])
@@ -368,8 +393,8 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         events = [
             self._calendar_event("past", "Lunch", "2026-06-05T12:00:00-05:00", "2026-06-05T13:00:00-05:00"),
         ]
-        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
-            "app.main.list_remaining_today_events",
+        with patch("app.project_brain.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
+            "app.today_projection.list_remaining_today_events",
             return_value=CalendarReadResult(events=events),
         ):
             payload = main.today_index(current_time=now, authorization=self.authorization)
@@ -388,8 +413,8 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                 "2026-06-05T18:30:00-05:00",
             ),
         ]
-        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
-            "app.main.list_remaining_today_events",
+        with patch("app.project_brain.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
+            "app.today_projection.list_remaining_today_events",
             return_value=CalendarReadResult(events=events),
         ):
             payload = main.today_index(current_time=now, authorization=self.authorization)
@@ -402,8 +427,8 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         events = [
             self._calendar_event("next", "Gym", "2026-06-05T18:30:00-05:00", "2026-06-05T19:30:00-05:00"),
         ]
-        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
-            "app.main.list_remaining_today_events",
+        with patch("app.project_brain.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
+            "app.today_projection.list_remaining_today_events",
             return_value=CalendarReadResult(events=events),
         ):
             payload = main.today_index(current_time=now, authorization=self.authorization)
@@ -430,8 +455,8 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                 "labels": [],
             }
         ]
-        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)), patch(
-            "app.main.list_remaining_today_events",
+        with patch("app.project_brain.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)), patch(
+            "app.today_projection.list_remaining_today_events",
             return_value=CalendarReadResult(events=events),
         ):
             payload = main.today_index(current_time=now, authorization=self.authorization)
@@ -451,8 +476,8 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                 event_category="informational",
             ),
         ]
-        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
-            "app.main.list_remaining_today_events",
+        with patch("app.project_brain.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
+            "app.today_projection.list_remaining_today_events",
             return_value=CalendarReadResult(events=events),
         ):
             payload = main.today_index(current_time=now, authorization=self.authorization)
@@ -466,8 +491,8 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         events = [
             self._calendar_event("next", "Dinner", "2026-06-05T18:30:00-05:00", "2026-06-05T19:30:00-05:00"),
         ]
-        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
-            "app.main.list_remaining_today_events",
+        with patch("app.project_brain.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
+            "app.today_projection.list_remaining_today_events",
             return_value=CalendarReadResult(events=events),
         ):
             payload = main.today_index(current_time=utc_now, authorization=self.authorization)

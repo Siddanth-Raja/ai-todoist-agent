@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .agent import MODE, confirm_pending_action, handle_chat
+from .calendar_time import normalize_calendar_time
 from .calendar_tools import check_google_auth, categories_conflict, list_remaining_today_events, list_upcoming_events
 from .config import get_settings
 from .dependency_evaluator import DependencySummary, EvaluatedDependencyEvidence
@@ -755,15 +756,17 @@ def today_index(
     enriched_tasks = [
         enrich_task(task, local_now.date()) for task in todoist_result.tasks if task.get("content")
     ]
-    today_remaining_events = _future_today_events(calendar_result.events, local_now)
-    blocking_events = _blocking_today_events(today_remaining_events, local_now)
-    next_event = blocking_events[0] if blocking_events else None
-    minutes_until_next_event = (
-        _ceil_minutes_between(local_now, _event_start(next_event)) if next_event else None
-    )
-    current_free_block = _today_current_free_block(
+    calendar_time = normalize_calendar_time(
+        calendar_result.events,
         now=local_now,
-        next_event=next_event,
+        local_tz=settings.local_tz,
+    )
+    local_now = calendar_time.now
+    today_remaining_events = list(calendar_time.remaining_events)
+    next_event = calendar_time.next_event
+    minutes_until_next_event = calendar_time.minutes_until_next_event
+    current_free_block = _today_free_block_payload(
+        calendar_time.current_free_block,
         minutes_until_next_event=minutes_until_next_event,
     )
     recommendation = _today_recommendation(
@@ -829,54 +832,22 @@ def project_detail(
     return project
 
 
-def _future_today_events(events: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
-    end_of_day = datetime.combine(now.date() + timedelta(days=1), time.min, tzinfo=now.tzinfo)
-    remaining = [
-        event
-        for event in events
-        if _event_end(event) > now and _event_start(event) < end_of_day
-    ]
-    remaining.sort(key=lambda event: _event_start(event))
-    return remaining
-
-
-def _blocking_today_events(events: list[dict[str, Any]], now: datetime) -> list[dict[str, Any]]:
-    blocking = [
-        event
-        for event in events
-        if event.get("busy")
-        and not event.get("all_day")
-        and _today_event_category(event) in {"hard", "flexible"}
-        and _event_start(event) > now
-    ]
-    blocking.sort(key=lambda event: _event_start(event))
-    return blocking
-
-
-def _today_current_free_block(
+def _today_free_block_payload(
+    block: dict[str, Any] | None,
     *,
-    now: datetime,
-    next_event: dict[str, Any] | None,
     minutes_until_next_event: int | None,
 ) -> dict[str, Any] | None:
-    if next_event:
-        end = _event_start(next_event)
-    else:
-        end = datetime.combine(now.date() + timedelta(days=1), time.min, tzinfo=now.tzinfo)
-
-    duration_minutes = _ceil_minutes_between(now, end)
-    if duration_minutes <= 0:
+    if not block or (minutes_until_next_event is not None and minutes_until_next_event <= 30):
         return None
-    if minutes_until_next_event is not None and minutes_until_next_event <= 30:
-        return None
-
+    start = datetime.fromisoformat(block["start"])
+    end = datetime.fromisoformat(block["end"])
     return {
-        "start": now.isoformat(),
-        "end": end.isoformat(),
-        "start_display": _format_time_display(now),
+        "start": block["start"],
+        "end": block["end"],
+        "start_display": _format_time_display(start),
         "end_display": _format_time_display(end),
-        "time_range_display": f"{_format_time_display(now)}-{_format_time_display(end)}",
-        "duration_minutes": duration_minutes,
+        "time_range_display": f"{_format_time_display(start)}-{_format_time_display(end)}",
+        "duration_minutes": block["duration_minutes"],
         "low_usefulness": bool(minutes_until_next_event is not None and minutes_until_next_event <= 60),
     }
 

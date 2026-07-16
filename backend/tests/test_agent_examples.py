@@ -1916,6 +1916,32 @@ class AgentExampleTests(unittest.TestCase):
         self.assertIsNone(response["confirmation_prompt"])
         self.assertIsNone(response["pending_action"])
 
+    def test_chat_formats_approaching_event_in_configured_timezone(self):
+        now = datetime(2026, 6, 5, 17, 45, tzinfo=ZoneInfo("America/Chicago"))
+        event = {
+            "id": "approaching",
+            "title": "Gym",
+            "start": "2026-06-05T23:30:00+00:00",
+            "end": "2026-06-06T00:30:00+00:00",
+            "duration_minutes": 60,
+            "all_day": False,
+            "busy": True,
+            "event_type": "hard",
+            "event_category": "hard",
+        }
+        with patch("app.agent.get_settings", return_value=FakeSettings(openai_api_key=None)), patch(
+            "app.agent.list_active_tasks", return_value=TodoistReadResult(tasks=[])
+        ), patch(
+            "app.agent.list_todays_events", return_value=CalendarReadResult(events=[event])
+        ), patch(
+            "app.agent.list_upcoming_events", return_value=CalendarReadResult(events=[event])
+        ):
+            response = handle_chat("Do I have time before the gym?", now)
+
+        self.assertEqual(response["free_block"]["duration_minutes"], 45)
+        self.assertEqual(response["free_block"]["end"], "2026-06-05T18:30:00-05:00")
+        self.assertIn("6:30 PM", response["answer"])
+
     def test_next_response_can_resolve_pending_action(self):
         pending_action = {
             "type": "resolve_calendar_conflict",

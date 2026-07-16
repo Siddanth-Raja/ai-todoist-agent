@@ -378,6 +378,25 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         self.assertEqual(payload["today_remaining_events"], [])
         self.assertGreater(payload["current_free_block"]["duration_minutes"], 0)
 
+    def test_today_does_not_report_current_free_block_during_ongoing_event(self):
+        now = datetime(2026, 6, 5, 17, 45, tzinfo=ZoneInfo("America/Chicago"))
+        events = [
+            self._calendar_event(
+                "ongoing",
+                "Client review",
+                "2026-06-05T17:30:00-05:00",
+                "2026-06-05T18:30:00-05:00",
+            ),
+        ]
+        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=[])), patch(
+            "app.main.list_remaining_today_events",
+            return_value=CalendarReadResult(events=events),
+        ):
+            payload = main.today_index(current_time=now, authorization=self.authorization)
+
+        self.assertIsNone(payload["current_free_block"])
+        self.assertEqual(payload["today_remaining_events"][0]["title"], "Client review")
+
     def test_today_event_in_45_minutes_is_next_event_and_ends_free_block(self):
         now = datetime(2026, 6, 5, 17, 45, tzinfo=ZoneInfo("America/Chicago"))
         events = [

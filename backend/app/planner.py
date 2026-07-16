@@ -1,7 +1,8 @@
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime
 import re
 from typing import Any
 
+from .calendar_time import normalize_calendar_time
 from .todoist_tools import life_area_for_todoist_section
 
 
@@ -183,13 +184,16 @@ def build_plan(
 ) -> dict[str, Any]:
     local_now = now.astimezone(local_tz) if now else datetime.now(local_tz)
     user_energy = infer_user_energy(message)
-    free_block = (
-        find_current_or_next_free_block(calendar_events, local_now)
+    calendar_time = (
+        normalize_calendar_time(calendar_events, now=local_now, local_tz=local_tz)
         if calendar_available
         else None
     )
+    free_block = calendar_time.current_or_next_free_block if calendar_time else None
     focus_category = (
-        infer_focus_category(calendar_events, local_now) if calendar_available else None
+        infer_focus_category(list(calendar_time.blocking_events), calendar_time.now)
+        if calendar_time
+        else None
     )
 
     enriched_tasks = [enrich_task(task, local_now.date()) for task in tasks]
@@ -371,39 +375,11 @@ def find_current_or_next_free_block(
     calendar_events: list[dict[str, Any]],
     now: datetime,
 ) -> dict[str, Any] | None:
-    end_of_day = datetime.combine(now.date() + timedelta(days=1), time.min, tzinfo=now.tzinfo)
-    free_start = now
-    started_now = True
-
-    for event in _busy_events(calendar_events):
-        event_start = datetime.fromisoformat(event["start"])
-        event_end = datetime.fromisoformat(event["end"])
-
-        if event_end <= free_start:
-            continue
-
-        if event_start <= free_start < event_end:
-            free_start = event_end
-            started_now = False
-            continue
-
-        if event_start > free_start:
-            return _format_free_block(
-                start=free_start,
-                end=min(event_start, end_of_day),
-                now=now,
-                is_current=started_now,
-            )
-
-    if free_start < end_of_day:
-        return _format_free_block(
-            start=free_start,
-            end=end_of_day,
-            now=now,
-            is_current=started_now,
-        )
-
-    return None
+    return normalize_calendar_time(
+        calendar_events,
+        now=now,
+        local_tz=now.tzinfo,
+    ).current_or_next_free_block
 
 
 def infer_focus_category(
@@ -549,21 +525,3 @@ def _busy_events(calendar_events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     events = [event for event in calendar_events if event.get("busy")]
     events.sort(key=lambda event: event["start"])
     return events
-
-
-def _format_free_block(
-    start: datetime,
-    end: datetime,
-    now: datetime,
-    is_current: bool,
-) -> dict[str, Any] | None:
-    duration_minutes = max(0, int((end - start).total_seconds() // 60))
-    if duration_minutes <= 0:
-        return None
-
-    return {
-        "start": start.isoformat(),
-        "end": end.isoformat(),
-        "duration_minutes": duration_minutes,
-        "is_current": is_current and start <= now + timedelta(seconds=1),
-    }

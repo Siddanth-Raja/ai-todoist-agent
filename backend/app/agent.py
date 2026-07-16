@@ -7,6 +7,7 @@ from typing import Any
 import requests
 
 from .calendar_intelligence import CalendarAnalysis, analyze_calendar_change
+from .calendar_time import normalize_event, parse_event_datetime
 from .calendar_tools import (
     create_calendar_event,
     list_todays_events,
@@ -682,6 +683,7 @@ def _calendar_lookup_result(
         calendar_events,
         target_date,
         tuple(lookup.get("search_terms") or (kind,)),
+        local_now.tzinfo,
     )
     if matches:
         if len(matches) > 1:
@@ -834,9 +836,15 @@ def _calendar_events_for_date_matching(
     events: list[dict[str, Any]],
     target_date,
     search_terms: tuple[str, ...],
+    local_tz,
 ) -> list[dict[str, Any]]:
     matches = []
-    for event in _events_on_date(events, target_date):
+    normalized_events = [
+        normalized
+        for event in events
+        if (normalized := normalize_event(event, local_tz)) is not None
+    ]
+    for event in _events_on_date(normalized_events, target_date):
         text = " ".join(
             [
                 str(event.get("title") or ""),
@@ -861,11 +869,17 @@ def _answer_calendar_event_lookup(
 
 
 def _answer_interview_lookup_from_event(event: dict[str, Any], local_now: datetime) -> str:
-    start = _parse_followup_event_datetime(event.get("start"))
+    start = _parse_followup_event_datetime(event.get("start"), local_now.tzinfo)
     title = str(event.get("title") or "your interview")
     if not start:
         return f"I found {title} on your calendar, but I could not read the start time."
-    return _answer_interview_wakeup(title, start, _parse_followup_event_datetime(event.get("end")), event, local_now)
+    return _answer_interview_wakeup(
+        title,
+        start,
+        _parse_followup_event_datetime(event.get("end"), local_now.tzinfo),
+        event,
+        local_now,
+    )
 
 
 def _answer_interview_wakeup_from_time(start: datetime) -> str:
@@ -920,8 +934,8 @@ def _answer_generic_calendar_lookup(
     local_now: datetime,
 ) -> str:
     title = str(event.get("title") or "your event")
-    start = _parse_followup_event_datetime(event.get("start"))
-    end = _parse_followup_event_datetime(event.get("end"))
+    start = _parse_followup_event_datetime(event.get("start"), local_now.tzinfo)
+    end = _parse_followup_event_datetime(event.get("end"), local_now.tzinfo)
     if not start:
         return f"I found {title} on your calendar, but I could not read the start time."
 
@@ -943,8 +957,8 @@ def _multiple_calendar_matches_answer(
     items = []
     for event in matches:
         title = str(event.get("title") or "Untitled event")
-        start = _parse_followup_event_datetime(event.get("start"))
-        end = _parse_followup_event_datetime(event.get("end"))
+        start = _parse_followup_event_datetime(event.get("start"), local_now.tzinfo)
+        end = _parse_followup_event_datetime(event.get("end"), local_now.tzinfo)
         if start and end:
             items.append(f"{title} ({_format_followup_time(start)} - {_format_followup_time(end)})")
         elif start:
@@ -1032,14 +1046,16 @@ def _format_followup_time(value: datetime) -> str:
     return value.strftime("%I:%M %p").lstrip("0")
 
 
-def _parse_followup_event_datetime(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        return value
-    if not value:
-        return None
+def _parse_followup_event_datetime(value: Any, local_tz=None) -> datetime | None:
     try:
+        if local_tz is not None:
+            return parse_event_datetime(value, local_tz)
+        if isinstance(value, datetime):
+            return value
+        if not value:
+            return None
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
+    except (TypeError, ValueError):
         return None
 
 

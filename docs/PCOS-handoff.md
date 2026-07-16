@@ -3595,6 +3595,22 @@ SID-129 does not begin SID-227, add provider writes or synchronization, alter re
 
 Verification for SID-129 reached 179 backend tests and 13 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, all-four-project live Chat smokes, deterministic OpenAI-unavailable coverage, and the browser/API/rendering flow passed.
 
+## 17.28 Shared Calendar Time and Free-Block Correctness
+
+SID-130 establishes `backend/app/calendar_time.py` as the shared temporal contract for Calendar-derived Today and Chat planning state.
+
+The contract normalizes the supplied current time and every usable event timestamp into the configured user timezone before comparison, filtering, sorting, duration calculation, or display. It produces one remaining-today event set, one blocking-event set, the next future commitment, minutes until that commitment, the current usable free block, and the current-or-next free block used by Chat planning.
+
+Blocking semantics are explicit: an event consumes time only when it is busy, timed rather than all-day, and not informational. All-day and informational events remain visible in remaining-today state without consuming the day. Social events remain timed commitments when marked busy. Malformed or non-positive event intervals are excluded from temporal reasoning rather than receiving an invented timestamp.
+
+Today now consumes this contract instead of maintaining separate event filtering, next-event, and current-free-block calculations. During an ongoing blocking commitment, Today returns no current free block. Chat's planner delegates its free-block calculation to the same contract, and deterministic Calendar answers normalize UTC provider timestamps into the configured timezone before presenting event times.
+
+Regression coverage first reproduced both historical trust failures at the requested baseline: Today claimed a 375-minute current block during an ongoing event, and Chat represented a 6:30 PM Chicago event/free-block boundary as 11:30 PM UTC. The fixed end-to-end tests now prevent both failures. Dedicated contract tests also cover exact 45-minute approaching-event math, UTC-to-Chicago normalization, ongoing commitments, and visible-but-nonblocking informational/all-day events.
+
+SID-130 does not begin SID-127 Today shared-intelligence migration, SID-132 connected-state conversation behavior, SID-131 reconnect UX, Calendar provider replacement, Finance, or SID-227 redesign.
+
+Verification for SID-130 reached 184 backend tests and 13 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, and `git diff --check` passed.
+
 ---
 
 # 18. Current Verification History
@@ -3622,6 +3638,7 @@ Recorded development checkpoints include:
 | Scoped project dependency metrics | 168 tests passing | 10 frontend tests and build passing | Passing |
 | Responsive Project Brain collection bounds | 168 tests passing | 13 frontend tests and build passing | Passing |
 | Project Brain-grounded Chat questions | 179 tests passing | 13 frontend tests and build passing | Passing |
+| Shared Calendar time and free-block correctness | 184 tests passing | 13 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -3630,6 +3647,7 @@ The current backend test suite includes:
 - `backend/tests/test_agent_examples.py`
 - `backend/tests/test_app_surfaces.py`
 - `backend/tests/test_calendar_intelligence.py`
+- `backend/tests/test_calendar_time.py`
 - `backend/tests/test_project_brain_service.py`
 - `backend/tests/test_project_registry.py`
 - `backend/tests/test_recommendation_service.py`
@@ -6058,7 +6076,7 @@ Calendar correctness and provider availability are foundational because incorrec
 
 ## Issue: Harden Calendar Time and Free-Block Correctness
 
-**Status:** In Progress
+**Status:** Completed
 
 **Priority:** Urgent
 
@@ -6077,7 +6095,9 @@ Calendar-derived intelligence must use one trustworthy temporal model.
 
 **Current repository audit:**
 
-The current tests already cover past-event filtering, a 45-minute free block, all-day behavior, and timezone-sensitive Calendar cases. Shared normalization across every Today and Chat path is not complete, so the outcome remains in progress rather than done.
+`backend/app/calendar_time.py` is the shared time-normalization, remaining-today, blocking-event, next-event, minutes-until-event, and free-block contract consumed by Today and Chat planning. Event and current timestamps are normalized into the configured user timezone before reasoning. Busy timed events block; all-day and informational events remain visible but do not consume free time.
+
+Regression tests reproduce and prevent both historical failure classes: a free block cannot be reported as current during an ongoing commitment, and an approaching event supplied in UTC is represented with the correct user-local time and 45-minute distance. The full SID-130 checkpoint reached 184 backend tests and 13 frontend tests passing, with Python compilation, the frontend production build, and `git diff --check` passing.
 
 **Dependencies / blockers:**
 

@@ -3643,6 +3643,30 @@ SID-143 does not begin Gmail OAuth, live personal or A&M reads, importance class
 
 Verification for SID-143 reached 226 backend tests and 21 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, and `git diff --check` passed.
 
+## 17.33 Isolated Personal Gmail Read Provider
+
+SID-144's credential-free implementation establishes `backend/app/gmail_client.py` as the isolated Personal Gmail read boundary. It reuses SID-143's Personal account, provider-account, message, and thread identity types but does not add Gmail logic to `main.py`, `agent.py`, or `email_domain.py`. The only application integration is a redacted `personal_email` entry in Settings health.
+
+The credential contract is separate from production Calendar OAuth. Personal Gmail reads use `PERSONAL_EMAIL_GOOGLE_REFRESH_TOKEN`; they never read or replace `GOOGLE_REFRESH_TOKEN`. A Personal Email-specific Desktop client ID and secret are supported, with the existing Google client available only as an explicit fallback. An optional ignored `PERSONAL_EMAIL_EXPECTED_ADDRESS` enables wrong-account detection, but neither the expected nor authenticated address appears in health responses, verification output, fixtures, logs, or committed configuration.
+
+The only requested Gmail scope is `https://www.googleapis.com/auth/gmail.readonly`. Runtime connection rejects missing credentials, refresh failures, wrong-account results, and any known granted scope set that is not exactly that single scope. No `gmail.modify`, `mail.google.com`, compose, send, insert, settings, or label-write scope exists in the implementation.
+
+The client exposes read-only profile health, bounded recent-message listing, exact thread retrieval, label listing, and case-insensitive label lookup. Default message reads use both `includeSpamTrash=False` and `-in:spam -in:trash`. Message-list pages preserve `nextPageToken`, page count, result-size estimate, completeness, and truncation. Full message details are fetched deliberately only within the caller's maximum of 100 records; pagination also has a hard page bound. The label path discovers the existing target label without enumerating the roughly 2.1K messages associated with it.
+
+Normalized message records preserve opaque stable Personal account identity, Gmail message/thread IDs, sender and recipient header facts, subject, provider internal time, parsed message time, labels, unread state, bounded snippet, bounded analyzable body text, attachment metadata, and provider metadata. MIME parsing safely decodes URL-safe base64, walks nested multipart structures, prefers `text/plain`, converts bounded HTML as a fallback, records malformed part/date/body diagnostic codes, and never downloads attachment contents.
+
+Provider results distinguish `not_configured`, `connected`, `authentication_failure`, `provider_failure`, `malformed_response`, and `connected_empty`. Diagnostics and the live verification helper report only states, error codes, counts, booleans, and structural evidence. Raw addresses, subjects, bodies, refresh tokens, client secrets, message IDs, and thread IDs are never printed by these paths.
+
+`backend/scripts/personal_email_oauth_setup.py` uses Google's Desktop InstalledAppFlow with a random local loopback port, `prompt=consent`, offline access, and `include_granted_scopes=false`. It verifies the exact scope and the Gmail profile before writing the refresh token directly to ignored `backend/.env`, never prints the token, writes only `PERSONAL_EMAIL_GOOGLE_REFRESH_TOKEN`, preserves Calendar configuration, and sets owner-only file permissions. `backend/scripts/verify_personal_email.py` is the redacted live gate for profile, health, a three-message bounded read, one exact real thread, labels, target-label discovery, pagination metadata, MIME/attachment structure, and zero writes.
+
+Google currently classifies `gmail.readonly` as a restricted scope. `gmail.metadata` is insufficient because it cannot return body content and does not support the required query behavior. A Google Cloud project must enable the Gmail API and declare the exact scope under Google Auth Platform Data Access. External apps in Testing must add the Personal account as a test user, show a tester warning, and issue refresh tokens that expire after seven days. A durable In Production connection requires the applicable Google verification path; storing or transmitting restricted-scope data on servers may also trigger a security assessment. A separate Gmail development/project client is preferred so adding a restricted scope cannot disturb the production Calendar OAuth configuration.
+
+Credential-free coverage verifies exact scope isolation, Calendar-token separation, missing configuration, refresh/authentication failure, HTTP/provider failure, malformed profile/detail/thread/label results, wrong-account redaction, connected-empty state, identity and header preservation, timestamps, labels/unread state, snippets, multipart plain/HTML selection, malformed base64 diagnostics, body bounds, attachment metadata without downloads, pagination and continuation, query/label filters, Spam/Trash exclusion, health privacy, Settings integration, secure env writing, and the absence of persistence or mutation methods.
+
+SID-144 does not begin importance classification, Today/UI work, task or Calendar proposals, durable actions, inbox organization, mailbox writes, Memory ingestion, database persistence, background polling, attachment downloads, Gmail filters, other accounts, Superhuman integration, or Calendar OAuth changes.
+
+The credential-free SID-144 checkpoint reached 242 backend tests and 21 frontend tests passing. Python compilation across app/scripts/tests, the Next.js 15.5.19 production build, `git diff --check`, implementation-scope scanning, and secret/address scanning passed. SID-144 remains In Progress until the redacted authenticated Personal Gmail verification completes successfully.
+
 ---
 
 # 18. Current Verification History
@@ -3675,6 +3699,7 @@ Recorded development checkpoints include:
 | Connected-state Calendar Chat grounding | 205 tests passing | 16 frontend tests and build passing | Passing |
 | Tasks projection over shared recommendations | 213 tests passing | 21 frontend tests and build passing | Passing |
 | Provider-neutral Email Attention domain | 226 tests passing | 21 frontend tests and build passing | Passing |
+| Personal Gmail read provider (credential-free) | 242 tests passing | 21 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -3694,12 +3719,13 @@ The current backend test suite includes:
 - `backend/tests/test_project_work_packages.py`
 - `backend/tests/test_tasks_projection.py`
 - `backend/tests/test_email_domain.py`
+- `backend/tests/test_gmail_provider.py`
 
 Common verification commands are:
 
 ```bash
 backend/.venv/bin/python -m unittest discover backend/tests
-backend/.venv/bin/python -m compileall -q backend/app backend/tests
+backend/.venv/bin/python -m compileall -q backend/app backend/scripts backend/tests
 cd frontend
 npm test
 npm run build
@@ -6784,7 +6810,7 @@ SID-150 remains required before a later email proposal can become a durable conf
 
 ## Issue: Connect Personal Email
 
-**Status:** Todo
+**Status:** In Progress (credential-free implementation complete; authenticated read pending)
 
 **Priority:** High
 
@@ -6798,11 +6824,13 @@ The first implementation should prioritize read intelligence over broad email wr
 
 **Dependencies / blockers:**
 
-Email Attention Model.
+Email Attention Model. Completed by SID-143.
 
-Provider authentication design.
+Credential-independent provider and authentication design are implemented.
 
 Background execution foundation for proactive monitoring. Initial connection and read validation can proceed before that runtime; continuous monitoring cannot.
+
+The remaining completion gate is external Google OAuth configuration and one real authenticated Personal Gmail read. If the Google project remains External/Testing, the Personal account must be allowlisted as a test user and the refresh token will expire after seven days. Durable production use requires the applicable restricted-scope verification path.
 
 **Acceptance criteria:**
 
@@ -6817,6 +6845,21 @@ Background execution foundation for proactive monitoring. Initial connection and
 - Relevant body content can be analyzed.
 - Provider failures are isolated.
 - Email data is not copied into Memory by default.
+
+**Credential-free implementation evidence:**
+
+- Separate Personal Email token/configuration path preserves production Calendar OAuth.
+- Only `gmail.readonly` is requested; write, delete, compose, send, insert, settings, filter, and label-write capabilities are absent.
+- Profile health, bounded recent reads, exact threads, label discovery/lookup, pagination metadata, normalization, MIME parsing, redacted diagnostics, secure Desktop OAuth setup, and redacted live verification are implemented.
+- No persistence, classification, UI, Memory ingestion, attachment downloads, background work, other accounts, or mailbox mutation was added.
+- 242 backend tests, 21 frontend tests, production build, Python compilation, diff check, and privacy/scope scans pass.
+
+**Live completion gate:**
+
+- Enable the Gmail API in the selected Google Cloud project.
+- Configure exactly `https://www.googleapis.com/auth/gmail.readonly` in Google Auth Platform Data Access.
+- Use a Desktop OAuth client and a separate Personal Email refresh token.
+- Pass redacted verification of profile/health, a small recent-message page, one real thread, labels/target lookup, pagination metadata, and zero writes.
 
 ---
 
@@ -8995,11 +9038,12 @@ Implemented systems include:
 - durable Linear project-to-canonical-project mappings;
 - mapped Linear Project Brain ingestion and Project Work Packages;
 - provider-neutral Email Attention and Action Candidate domain model;
+- credential-free Personal Gmail read provider, secure Desktop OAuth setup, and redacted live verifier (authenticated connection pending);
 - local startup and shutdown scripts.
 
 “Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, confirmation still has a legacy process-global path, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
 
-The provider-neutral Email Attention checkpoint reached 226 backend tests and 21 frontend tests passing, with Python compilation, the Next.js 15.5.19 production build, and `git diff --check` passing. The mapped Linear Project Brain checkpoint reached 149 backend tests and 3 frontend presentation tests passing, with compilation, build, diff, ignored-secret, exact-project live-read, and grounded-package checks passing. Earlier 8-, 56-, 75-, 85-, 86-, 90-, 95-, 100-, 113-, 129-, and 134-test checkpoints remain recorded as implementation history rather than current feature claims.
+The credential-free Personal Gmail checkpoint reached 242 backend tests and 21 frontend tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, implementation-scope scanning, and secret/address scanning passing. It is not documented as live-connected until the authenticated read gate passes. The provider-neutral Email Attention checkpoint reached 226 backend tests and 21 frontend tests passing. The mapped Linear Project Brain checkpoint reached 149 backend tests and 3 frontend presentation tests passing. Earlier checkpoints remain recorded as implementation history rather than current feature claims.
 
 The current product is not yet the full Personal Operating System described in the vision.
 

@@ -12,6 +12,7 @@ from .calendar_tools import check_google_auth, categories_conflict, list_upcomin
 from .config import get_settings
 from .dependency_evaluator import DependencySummary, EvaluatedDependencyEvidence
 from .linear_client import LinearClient
+from .gmail_client import personal_email_health_payload
 from .project_brain import project_brain_service
 from .project_work_packages import LinearProjectDiagnostic, ProjectWorkPackage
 from .storage import (
@@ -426,6 +427,7 @@ def settings_health(authorization: str | None = Header(default=None)) -> dict[st
         "checks": {
             "todoist": _todoist_health(settings),
             "google_calendar": _google_calendar_health(settings),
+            "personal_email": personal_email_health_payload(settings),
             "openai": _openai_health(settings),
             "linear": _linear_health(settings),
         },

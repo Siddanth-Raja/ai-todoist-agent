@@ -927,8 +927,8 @@ class AgentExampleTests(unittest.TestCase):
         self.assertIn("Shake Shack Interview", response["answer"])
         self.assertIn("2:00 PM", response["answer"])
         self.assertIn("2:30 PM", response["answer"])
-        self.assertIn("11:00 AM", response["answer"])
-        self.assertIn("You probably don't need to wake up extremely early", response["answer"])
+        self.assertIn("not enough evidence", response["answer"])
+        self.assertNotIn("11:00 AM", response["answer"])
         self.assertNotIn("check your schedule", response["answer"].lower())
         self.assertIsNone(response["conversation_state"]["awaiting"])
 
@@ -968,11 +968,14 @@ class AgentExampleTests(unittest.TestCase):
             )
 
         llm_mock.assert_not_called()
-        self.assertIn("multiple interview events", response["answer"])
+        self.assertIn("multiple plausible matches", response["answer"])
         self.assertIn("Shake Shack Interview", response["answer"])
         self.assertIn("Recruiter Interview", response["answer"])
         self.assertIn("Which one do you mean?", response["answer"])
-        self.assertEqual(response["conversation_state"]["awaiting"], "event_detail")
+        self.assertEqual(
+            response["conversation_state"]["awaiting"],
+            "calendar_match_clarification",
+        )
 
     def test_no_interview_found_asks_for_event_details(self):
         with patch("app.agent._get_llm_decision") as llm_mock:
@@ -983,9 +986,143 @@ class AgentExampleTests(unittest.TestCase):
             )
 
         llm_mock.assert_not_called()
-        self.assertIn("I could not find an interview tomorrow", response["answer"])
-        self.assertIn("What time is it?", response["answer"])
+        self.assertIn("Calendar is connected", response["answer"])
+        self.assertIn("could not find an interview event tomorrow", response["answer"])
+        self.assertIn("what time should I use?", response["answer"])
         self.assertEqual(response["conversation_state"]["awaiting"], "event_detail")
+
+    def test_calendar_provider_failure_is_not_reported_as_connected_empty(self):
+        failure = CalendarReadResult(
+            events=[],
+            error="Google Calendar token refresh failed.",
+        )
+        with patch("app.agent.list_todays_events", return_value=failure), patch(
+            "app.agent.list_upcoming_events",
+            return_value=failure,
+        ), patch("app.agent._get_llm_decision") as llm_mock:
+            response = handle_chat(
+                "What time is my interview tomorrow?",
+                self.now,
+                session_id="calendar-provider-failure",
+            )
+
+        llm_mock.assert_not_called()
+        self.assertIn("Calendar is unavailable", response["answer"])
+        self.assertNotIn("could not find", response["answer"].lower())
+        self.assertEqual(
+            response["conversation_state"]["context"]["calendar_grounding_state"],
+            "provider_unavailable",
+        )
+        self.assertIn("Google Calendar token refresh failed.", response["errors"])
+
+    def test_generic_calendar_title_lookup_is_not_limited_to_closed_event_kinds(self):
+        event = {
+            "id": "event-product-council",
+            "title": "Product Council",
+            "start": "2026-06-05T19:00:00Z",
+            "end": "2026-06-05T20:00:00Z",
+            "busy": True,
+            "event_type": "hard",
+        }
+        with patch(
+            "app.agent.list_todays_events",
+            return_value=CalendarReadResult(events=[]),
+        ) as today_mock, patch(
+            "app.agent.list_upcoming_events",
+            return_value=CalendarReadResult(events=[event]),
+        ) as upcoming_mock, patch(
+            "app.agent._get_llm_decision",
+            side_effect=AssertionError("connected Calendar lookup reached OpenAI"),
+        ):
+            response = handle_chat(
+                "What time is Product Council tomorrow?",
+                self.now,
+                session_id="generic-calendar-title",
+            )
+
+        self.assertIn("Product Council", response["answer"])
+        self.assertIn("2:00 PM", response["answer"])
+        today_mock.assert_called_once()
+        upcoming_mock.assert_called_once()
+        self.assertEqual(
+            response["conversation_state"]["context"]["calendar_grounding_state"],
+            "exact_match",
+        )
+
+    def test_ambiguous_generic_calendar_matches_request_grounded_clarification(self):
+        events = [
+            {
+                "id": "event-design-review-one",
+                "title": "Design Review — XO",
+                "start": "2026-06-05T15:00:00-05:00",
+                "end": "2026-06-05T15:30:00-05:00",
+                "busy": True,
+                "event_type": "hard",
+            },
+            {
+                "id": "event-design-review-two",
+                "title": "Design Review — Nebulo",
+                "start": "2026-06-05T17:00:00-05:00",
+                "end": "2026-06-05T17:30:00-05:00",
+                "busy": True,
+                "event_type": "hard",
+            },
+        ]
+        with patch(
+            "app.agent.list_upcoming_events",
+            return_value=CalendarReadResult(events=events),
+        ), patch(
+            "app.agent._get_llm_decision",
+            side_effect=AssertionError("ambiguous Calendar lookup reached OpenAI"),
+        ):
+            response = handle_chat(
+                "When is Design Review tomorrow?",
+                self.now,
+                session_id="ambiguous-calendar-title",
+            )
+
+        self.assertIn("Design Review — XO", response["answer"])
+        self.assertIn("Design Review — Nebulo", response["answer"])
+        self.assertIn("Which one do you mean?", response["answer"])
+        self.assertEqual(
+            response["conversation_state"]["context"]["calendar_grounding_state"],
+            "ambiguous_match",
+        )
+
+    def test_exact_calendar_match_preserves_subject_for_followup(self):
+        event = {
+            "id": "event-product-council",
+            "title": "Product Council",
+            "start": "2026-06-05T14:00:00-05:00",
+            "end": "2026-06-05T15:00:00-05:00",
+            "location": "Design Studio",
+            "busy": True,
+            "event_type": "hard",
+        }
+        with patch(
+            "app.agent.list_upcoming_events",
+            return_value=CalendarReadResult(events=[event]),
+        ), patch(
+            "app.agent._get_llm_decision",
+            side_effect=AssertionError("Calendar follow-up reached OpenAI"),
+        ):
+            first = handle_chat(
+                "What time is Product Council tomorrow?",
+                self.now,
+                session_id="calendar-subject-followup",
+            )
+            second = handle_chat(
+                "Where is it?",
+                self.now,
+                session_id="calendar-subject-followup",
+            )
+
+        self.assertEqual(
+            first["conversation_state"]["context"]["event_title"],
+            "Product Council",
+        )
+        self.assertIn("Design Studio", second["answer"])
+        self.assertIn("Product Council", second["answer"])
 
     def test_time_after_no_interview_found_is_used_as_event_detail(self):
         handle_chat(
@@ -999,8 +1136,8 @@ class AgentExampleTests(unittest.TestCase):
 
         llm_mock.assert_not_called()
         self.assertIn("6:00 PM", response["answer"])
-        self.assertIn("You probably don't need to wake up extremely early", response["answer"])
-        self.assertNotIn("Your your interview", response["answer"])
+        self.assertIn("user-provided rather than provider-grounded", response["answer"])
+        self.assertNotIn("wake up", response["answer"])
         self.assertIsNone(response["conversation_state"]["awaiting"])
 
     def test_vague_yes_after_calendar_lookup_question_searches_calendar(self):
@@ -1940,7 +2077,7 @@ class AgentExampleTests(unittest.TestCase):
 
         self.assertEqual(response["free_block"]["duration_minutes"], 45)
         self.assertEqual(response["free_block"]["end"], "2026-06-05T18:30:00-05:00")
-        self.assertIn("6:30 PM", response["answer"])
+        self.assertIn("6:30 pm", response["answer"].lower())
 
     def test_next_response_can_resolve_pending_action(self):
         pending_action = {
@@ -2035,6 +2172,36 @@ class AgentExampleTests(unittest.TestCase):
                 )
 
         self.assertEqual(response["intent"], "plan")
+
+    def test_chat_endpoint_returns_calendar_grounding_without_openai(self):
+        event = {
+            "id": "endpoint-product-council",
+            "title": "Product Council",
+            "start": "2026-06-05T19:00:00Z",
+            "end": "2026-06-05T20:00:00Z",
+            "busy": True,
+            "event_type": "hard",
+        }
+        with patch("app.main.get_settings", return_value=FakeSettings()), patch(
+            "app.agent.list_upcoming_events",
+            return_value=CalendarReadResult(events=[event]),
+        ), patch("app.agent._get_llm_decision") as llm_mock:
+            response = chat(
+                ChatRequest(
+                    message="What time is Product Council tomorrow?",
+                    session_id="endpoint-calendar-grounding",
+                    current_time=self.now,
+                ),
+                authorization="Bearer test-agent-key",
+            )
+
+        llm_mock.assert_not_called()
+        self.assertIn("Product Council", response["answer"])
+        self.assertIn("2:00 PM", response["answer"])
+        self.assertEqual(
+            response["conversation_state"]["context"]["calendar_grounding_state"],
+            "exact_match",
+        )
 
     def _decision(
         self,

@@ -3562,7 +3562,7 @@ SID-129 makes the existing Project Brain snapshot authoritative for supported pr
 - selects already-computed summary, recommendation, dependency evidence, Work Package, people, Memory, and provider-diagnostic fields;
 - returns deterministic grounded copy and evidence without calling OpenAI or performing writes.
 
-The `agent.py` integration is intentionally thin. It runs after existing confirmation, bulk-roadmap, conversation-follow-up, and Calendar-question routing, and before the OpenAI/fallback branch. Existing Chat response fields remain unchanged. Project answers retain the existing planner payload and Calendar summary, while the session context stores only the resolved canonical project key for a later question such as `Who is involved in this project?`
+The `agent.py` integration is intentionally thin. It runs after existing confirmation, bulk-roadmap, and focused Calendar grounding, and before the OpenAI/fallback branch. Existing Chat response fields remain unchanged. Project answers retain the existing planner payload and Calendar summary, while the session context stores only the resolved canonical project key for a later question such as `Who is involved in this project?`
 
 A generic `What should I work on right now?` continues to use the global planner unless the message explicitly names a canonical project or the active conversation supplies one unambiguously. Unknown projects and questions naming multiple projects receive deterministic clarification rather than a guessed match.
 
@@ -3615,6 +3615,20 @@ SID-127 does not begin Tasks recommendation migration, generic Calendar Chat gro
 
 Verification for SID-127 reached 190 backend tests and 16 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, `git diff --check`, a live authenticated `/today` API smoke, and a headless Chrome render of the unchanged Today route passed.
 
+## 17.30 Connected-State Calendar Chat Grounding
+
+SID-132 extracts Calendar question detection, provider-state interpretation, normalized date/title matching, response construction, and Calendar follow-up context from `backend/app/agent.py` into `backend/app/calendar_chat_grounding.py`. The agent remains the provider-read owner and passes the already-retrieved today and upcoming `CalendarReadResult` values into the focused service; the service performs no duplicate provider read.
+
+The service returns one explicit state: `provider_unavailable`, `connected_no_match`, `exact_match`, or `ambiguous_match`. Provider/authentication errors and malformed event responses preserve their diagnostic and never masquerade as a connected empty result. Connected empty results say Calendar is connected but no match was found. Exact results answer from Calendar without OpenAI, and multiple plausible results list normalized candidates and request clarification rather than guessing.
+
+Lookup is no longer limited to the historical interview/meeting vocabulary. Generic title and date evidence can resolve events such as Product Council or Design Review, while known aliases remain useful for interview-style questions. Exact and ambiguous results preserve event subject, provider ID, target date, and candidate context for deterministic follow-ups. SID-130's `normalize_event` and `parse_event_datetime` contract owns UTC/local conversion and event-time comparison, including ongoing events.
+
+Calendar facts remain separate from practical assumptions. The historical interview answer now states the connected event time and explicitly says Calendar alone cannot determine a wake, travel, or preparation time without user assumptions. Calendar create/move/update requests still bypass read grounding and continue through the existing confirmation/write path. Project Chat grounding and generic planner behavior retain their existing order and response payloads.
+
+SID-132 does not begin reconnect UX, OAuth observation work, Tasks migration, iCloud/provider replacement, Finance, Habits, Email Intelligence, or redesign.
+
+Verification for SID-132 reached 205 backend tests and 16 frontend tests passing. Focused service, Chat, endpoint, provider-failure, connected-empty, exact, ambiguous, follow-up, UTC/local, ongoing-event, malformed-response, write-bypass, Project Chat, and planner regressions passed. Python compilation, the Next.js 15.5.19 production build, frontend tests, and `git diff --check` passed. A privacy-safe authenticated runtime returned HTTP 200 with `provider_unavailable` plus the exact disconnected diagnostic, and the `/chat` UI route compiled and returned HTTP 200 with meaningful content. Headless Chrome approval timed out twice, so no visual-browser success is claimed.
+
 ---
 
 # 18. Current Verification History
@@ -3644,6 +3658,7 @@ Recorded development checkpoints include:
 | Project Brain-grounded Chat questions | 179 tests passing | 13 frontend tests and build passing | Passing |
 | Shared Calendar time and free-block correctness | 184 tests passing | 13 frontend tests and build passing | Passing |
 | Today projection over shared intelligence | 190 tests passing | 16 frontend tests and build passing | Passing |
+| Connected-state Calendar Chat grounding | 205 tests passing | 16 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -3652,6 +3667,7 @@ The current backend test suite includes:
 - `backend/tests/test_agent_examples.py`
 - `backend/tests/test_app_surfaces.py`
 - `backend/tests/test_calendar_intelligence.py`
+- `backend/tests/test_calendar_chat_grounding.py`
 - `backend/tests/test_calendar_time.py`
 - `backend/tests/test_project_brain_service.py`
 - `backend/tests/test_project_registry.py`
@@ -4109,7 +4125,7 @@ Regression tests should cover the exact historical failure classes.
 
 ## 20.3 Chat Has Produced Generic Advice Despite Connected Calendar State
 
-**Status:** Partially fixed; regression risk remains
+**Status:** Fixed by SID-132; regression coverage required
 
 Observed failure: PCOS gave generic interview preparation advice and told the user to check the schedule instead of answering from the connected calendar.
 
@@ -4121,14 +4137,14 @@ The system effectively told the user to manually inspect a provider PCOS was sup
 
 This is an orchestration and grounding problem.
 
-Date-scoped exact event lookup and terse follow-up handling are now implemented and covered by tests, so the original failure is partially fixed. The broader path still does not consistently distinguish disconnected-provider state from empty or unmatched state, and model fallbacks remain a regression risk.
+Calendar Chat grounding now consumes the already-retrieved provider results through a focused service and distinguishes unavailable, connected-no-match, exact, and ambiguous state before any OpenAI fallback. Date/title lookup and terse follow-up context are deterministic and use SID-130 normalization.
 
-Possible contributing architecture includes:
+The fixed architecture addresses the contributing failures through:
 
-- insufficient retrieval of relevant events;
-- weak follow-up context handling;
-- model fallback behavior;
-- provider state not being injected into the relevant decision path.
+- explicit today/upcoming provider results and diagnostics;
+- preserved event subject, target date, and candidate context;
+- deterministic exact/ambiguous response construction before model fallback;
+- malformed-provider handling that cannot be confused with an empty Calendar.
 
 ### Required behavior
 
@@ -6163,7 +6179,7 @@ Deployment direction may affect redirect URI and credential storage decisions.
 
 ## Issue: Fix Connected-State Grounding in Calendar Conversations
 
-**Status:** In Progress
+**Status:** Completed (SID-132)
 
 **Priority:** High
 
@@ -6183,7 +6199,7 @@ The correct behavior is:
 
 **Current repository audit:**
 
-Date-scoped exact event lookup and terse follow-up resolution are implemented and tested. The disconnected-provider distinction and full orchestration guarantee in the acceptance criteria are not complete, so the issue remains in progress.
+`backend/app/calendar_chat_grounding.py` owns date/title/context interpretation and returns explicit provider-unavailable, connected-no-match, exact-match, or ambiguous-match state over the Calendar results already retrieved by `agent.py`. The historical interview failure, disconnected-provider distinction, generic titles, multiple matches, conversation follow-ups, malformed events, OpenAI-unavailable lookup, and write/planner/project-routing boundaries are implemented and tested.
 
 **Dependencies / blockers:**
 
@@ -8414,6 +8430,8 @@ Linear semantics will differ.
 Contains Google OAuth construction, Calendar API access, event normalization, event creation, event updates, and Calendar category behavior.
 
 Time normalization and blocking behavior should remain centralized.
+
+`backend/app/calendar_chat_grounding.py` consumes `CalendarReadResult` values already retrieved by the agent and uses the SID-130 normalization helpers for read-only conversational event grounding. It does not own OAuth, provider reads, Calendar writes, conflict analysis, or reconnect UX.
 
 ## 52.6 Calendar Intelligence
 

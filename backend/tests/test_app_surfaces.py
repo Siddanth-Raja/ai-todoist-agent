@@ -4,11 +4,13 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -104,21 +106,12 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         seeded_again = main.memory_index(authorization=self.authorization)
         self.assertEqual(len(seeded_again), len(DEFAULT_MEMORIES))
 
-    def test_confirm_rejects_non_executable_pending_action(self):
-        with self.assertRaises(HTTPException) as exc:
-            main.confirm(
-                main.ConfirmRequest(
-                    session_id="test-session",
-                    pending_action={
-                        "type": "resolve_calendar_conflict",
-                        "details": {"options": ["move gym", "keep calendar unchanged"]},
-                    },
-                ),
-                authorization=self.authorization,
+    def test_confirm_rejects_legacy_dictionary_contract(self):
+        with self.assertRaises(ValidationError):
+            main.ConfirmRequest(
+                session_id="test-session",
+                pending_action={"type": "resolve_calendar_conflict"},
             )
-
-        self.assertEqual(exc.exception.status_code, 400)
-        self.assertIn("not executable", exc.exception.detail)
 
     def test_memory_crud_and_activity_log(self):
         initial_count = len(main.memory_index(authorization=self.authorization))
@@ -861,17 +854,33 @@ class AppSurfaceEndpointTests(unittest.TestCase):
             "mode": "ai_agent",
             "errors": [],
         }
-        pending_action = {"type": "update_calendar_event", "details": {"event_id": "event-gym"}}
+        fingerprint = "a" * 64
         with patch("app.main.confirm_pending_action", return_value=confirm_payload):
             main.confirm(
-                main.ConfirmRequest(session_id="test-session", pending_action=pending_action),
+                main.ConfirmRequest(
+                    session_id="test-session",
+                    action_id="action-confirmed",
+                    expected_version=1,
+                    fingerprint=fingerprint,
+                ),
                 authorization=self.authorization,
             )
 
-        main.confirm_cancel(
-            main.ConfirmCancelRequest(session_id="test-session", pending_action=pending_action),
-            authorization=self.authorization,
+        cancelled = SimpleNamespace(
+            action_id="action-cancelled",
+            confirmation_prompt="Move gym?",
+            lifecycle=SimpleNamespace(value="cancelled"),
         )
+        with patch.object(main.pending_action_service, "cancel", return_value=cancelled):
+            main.confirm_cancel(
+                main.ConfirmCancelRequest(
+                    session_id="test-session",
+                    action_id="action-cancelled",
+                    expected_version=1,
+                    fingerprint=fingerprint,
+                ),
+                authorization=self.authorization,
+            )
 
         activity_types = {item["type"] for item in main.activity_index(authorization=self.authorization)}
         self.assertIn("confirmation_completed", activity_types)

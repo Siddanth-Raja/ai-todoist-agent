@@ -15,6 +15,10 @@ import {
   X,
 } from "lucide-react";
 import { readAgentSettings } from "@/lib/settings";
+import {
+  getOrCreateChatSessionId,
+  pendingActionReference,
+} from "@/lib/pending-action";
 
 type JsonRecord = Record<string, unknown>;
 type ChatAction = JsonRecord;
@@ -44,6 +48,12 @@ type ConversationItem = {
 
 const CHAT_HISTORY_KEY = "pcos.chatHistory";
 const MAX_CHAT_HISTORY_ITEMS = 80;
+
+function newClientId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random()}`;
+}
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -445,9 +455,11 @@ function ConfirmationCard({
   const details = confirmationDetails(response);
   const project = confirmationProject(response);
   const isExecutable = pendingType
-    ? [
+      ? [
         "create_calendar_event",
         "create_todoist_task",
+        "create_todoist_subtask",
+        "create_many_todoist_tasks",
         "update_calendar_event",
         "create_many_todoist_subtasks",
       ].includes(pendingType)
@@ -586,14 +598,14 @@ export function ChatPanel() {
   const [isSending, setIsSending] = useState(false);
   const [confirmingItemId, setConfirmingItemId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const sessionIdRef = useRef<string>(
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random()}`,
-  );
+  const sessionIdRef = useRef<string>(newClientId());
 
   const hasConversation = items.length > 0;
   const canSend = useMemo(() => input.trim().length > 0 && !isSending, [input, isSending]);
+
+  useEffect(() => {
+    sessionIdRef.current = getOrCreateChatSessionId(localStorage, newClientId);
+  }, []);
 
   useEffect(() => {
     try {
@@ -625,16 +637,58 @@ export function ChatPanel() {
     );
   }, [historyLoaded, items]);
 
+  useEffect(() => {
+    if (!historyLoaded) {
+      return;
+    }
+    const settings = readAgentSettings();
+    if (!settings.apiKey) {
+      return;
+    }
+    const controller = new AbortController();
+    const query = new URLSearchParams({ session_id: sessionIdRef.current });
+    void fetch(`${settings.backendUrl}/pending-actions/current?${query}`, {
+      headers: { Authorization: `Bearer ${settings.apiKey}` },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload?.pending_action) {
+          return;
+        }
+        const recoveredId = getString(payload.pending_action, "action_id");
+        if (!recoveredId) {
+          return;
+        }
+        setItems((current) => {
+          const alreadyPresent = current.some(
+            (item) => getString(item.response?.pending_action, "action_id") === recoveredId,
+          );
+          if (alreadyPresent) {
+            return current;
+          }
+          return [
+            ...current,
+            {
+              id: newClientId(),
+              prompt: "Recovered pending action",
+              createdAt: new Date().toISOString(),
+              response: payload as ChatResponse,
+            },
+          ];
+        });
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [historyLoaded]);
+
   async function sendChatMessage(message: string) {
     if (!message || isSending) {
       return;
     }
 
     const settings = readAgentSettings();
-    const itemId =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random()}`;
+    const itemId = newClientId();
     const nextItem: ConversationItem = {
       id: itemId,
       prompt: message,
@@ -693,7 +747,8 @@ export function ChatPanel() {
 
   async function handleConfirm(itemId: string, response: ChatResponse) {
     const pendingAction = response.pending_action;
-    if (!pendingAction || confirmingItemId) {
+    const reference = pendingActionReference(pendingAction);
+    if (!reference || confirmingItemId) {
       return;
     }
 
@@ -713,7 +768,7 @@ export function ChatPanel() {
         },
         body: JSON.stringify({
           session_id: sessionIdRef.current,
-          pending_action: pendingAction,
+          ...reference,
           current_time: new Date().toISOString(),
         }),
       });
@@ -759,28 +814,50 @@ export function ChatPanel() {
   }
 
   async function handleCancel(itemId: string, response: ChatResponse) {
-    setItems((current) =>
-      current.map((item) =>
-        item.id === itemId ? { ...item, confirmationStatus: "cancelled" } : item,
-      ),
-    );
-
     const settings = readAgentSettings();
-    if (!settings.apiKey || !response.pending_action) {
+    const reference = pendingActionReference(response.pending_action);
+    if (!settings.apiKey || !reference) {
       return;
     }
 
-    await fetch(`${settings.backendUrl}/confirm-cancel`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${settings.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        session_id: sessionIdRef.current,
-        pending_action: response.pending_action,
-      }),
-    }).catch(() => null);
+    try {
+      const cancelResponse = await fetch(`${settings.backendUrl}/confirm-cancel`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${settings.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          session_id: sessionIdRef.current,
+          ...reference,
+        }),
+      });
+      const payload = await cancelResponse.json().catch(() => null);
+      if (!cancelResponse.ok) {
+        const detail = payload?.detail ? formatObject(payload.detail) : `HTTP ${cancelResponse.status}`;
+        throw new Error(detail);
+      }
+      setItems((current) =>
+        current.map((item) =>
+          item.id === itemId ? { ...item, confirmationStatus: "cancelled" } : item,
+        ),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to cancel this action.";
+      setItems((current) =>
+        current.map((item) =>
+          item.id === itemId && item.response
+            ? {
+                ...item,
+                response: {
+                  ...item.response,
+                  errors: [...(item.response.errors ?? []), message],
+                },
+              }
+            : item,
+        ),
+      );
+    }
   }
 
   function handleModify(response: ChatResponse) {

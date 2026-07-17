@@ -333,6 +333,12 @@ def _connect() -> sqlite3.Connection:
     return connection
 
 
+def database_connection() -> sqlite3.Connection:
+    """Open the shared application database after idempotent schema setup."""
+    ensure_database()
+    return _connect()
+
+
 def ensure_database() -> None:
     path = _database_path()
     if path in _INITIALIZED_PATHS:
@@ -428,6 +434,46 @@ def ensure_database() -> None:
                     UNIQUE (provider, resource_type, provider_ref),
                     FOREIGN KEY (project_id) REFERENCES canonical_projects(id) ON DELETE CASCADE
                 );
+
+                CREATE TABLE IF NOT EXISTS pending_actions (
+                    id TEXT PRIMARY KEY,
+                    action_type TEXT NOT NULL CHECK(action_type IN (
+                        'create_todoist_task',
+                        'create_todoist_subtask',
+                        'create_many_todoist_tasks',
+                        'create_many_todoist_subtasks',
+                        'create_calendar_event',
+                        'update_calendar_event'
+                    )),
+                    schema_version INTEGER NOT NULL,
+                    payload TEXT NOT NULL,
+                    canonical_project_id TEXT,
+                    provider TEXT NOT NULL CHECK(provider IN ('todoist', 'google_calendar')),
+                    target_references TEXT NOT NULL,
+                    confirmation_prompt TEXT NOT NULL,
+                    evidence TEXT NOT NULL,
+                    payload_fingerprint TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    session_id TEXT,
+                    source TEXT NOT NULL,
+                    source_ref TEXT,
+                    lifecycle TEXT NOT NULL CHECK(lifecycle IN (
+                        'pending', 'executing', 'succeeded', 'failed', 'cancelled',
+                        'expired', 'outcome_unknown'
+                    )),
+                    version INTEGER NOT NULL DEFAULT 1,
+                    proposed_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    confirmed_at TEXT,
+                    execution_started_at TEXT,
+                    completed_at TEXT,
+                    expires_at TEXT,
+                    result TEXT,
+                    failure TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_pending_actions_session_state
+                    ON pending_actions(session_id, lifecycle, proposed_at DESC);
                 """
             )
             _ensure_activity_columns(connection)

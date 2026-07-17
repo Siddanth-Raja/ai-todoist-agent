@@ -1962,9 +1962,13 @@ The backend exposes Memory and Habits `PATCH` and `DELETE` routes but currently 
 
 SID-225 restores valid normalized creation time to `GET /tasks` and makes absent or invalid date values non-fatal. Priority is still interpreted through several incompatible scales across Todoist normalization, planner logic, Today, Project Brain, and deterministic capture. A normalized work model must define one explicit priority contract rather than preserve these accidental translations.
 
-## 14.12 Pending actions are process-local and only partly typed
+## 14.12 Pending actions are typed, durable, and explicitly confirmed
 
-Direct `POST /confirm` execution is implemented, but a legacy process-global pending action remains reachable through affirmative chat messages. Cancellation logs activity without clearing that legacy state, and only selected pending-action variants receive strict field validation. This is acceptable prototype plumbing, not a durable multi-session action model.
+SID-150 replaces the legacy process-global executable pending action with a provider-neutral domain, repository, service, and executor registry. The six existing Todoist and Calendar mutation variants have strict discriminated schemas and immutable stored payloads. SQLite stores opaque action ID, schema version, canonical project ID when known, provider and target references, prompt, evidence, fingerprint, idempotency key, session/source references, lifecycle timestamps, safe result references, and sanitized failure state.
+
+`POST /confirm` and `POST /confirm-cancel` now accept only action ID, expected version, and fingerprint. Confirmation atomically claims a pending record before provider mutation; stale, tampered, expired, cancelled, executing, completed, unknown, and schema-invalid actions cannot execute. Provider success, known failure, partial failure, and uncertain outcome are terminal durable states, so retries are never assumed safe. An authenticated current-pending endpoint plus stable frontend session identity restores an approval card after backend restart or frontend refresh.
+
+Affirmative chat text no longer executes a provider action. The legacy dictionary executor is removed, cancellation changes durable state, and all six existing mutation paths require the explicit Confirm control. The frontend still receives a compatibility preview for rendering, but it sends only the durable action reference back to the API.
 
 ---
 
@@ -5305,7 +5309,7 @@ The recommended sequence for continuing PCOS is:
 10. Implement Linear Provider Connection and Read Adapter.
 11. Feed Linear Work Into Project Brain.
 12. Compute Trustworthy Project Blockers From Linear State across PCOS, XO, Nebulo, and Freelance.
-13. Build Typed and Durable Pending Action Architecture.
+13. Completed in SID-150: Build Typed and Durable Pending Action Architecture.
 14. Add Linear write actions only after read intelligence is trustworthy.
 15. Co-design background execution requirements with Production PCOS Deployment Architecture.
 16. Begin Email Intelligence and repository catch-up ingestion.
@@ -7118,7 +7122,7 @@ Provider jobs should use shared domain services rather than frontend logic.
 
 ## Issue: Build Typed and Durable Pending Action Architecture
 
-**Status:** Todo
+**Status:** Implemented in SID-150
 
 **Priority:** High
 
@@ -7159,6 +7163,29 @@ Persistence design.
 - Legacy process-global pending state is removed or made unreachable.
 - Frontend can retrieve pending action state.
 - Tests cover variant validation, executor dispatch, duplicate prevention, and restart-safe action state at the persistence/service level.
+
+**Current implementation:**
+
+- `backend/app/action_domain.py` defines the six strict, immutable, schema-versioned action payloads and durable lifecycle contract.
+- `backend/app/pending_actions.py` owns additive SQLite persistence, canonical project grounding, idempotency, atomic claim/cancel/finish transitions, tamper detection, restart recovery, and sanitized terminal outcomes.
+- `backend/app/action_executors.py` owns provider dispatch for the six pre-existing Todoist and Google Calendar actions; no new provider action was added.
+- `backend/app/main.py` exposes ID/version/fingerprint confirmation and cancellation plus authenticated current-pending recovery.
+- `frontend/src/lib/pending-action.ts` and Chat preserve a stable local session, recover the current pending action after refresh, and never send the display payload as confirmation authority.
+- `agent.py` remains proposal/orchestration glue. Affirmative chat text cannot execute a mutation, and the old dictionary executor is removed.
+
+**SID-150 verification checkpoint:**
+
+- 285 backend tests passed, including all six variants and executor dispatch, invalid and unknown payloads, immutable payloads, stored-payload tamper detection, restart recovery, current-pending lookup, stale/fingerprint/terminal rejection, cancellation, concurrent and repeated confirmation exactly-once behavior, known provider failure, partial/uncertain outcome, and legacy execution-path rejection.
+- 24 frontend tests passed, including stable refresh identity, durable reference extraction, and rejection of legacy dictionary-only confirmation data.
+- Python compilation passed.
+- Next.js 15.5.19 production build passed.
+- `git diff --check` passed.
+- A local authenticated FastAPI smoke recovered and cancelled a durable synthetic pending action across separate processes and confirmed zero provider writes.
+- Scope/privacy scans confirmed no Gmail action, mailbox mutation, email UI, background scheduler, new provider action, persistence of email bodies, or secret/token field was introduced.
+
+**Explicit SID-150 exclusions preserved:**
+
+No Gmail or mailbox mutations; no SID-229 declutter execution; no new provider actions; no email UI; no recommendation changes; no background scheduler; no multi-user authentication; no broad agent decomposition; no Personal Email classification, persistence, or Memory ingestion changes.
 
 ---
 
@@ -9064,11 +9091,12 @@ Implemented systems include:
 - provider-neutral Email Attention and Action Candidate domain model;
 - authenticated read-only Personal Gmail provider, secure Desktop OAuth setup, and redacted live verifier;
 - deterministic local Personal Email importance and organization analysis with bounded redacted live verification;
+- typed durable pending actions with atomic exactly-once confirmation, cancellation, restart/refresh recovery, and provider-neutral executor dispatch for the six existing Todoist and Calendar mutations;
 - local startup and shutdown scripts.
 
-“Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, confirmation still has a legacy process-global path, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
+“Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, broader conversation context is still process-local, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
 
-The Personal Email analysis checkpoint reached 268 backend tests and 21 frontend tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, exact-scope, secret/address, external-model, mutation, and bounded-live-path scans passing. Its redacted real-account gate analyzed at most 12 recent records, preserved thread deduplication and uncertainty, reported only aggregate categories/counts, and performed zero external-model or provider mutation calls. The Personal Gmail provider checkpoint reached 242 backend tests plus its redacted authenticated read; the provider-neutral Email Attention checkpoint reached 226 backend tests. Earlier checkpoints remain recorded as implementation history rather than current feature claims.
+The SID-150 durable pending-action checkpoint reached 285 backend tests and 24 frontend tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, exact-scope/privacy scans, and a local authenticated recovery/cancellation smoke with zero provider writes. The Personal Email analysis checkpoint reached 268 backend tests and 21 frontend tests passing, with its redacted real-account gate analyzing at most 12 recent records, preserving thread deduplication and uncertainty, reporting only aggregate categories/counts, and performing zero external-model or provider mutation calls. The Personal Gmail provider checkpoint reached 242 backend tests plus its redacted authenticated read; the provider-neutral Email Attention checkpoint reached 226 backend tests. Earlier checkpoints remain recorded as implementation history rather than current feature claims.
 
 The current product is not yet the full Personal Operating System described in the vision.
 

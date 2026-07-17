@@ -1,7 +1,9 @@
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import os
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -260,19 +262,29 @@ MEMORIES = [
 
 class AgentExampleTests(unittest.TestCase):
     def setUp(self):
-        agent.PENDING_ACTION = None
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.env_patch = patch.dict(
+            os.environ,
+            {"APP_DB_PATH": os.path.join(self.tempdir.name, "agent.sqlite3")},
+        )
+        self.env_patch.start()
+        self.addCleanup(self.env_patch.stop)
         agent.CONVERSATION_STATES.clear()
         self.addCleanup(self._clear_pending_action)
         self.now = datetime(2026, 6, 4, 14, 0, tzinfo=ZoneInfo("America/Chicago"))
         self.base_patches = [
             patch("app.agent.get_settings", return_value=FakeSettings()),
             patch("app.agent.list_active_tasks", return_value=TodoistReadResult(tasks=TASKS)),
-            patch("app.agent.list_todoist_sections", return_value=TodoistSectionResult(sections=TODOIST_SECTIONS)),
+            patch(
+                "app.action_executors.list_todoist_sections",
+                return_value=TodoistSectionResult(sections=TODOIST_SECTIONS),
+            ),
             patch("app.agent.list_todays_events", return_value=CalendarReadResult(events=EVENTS)),
             patch("app.agent.list_upcoming_events", return_value=CalendarReadResult(events=EVENTS)),
             patch("app.agent.list_memory_entries", return_value=MEMORIES),
             patch(
-                "app.agent.create_task",
+                "app.action_executors.create_task",
                 return_value=TodoistWriteResult(task={**TASKS[0], "id": "task-created"}),
             ),
         ]
@@ -281,8 +293,33 @@ class AgentExampleTests(unittest.TestCase):
             self.addCleanup(item.stop)
 
     def _clear_pending_action(self):
-        agent.PENDING_ACTION = None
         agent.CONVERSATION_STATES.clear()
+
+    def _confirm_response(self, response):
+        pending = response["pending_action"]
+        return confirm_pending_action(
+            pending["action_id"],
+            pending["version"],
+            pending["fingerprint"],
+            self.now,
+        )
+
+    def _confirm_legacy(self, pending_action):
+        pending_action = {
+            "confirmation_prompt": "Confirm synthetic action?",
+            **pending_action,
+        }
+        record = agent.pending_action_service.propose_legacy(
+            pending_action,
+            session_id="legacy-test-session",
+            source="test",
+        )
+        return confirm_pending_action(
+            record.action_id,
+            record.version,
+            record.payload_fingerprint,
+            self.now,
+        )
 
     def test_plan_now(self):
         with patch("app.agent._get_llm_decision", return_value=(
@@ -340,7 +377,7 @@ class AgentExampleTests(unittest.TestCase):
                 },
             ),
             None,
-        )), patch("app.agent.create_task") as create_task_mock:
+        )), patch("app.action_executors.create_task") as create_task_mock:
             response = handle_chat("I feel lazy, what's one small useful thing I can do?", self.now)
 
         self.assertEqual(response["intent"], "plan")
@@ -364,8 +401,9 @@ class AgentExampleTests(unittest.TestCase):
                 },
             ),
             None,
-        )), patch("app.agent.create_task", return_value=TodoistWriteResult(task=created_task)):
+        )), patch("app.action_executors.create_task", return_value=TodoistWriteResult(task=created_task)):
             response = handle_chat("I need Nike socks", self.now)
+            response = self._confirm_response(response)
 
         self.assertEqual(response["intent"], "capture_task")
         self.assertEqual(response["actions_taken"][0]["type"], "create_todoist_task")
@@ -385,8 +423,9 @@ class AgentExampleTests(unittest.TestCase):
                 action_type="none",
             ),
             None,
-        )), patch("app.agent.create_task", return_value=TodoistWriteResult(task=created_task)):
+        )), patch("app.action_executors.create_task", return_value=TodoistWriteResult(task=created_task)):
             response = handle_chat("I need to buy a new water bottle from Target", self.now)
+            response = self._confirm_response(response)
 
         self.assertEqual(response["intent"], "capture_task")
         self.assertEqual(response["actions_taken"][0]["type"], "create_todoist_task")
@@ -409,8 +448,9 @@ class AgentExampleTests(unittest.TestCase):
                 action_type="none",
             ),
             None,
-        )), patch("app.agent.create_task", return_value=TodoistWriteResult(task=created_task)) as create_task_mock:
+        )), patch("app.action_executors.create_task", return_value=TodoistWriteResult(task=created_task)) as create_task_mock:
             response = handle_chat("buy water bottle from Target", self.now)
+            response = self._confirm_response(response)
 
         create_task_kwargs = create_task_mock.call_args.kwargs
         self.assertEqual(create_task_kwargs["project_name"], "To-Do")
@@ -452,7 +492,7 @@ class AgentExampleTests(unittest.TestCase):
 8. Demo polish"""
         with patch("app.agent.list_active_tasks", return_value=TodoistReadResult(tasks=roadmap_tasks)), patch(
             "app.agent.find_task_by_name", return_value=NEBULO_DEMO_PARENT_TASK
-        ), patch("app.agent.create_task") as create_task_mock, self.assertLogs("app.agent", level="INFO") as logs:
+        ), patch("app.action_executors.create_task") as create_task_mock, self.assertLogs("app.agent", level="INFO") as logs:
             response = handle_chat(message, self.now)
 
         create_task_mock.assert_not_called()
@@ -549,7 +589,7 @@ class AgentExampleTests(unittest.TestCase):
         message = """Break this into subtasks:
 - Merge/verify provider extraction
 - Demo polish"""
-        with patch("app.agent.create_task") as create_task_mock, patch(
+        with patch("app.action_executors.create_task") as create_task_mock, patch(
             "app.agent._get_llm_decision"
         ) as llm_mock, self.assertLogs("app.agent", level="INFO") as logs:
             response = handle_chat(message, self.now)
@@ -614,10 +654,10 @@ class AgentExampleTests(unittest.TestCase):
             {**ROADMAP_CHILD_TASK, "id": "task-workspaces", "content": "Project Workspaces"},
         ]
         with patch("app.agent.list_active_tasks", return_value=TodoistReadResult(tasks=[*TASKS, ROADMAP_PARENT_TASK])), patch(
-            "app.agent.create_many_subtasks",
+            "app.action_executors.create_many_subtasks",
             return_value=TodoistBulkWriteResult(tasks=created, skipped=[]),
         ) as create_many_subtasks_mock:
-            response = confirm_pending_action(pending_action, self.now)
+            response = self._confirm_legacy(pending_action)
 
         create_many_subtasks_mock.assert_called_once()
         self.assertEqual(response["actions_taken"][0]["type"], "create_many_todoist_subtasks")
@@ -642,13 +682,13 @@ class AgentExampleTests(unittest.TestCase):
         }
         created = [{**ROADMAP_CHILD_TASK, "id": "task-calendar", "content": "Calendar Intelligence V1"}]
         with patch("app.agent.list_active_tasks", return_value=TodoistReadResult(tasks=[*TASKS, ROADMAP_PARENT_TASK, ROADMAP_CHILD_TASK])), patch(
-            "app.agent.create_many_subtasks",
+            "app.action_executors.create_many_subtasks",
             return_value=TodoistBulkWriteResult(
                 tasks=created,
                 skipped=[{"content": "Fix confirmation execution", "reason": "duplicate"}],
             ),
         ):
-            response = confirm_pending_action(pending_action, self.now)
+            response = self._confirm_legacy(pending_action)
 
         self.assertEqual(response["actions_taken"][0]["task_count"], 1)
         self.assertEqual(len(response["actions_taken"][0]["skipped"]), 1)
@@ -757,10 +797,11 @@ class AgentExampleTests(unittest.TestCase):
             "end": "2026-06-04T19:00:00-05:00",
         }
         with patch("app.agent._get_llm_decision", side_effect=fake_decision), patch(
-            "app.agent.create_calendar_event",
+            "app.action_executors.create_calendar_event",
             return_value=CalendarWriteResult(event=event),
         ) as create_event_mock:
             response = handle_chat("meeting with Brandon at 6", self.now)
+            response = self._confirm_response(response)
 
         create_event_kwargs = create_event_mock.call_args.kwargs
         self.assertEqual(create_event_kwargs["title"], "Nebulo — Meeting with Brandon")
@@ -812,10 +853,11 @@ class AgentExampleTests(unittest.TestCase):
             ),
             None,
         )), patch(
-            "app.agent.create_calendar_event",
+            "app.action_executors.create_calendar_event",
             return_value=CalendarWriteResult(event=event),
         ) as create_event_mock:
             response = handle_chat("meet with Ashwin and Charlie tomorrow at 4", self.now)
+            response = self._confirm_response(response)
 
         create_event_kwargs = create_event_mock.call_args.kwargs
         self.assertEqual(create_event_kwargs["title"], "XO — Meeting with Ashwin and Charlie")
@@ -853,13 +895,14 @@ class AgentExampleTests(unittest.TestCase):
             ),
             None,
         )), patch(
-            "app.agent.create_calendar_event",
+            "app.action_executors.create_calendar_event",
             return_value=CalendarWriteResult(event=event),
         ), patch(
-            "app.agent.create_task",
+            "app.action_executors.create_task",
             return_value=TodoistWriteResult(task=created_task),
         ) as create_task_mock:
             response = handle_chat("meet with Ashwin and Charlie tomorrow at 4", self.now)
+            response = self._confirm_response(response)
 
         create_task_kwargs = create_task_mock.call_args.kwargs
         self.assertEqual(create_task_kwargs["content"], "Meeting with Ashwin and Charlie")
@@ -893,10 +936,11 @@ class AgentExampleTests(unittest.TestCase):
             ),
             None,
         )), patch(
-            "app.agent.create_calendar_event",
+            "app.action_executors.create_calendar_event",
             return_value=CalendarWriteResult(event=event),
-        ), patch("app.agent.create_task") as create_task_mock:
+        ), patch("app.action_executors.create_task") as create_task_mock:
             response = handle_chat("I want to go gym tomorrow at 2:30", self.now)
+            response = self._confirm_response(response)
 
         create_task_mock.assert_not_called()
         self.assertEqual([action["type"] for action in response["actions_taken"]], ["create_calendar_event"])
@@ -1211,10 +1255,11 @@ class AgentExampleTests(unittest.TestCase):
             "app.agent.list_upcoming_events",
             return_value=CalendarReadResult(events=[today_meeting]),
         ), patch("app.agent._get_llm_decision", side_effect=fake_decision), patch(
-            "app.agent.create_calendar_event",
+            "app.action_executors.create_calendar_event",
             return_value=CalendarWriteResult(event=tomorrow_gym),
         ) as create_event_mock:
             response = handle_chat("I want to go gym tomorrow at 2:30", self.now)
+            response = self._confirm_response(response)
 
         self.assertEqual(create_event_mock.call_args.kwargs["existing_events"], [])
         self.assertEqual(response["actions_taken"][0]["type"], "create_calendar_event")
@@ -1254,7 +1299,7 @@ class AgentExampleTests(unittest.TestCase):
             "app.agent._get_llm_decision",
             side_effect=fake_decision,
         ), patch(
-            "app.agent.create_calendar_event",
+            "app.action_executors.create_calendar_event",
         ) as create_event_mock:
             response = handle_chat("I want to go gym tomorrow at 2:30", self.now)
 
@@ -1292,7 +1337,7 @@ class AgentExampleTests(unittest.TestCase):
                 ),
                 None,
             ),
-        ), patch("app.agent.create_calendar_event") as create_event_mock:
+        ), patch("app.action_executors.create_calendar_event") as create_event_mock:
             response = handle_chat("Schedule a client meeting tomorrow at 2", self.now)
 
         create_event_mock.assert_not_called()
@@ -1323,10 +1368,11 @@ class AgentExampleTests(unittest.TestCase):
             ),
             None,
         )), patch(
-            "app.agent.create_calendar_event",
+            "app.action_executors.create_calendar_event",
             return_value=CalendarWriteResult(event=event),
         ) as create_event_mock:
             response = handle_chat("meeting with Nikhil, Andy, and Kamden at 6", self.now)
+            response = self._confirm_response(response)
 
         self.assertEqual(create_event_mock.call_args.kwargs["title"], "A&M — Meeting with Nikhil, Andy, and Kamden")
         self.assertIn("I recognized this as A&M.", response["answer"])
@@ -1352,10 +1398,11 @@ class AgentExampleTests(unittest.TestCase):
             ),
             None,
         )), patch(
-            "app.agent.create_calendar_event",
+            "app.action_executors.create_calendar_event",
             return_value=CalendarWriteResult(event=event),
         ) as create_event_mock:
             response = handle_chat("meeting with Sam, Jai, and Krrish at 6", self.now)
+            response = self._confirm_response(response)
 
         create_event_kwargs = create_event_mock.call_args.kwargs
         self.assertEqual(create_event_kwargs["title"], "Personal — Meeting with Sam, Jai, and Krrish")
@@ -1384,10 +1431,11 @@ class AgentExampleTests(unittest.TestCase):
             ),
             None,
         )), patch(
-            "app.agent.create_calendar_event",
+            "app.action_executors.create_calendar_event",
             return_value=CalendarWriteResult(event=event),
         ) as create_event_mock:
             response = handle_chat("meeting with Jordan at 6", self.now)
+            response = self._confirm_response(response)
 
         self.assertEqual(create_event_mock.call_args.kwargs["title"], "Meeting with Jordan")
         self.assertIsNone(create_event_mock.call_args.kwargs["description"])
@@ -1418,8 +1466,9 @@ class AgentExampleTests(unittest.TestCase):
                 },
             ),
             None,
-        )), patch("app.agent.create_task", return_value=TodoistWriteResult(task=created_task)) as create_task_mock:
+        )), patch("app.action_executors.create_task", return_value=TodoistWriteResult(task=created_task)) as create_task_mock:
             response = handle_chat("call Brandon", self.now)
+            response = self._confirm_response(response)
 
         create_task_kwargs = create_task_mock.call_args.kwargs
         self.assertEqual(create_task_kwargs["section_name"], "Nebulo")
@@ -1460,11 +1509,12 @@ class AgentExampleTests(unittest.TestCase):
                 action_type="none",
             ),
             None,
-        )), patch("app.agent.create_task", return_value=TodoistWriteResult(task=created_task)) as create_task_mock:
+        )), patch("app.action_executors.create_task", return_value=TodoistWriteResult(task=created_task)) as create_task_mock:
             response = handle_chat(
                 "Prepare for my grad speech before my grad on saturday",
                 self.now,
             )
+            response = self._confirm_response(response)
 
         create_task_kwargs = create_task_mock.call_args.kwargs
         self.assertEqual(create_task_kwargs["content"], "Prepare grad speech")
@@ -1551,11 +1601,12 @@ class AgentExampleTests(unittest.TestCase):
                 action_type="none",
             ),
             None,
-        )), patch("app.agent.create_task", return_value=TodoistWriteResult(task=created_task)) as create_task_mock:
+        )), patch("app.action_executors.create_task", return_value=TodoistWriteResult(task=created_task)) as create_task_mock:
             response = handle_chat(
                 "add a todoist task cancel apple news+ free trial for sep 20th",
                 self.now,
             )
+            response = self._confirm_response(response)
 
         create_task_kwargs = create_task_mock.call_args.kwargs
         self.assertEqual(create_task_kwargs["content"], "Cancel Apple News+ free trial")
@@ -1613,10 +1664,11 @@ class AgentExampleTests(unittest.TestCase):
                     ),
                     None,
                 )), patch(
-                    "app.agent.create_task",
+                    "app.action_executors.create_task",
                     return_value=TodoistWriteResult(task=created_task),
                 ) as create_task_mock:
                     response = handle_chat(message, self.now)
+                    response = self._confirm_response(response)
 
                 create_task_kwargs = create_task_mock.call_args.kwargs
                 self.assertEqual(create_task_kwargs["project_name"], "To-Do")
@@ -1728,8 +1780,9 @@ class AgentExampleTests(unittest.TestCase):
                 },
             ),
             None,
-        )), patch("app.agent.create_calendar_event", return_value=CalendarWriteResult(event=event)):
+        )), patch("app.action_executors.create_calendar_event", return_value=CalendarWriteResult(event=event)):
             response = handle_chat("Meeting with Brandon tomorrow at 6 for an hour", self.now)
+            response = self._confirm_response(response)
 
         self.assertEqual(response["intent"], "schedule_event")
         self.assertEqual(response["actions_taken"][0]["type"], "create_calendar_event")
@@ -1766,18 +1819,20 @@ class AgentExampleTests(unittest.TestCase):
             first_response = handle_chat("Meeting with Brandon tomorrow at 6 for an hour", self.now)
 
         self.assertTrue(first_response["needs_confirmation"])
-        self.assertEqual(agent.PENDING_ACTION["type"], "create_calendar_event")
+        self.assertEqual(first_response["pending_action"]["type"], "create_calendar_event")
 
         with patch("app.agent._get_llm_decision") as llm_mock, patch(
-            "app.agent.create_calendar_event",
+            "app.action_executors.create_calendar_event",
             return_value=CalendarWriteResult(event=created_event),
         ) as create_event_mock:
-            second_response = handle_chat("yes please", self.now)
+            reminder_response = handle_chat("yes please", self.now)
+            second_response = self._confirm_response(first_response)
 
         llm_mock.assert_not_called()
+        self.assertTrue(reminder_response["needs_confirmation"])
+        self.assertIn("Confirm control", reminder_response["answer"])
         self.assertFalse(second_response["needs_confirmation"])
         self.assertIsNone(second_response["pending_action"])
-        self.assertIsNone(agent.PENDING_ACTION)
         self.assertEqual(second_response["actions_taken"][0]["type"], "create_calendar_event")
         self.assertTrue(create_event_mock.call_args.kwargs["allow_conflicts"])
 
@@ -1817,12 +1872,14 @@ class AgentExampleTests(unittest.TestCase):
         self.assertEqual(first_response["pending_action"]["details"]["new_start"], "2026-06-04T14:45:00-05:00")
 
         with patch("app.agent._get_llm_decision") as llm_mock, patch(
-            "app.agent.update_calendar_event",
+            "app.action_executors.update_calendar_event",
             return_value=CalendarWriteResult(event=updated_event),
         ) as update_event_mock:
-            second_response = handle_chat("yes", self.now)
+            reminder_response = handle_chat("yes", self.now)
+            second_response = self._confirm_response(first_response)
 
         llm_mock.assert_not_called()
+        self.assertTrue(reminder_response["needs_confirmation"])
         update_event_mock.assert_called_once()
         call_kwargs = update_event_mock.call_args.kwargs
         self.assertEqual(call_kwargs["event_id"], "event-gym")
@@ -1859,10 +1916,10 @@ class AgentExampleTests(unittest.TestCase):
         }
 
         with patch(
-            "app.agent.create_calendar_event",
+            "app.action_executors.create_calendar_event",
             return_value=CalendarWriteResult(event=event),
         ) as create_event_mock:
-            response = confirm_pending_action(pending_action, self.now)
+            response = self._confirm_legacy(pending_action)
 
         create_event_mock.assert_called_once()
         self.assertFalse(response["needs_confirmation"])
@@ -1895,10 +1952,10 @@ class AgentExampleTests(unittest.TestCase):
         }
 
         with patch(
-            "app.agent.create_task",
+            "app.action_executors.create_task",
             return_value=TodoistWriteResult(task=created_task),
         ) as create_task_mock:
-            response = confirm_pending_action(pending_action, self.now)
+            response = self._confirm_legacy(pending_action)
 
         create_task_mock.assert_called_once()
         self.assertFalse(response["needs_confirmation"])
@@ -1932,10 +1989,10 @@ class AgentExampleTests(unittest.TestCase):
         }
 
         with patch(
-            "app.agent.update_calendar_event",
+            "app.action_executors.update_calendar_event",
             return_value=CalendarWriteResult(event=updated_event),
         ) as update_event_mock:
-            response = confirm_pending_action(pending_action, self.now)
+            response = self._confirm_legacy(pending_action)
 
         update_event_mock.assert_called_once()
         self.assertFalse(response["needs_confirmation"])
@@ -2011,7 +2068,6 @@ class AgentExampleTests(unittest.TestCase):
         self.assertEqual(response["pending_action"]["type"], pending_action["type"])
         self.assertEqual(response["pending_action"]["details"], pending_action["details"])
         self.assertEqual(response["pending_action"]["resolved_project"], "Nebulo")
-        self.assertEqual(agent.PENDING_ACTION, response["pending_action"])
         self.assertEqual(response["actions_taken"], [])
 
     def test_reschedule_suggestion_needs_confirmation(self):
@@ -2084,7 +2140,11 @@ class AgentExampleTests(unittest.TestCase):
             "type": "resolve_calendar_conflict",
             "details": {"options": ["move gym", "keep calendar unchanged"]},
         }
-        agent.PENDING_ACTION = pending_action
+        agent.CONVERSATION_STATES["default"] = {
+            "last_question": "Move gym or keep the calendar unchanged?",
+            "awaiting": "action_confirmation",
+            "context": {"pending_action": pending_action},
+        }
 
         def fake_decision(settings, context):
             self.assertEqual(context["pending_action"], pending_action)
@@ -2102,7 +2162,7 @@ class AgentExampleTests(unittest.TestCase):
 
         self.assertFalse(response["needs_confirmation"])
         self.assertIsNone(response["pending_action"])
-        self.assertIsNone(agent.PENDING_ACTION)
+        self.assertEqual(agent.CONVERSATION_STATES["default"]["context"], {})
 
     def test_legacy_create_task_action_is_rejected(self):
         decision = _sanitize_decision(

@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .agent import MODE, confirm_pending_action, handle_chat
+from .pending_actions import PendingActionError, pending_action_service
 from .calendar_tools import check_google_auth, categories_conflict, list_upcoming_events
 from .config import get_settings
 from .dependency_evaluator import DependencySummary, EvaluatedDependencyEvidence
@@ -76,7 +77,9 @@ class ChatResponse(BaseModel):
 
 class ConfirmRequest(BaseModel):
     session_id: str | None = None
-    pending_action: dict[str, Any]
+    action_id: str = Field(..., min_length=1, max_length=128)
+    expected_version: int = Field(..., ge=1)
+    fingerprint: str = Field(..., pattern=r"^[a-f0-9]{64}$")
     current_time: datetime | None = None
 
 
@@ -171,7 +174,16 @@ class ActivityEntry(BaseModel):
 
 class ConfirmCancelRequest(BaseModel):
     session_id: str | None = None
-    pending_action: dict[str, Any] | None = None
+    action_id: str = Field(..., min_length=1, max_length=128)
+    expected_version: int = Field(..., ge=1)
+    fingerprint: str = Field(..., pattern=r"^[a-f0-9]{64}$")
+
+
+class PendingActionRecovery(BaseModel):
+    answer: str
+    needs_confirmation: bool
+    confirmation_prompt: str
+    pending_action: dict[str, Any]
 
 
 class TaskItem(BaseModel):
@@ -600,11 +612,13 @@ def confirm(
     require_agent_api_key(authorization)
     try:
         response = confirm_pending_action(
-            pending_action=request.pending_action,
+            action_id=request.action_id,
+            expected_version=request.expected_version,
+            expected_fingerprint=request.fingerprint,
             current_time=request.current_time,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PendingActionError as exc:
+        raise _pending_action_http_error(exc) from exc
 
     _log_chat_activity(response)
     log_activity(
@@ -614,7 +628,7 @@ def confirm(
         source="confirmation",
         payload={
             "session_id": request.session_id,
-            "pending_action": request.pending_action,
+            "action_id": request.action_id,
             "actions_taken": response.get("actions_taken") or [],
         },
     )
@@ -627,15 +641,51 @@ def confirm_cancel(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     require_agent_api_key(authorization)
+    try:
+        record = pending_action_service.cancel(
+            request.action_id,
+            expected_version=request.expected_version,
+            expected_fingerprint=request.fingerprint,
+        )
+    except PendingActionError as exc:
+        raise _pending_action_http_error(exc) from exc
     return log_activity(
         action_type="confirmation_cancelled",
         title="Confirmation cancelled",
-        detail=(request.pending_action or {}).get("confirmation_prompt"),
+        detail=record.confirmation_prompt,
         source="confirmation",
         payload={
             "session_id": request.session_id,
-            "pending_action": request.pending_action,
+            "action_id": record.action_id,
+            "lifecycle": record.lifecycle.value,
         },
+    )
+
+
+@app.get("/pending-actions/current", response_model=PendingActionRecovery | None)
+def pending_action_current(
+    session_id: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any] | None:
+    require_agent_api_key(authorization)
+    record = pending_action_service.current(session_id)
+    if record is None:
+        return None
+    return {
+        "answer": "A pending action was recovered. Review it before confirming.",
+        "needs_confirmation": True,
+        "confirmation_prompt": record.confirmation_prompt,
+        "pending_action": pending_action_service.public_payload(record),
+    }
+
+
+def _pending_action_http_error(exc: PendingActionError) -> HTTPException:
+    status = 404 if exc.code == "not_found" else 409
+    if exc.code in {"invalid_payload", "invalid_confirmation_prompt"}:
+        status = 400
+    return HTTPException(
+        status_code=status,
+        detail={"code": exc.code, "message": str(exc)},
     )
 
 

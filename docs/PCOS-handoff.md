@@ -3625,6 +3625,24 @@ SID-128 does not begin Linear ingestion, Email Intelligence, visual redesign, Ca
 
 Verification for SID-128 reached 213 backend tests and 21 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, and `git diff --check` passed. An authenticated live `/tasks` read returned HTTP 200 with 21 tasks, six sections, six recommendations, provider `available`, no provider errors, and no inferred Calendar, energy, or free-block signals. Authenticated headless Chrome rendered all six recommendation panels and task cards, expanded backend alternatives, and switched to By Life Area with no application error overlay; its only console entry was the existing missing `/favicon.ico` 404.
 
+## 17.32 Provider-Neutral Email Attention Domain
+
+SID-143 establishes `backend/app/email_domain.py` as the credential-independent domain boundary for future Email Intelligence. The module contains frozen Pydantic models and explicit enums only. It has no provider client, OAuth flow, live read, classifier, endpoint, persistence, background execution, user interface, or mailbox-write path.
+
+The identity contract preserves provider, stable provider account identity, the separate Personal, A&M, Blinn, and Freelance account roles, provider message identity, and provider thread identity when available. Received and sent timestamps and bounded thread facts remain optional so an adapter cannot manufacture absent provider state. Provider-specific metadata stays attached for later adapters without pretending that Gmail labels, Outlook categories, folders, archive, or unsubscribe share universal semantics.
+
+Attention classification represents informational mail, important attention, deadlines, explicit action requests, scheduling requests, administrative requirements, and project communication. Importance and urgency are separate typed values. Grounded deadlines require a concrete date or timestamp plus exact deterministic source evidence; ambiguous deadline evidence cannot carry an invented concrete value. Requested actions preserve the responsible party when known, and project association has structurally distinct grounded, ambiguous, and unresolved states.
+
+Possible task and Calendar actions are descriptive proposals only. Their schema has no completed, executable, confirmation, or provider-mutation field. Candidate lifecycle is explicit across active, dismissed, resolved, and superseded states. Overall confidence and review reasons preserve candidate-level uncertainty, while bounded model interpretation is a different model from deterministic evidence and must state uncertainty whenever it is not certain.
+
+The downstream SID-229 organization boundary is advisory only. It can suggest `needs_action`, `waiting`, `keep_reference`, `low_value`, or `review_uncertain`, plus optional labels that require later explicit approval. Uncertain mail cannot receive suggested labels. Delete and trash do not exist in either proposal enum and are rejected as organization-label suggestions, so neither mailbox mutation can be represented as a SID-143 candidate action.
+
+Credential-free regression coverage verifies colliding provider message IDs across accounts, optional thread state, independent importance and urgency, grounded and ambiguous deadline evidence, requested actions, all project-association states, non-executable task and Calendar proposals, evidence/interpretation separation, candidate lifecycle, approval-only organization suggestions, frozen/strict schemas, privacy-safe synthetic identities, and the delete/trash invariant.
+
+SID-143 does not begin Gmail OAuth, live personal or A&M reads, importance classification, Today or other UI, task or Calendar execution, mailbox writes, declutter UI, durable pending-action execution, Memory ingestion, background execution, frontend redesign, or Superhuman integration.
+
+Verification for SID-143 reached 226 backend tests and 21 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, and `git diff --check` passed.
+
 ---
 
 # 18. Current Verification History
@@ -3655,6 +3673,8 @@ Recorded development checkpoints include:
 | Shared Calendar time and free-block correctness | 184 tests passing | 13 frontend tests and build passing | Passing |
 | Today projection over shared intelligence | 190 tests passing | 16 frontend tests and build passing | Passing |
 | Connected-state Calendar Chat grounding | 205 tests passing | 16 frontend tests and build passing | Passing |
+| Tasks projection over shared recommendations | 213 tests passing | 21 frontend tests and build passing | Passing |
+| Provider-neutral Email Attention domain | 226 tests passing | 21 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -3672,12 +3692,16 @@ The current backend test suite includes:
 - `backend/tests/test_work_domain.py`
 - `backend/tests/test_linear_provider.py`
 - `backend/tests/test_project_work_packages.py`
+- `backend/tests/test_tasks_projection.py`
+- `backend/tests/test_email_domain.py`
 
 Common verification commands are:
 
 ```bash
 backend/.venv/bin/python -m unittest discover backend/tests
+backend/.venv/bin/python -m compileall -q backend/app backend/tests
 cd frontend
+npm test
 npm run build
 cd ..
 git diff --check
@@ -6696,7 +6720,7 @@ Provider change detection.
 
 # 33. Milestone 5 — Email Intelligence
 
-**Milestone status:** Planned
+**Milestone status:** Active
 
 **Purpose:**
 
@@ -6710,7 +6734,7 @@ It should not attempt to replace the email client.
 
 ## Issue: Define Email Attention and Action Candidate Model
 
-**Status:** Todo
+**Status:** Done (SID-143)
 
 **Priority:** High
 
@@ -6736,23 +6760,25 @@ PCOS should not convert every email into a task.
 
 **Dependencies / blockers:**
 
-Build Typed and Durable Pending Action Architecture.
+None for the credential-independent, read-only domain model.
 
-Meaningful Activity Model.
+SID-150 remains required before a later email proposal can become a durable confirmed provider action. SID-138 remains relevant when reviewed email decisions become Meaningful Activity.
 
 **Acceptance criteria:**
 
 - Email attention candidate schema exists.
-- Importance can be represented.
-- Urgency can be represented.
-- Deadline evidence can be represented.
-- Requested action can be represented.
-- Project association can be represented.
-- Task-action proposal can be represented.
-- Calendar-action proposal can be represented.
-- Uncertainty or confidence can be represented.
-- Original email/provider reference is preserved.
-- Classification behavior is documented.
+- Provider, account role, stable account, message, and optional thread identity are preserved.
+- Importance and urgency are represented separately.
+- Grounded and ambiguous deadlines preserve exact source evidence without inventing unknown values.
+- Requested action and responsible party can be represented when known.
+- Project association is grounded, ambiguous, or unresolved.
+- Task and Calendar possibilities are descriptive, non-executable proposals.
+- Confidence, uncertainty, and review reasons are explicit.
+- Deterministic evidence and bounded model interpretation are separate types.
+- Active, dismissed, resolved, and superseded lifecycle states are represented.
+- Organization disposition and proposed labels are advisory and approval-only.
+- Delete and trash cannot be represented as proposed candidate actions.
+- The contract is tested without credentials, network, OpenAI, endpoints, or database state.
 
 ---
 
@@ -8968,11 +8994,12 @@ Implemented systems include:
 - Linear read provider and normalized adapter;
 - durable Linear project-to-canonical-project mappings;
 - mapped Linear Project Brain ingestion and Project Work Packages;
+- provider-neutral Email Attention and Action Candidate domain model;
 - local startup and shutdown scripts.
 
 “Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, confirmation still has a legacy process-global path, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
 
-The mapped Linear Project Brain checkpoint reached 149 backend tests and 3 frontend presentation tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, ignored-secret checks, exact-project live reads, and grounded package construction passing. The durable Linear mapping checkpoint reached 134 backend tests, the Linear read-provider checkpoint reached 129 tests, the shared recommendation checkpoint reached 113 tests, and the normalized work checkpoint reached 100 tests. Earlier 8-, 56-, 75-, 85-, 86-, 90-, and 95-test checkpoints remain recorded as implementation history rather than current feature claims.
+The provider-neutral Email Attention checkpoint reached 226 backend tests and 21 frontend tests passing, with Python compilation, the Next.js 15.5.19 production build, and `git diff --check` passing. The mapped Linear Project Brain checkpoint reached 149 backend tests and 3 frontend presentation tests passing, with compilation, build, diff, ignored-secret, exact-project live-read, and grounded-package checks passing. Earlier 8-, 56-, 75-, 85-, 86-, 90-, 95-, 100-, 113-, 129-, and 134-test checkpoints remain recorded as implementation history rather than current feature claims.
 
 The current product is not yet the full Personal Operating System described in the vision.
 

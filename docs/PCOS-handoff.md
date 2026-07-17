@@ -3669,6 +3669,28 @@ The credential-free SID-144 checkpoint reached 242 backend tests and 21 frontend
 
 The completion gate then passed against the real Personal Gmail account using the separate External/In Production Gmail project and exactly `gmail.readonly`; Calendar configuration remained untouched. Redacted live evidence reported `connected` health, profile message and thread counts available, three bounded recent message records from one page with continuation/truncation preserved, bounded body text for all three records, zero MIME diagnostic codes, one exact thread message, 17 labels, the configured target label found, and zero provider mutation calls. No address, subject, body, token, client secret, message ID, or thread ID was printed or committed.
 
+## 17.34 Local Personal Email Importance and Organization Analysis
+
+SID-146 adds `backend/app/email_analysis.py` as a focused local-only analysis service over SID-143's provider-neutral contracts and SID-144's normalized Personal Gmail records. It does not change the Gmail provider, OAuth, Settings, routes, Chat, Today, Tasks, Calendar, Memory, storage, or frontend. `backend/scripts/verify_personal_email_analysis.py` is the bounded redacted live gate.
+
+The service performs deterministic analysis only. Production has no OpenAI or other external-model dependency or call; an optional injected interpretation protocol exists solely to prove that a future bounded interpretation remains structurally separate from canonical deterministic evidence. Raw sender, recipient, subject, body, message identity, and thread identity may exist only in the in-memory normalized record and returned bounded evidence. They are never printed by diagnostics or verification.
+
+Every bounded provider message receives exactly one assessment per opaque account/thread identity, falling back to message identity when a thread ID is absent. The representative record is selected deterministically from provider time and opaque message identity. Candidate and assessment IDs are stable hashes of provider/account/thread-or-message identity and do not expose raw Gmail IDs. Result counts preserve analyzed messages, unique threads/messages, deduplications, quiet assessments, uncertain reviews, provider completeness/truncation, diagnostics, computation time, and the invariant of zero provider mutations.
+
+Importance, urgency, attention kind, organization disposition, and surface/quiet decision are independent typed dimensions. Deterministic evidence may use bounded sender/header facts, subject/body excerpts, labels, unread state, attachment metadata, explicit action, deadline/date, scheduling, payment/billing, registration/form, security/account, academic administration, receipt/reference, bulk/automated, canonical-project keyword, and known-person signals. Gmail category or Important labels, automated senders, unsubscribe text, and promotional language are evidence rather than sufficient truth.
+
+Protected action, financial/security, academic-administration, direct project, deadline, form/payment, scheduling, attachment, and conflicting signals defeat low-value classification. `low_value` requires multiple grounded bulk indicators and no protected evidence. `waiting` requires a latest user-sent thread record, an earlier inbound record, and explicit waiting/follow-up language. Material ambiguity becomes `review_uncertain` and is surfaced; strong receipts or references without current action may remain quiet. Organization suggestions retain SID-143's approval-only type and contain no mailbox action or approval payload.
+
+Project association reads the canonical registry snapshot. One grounded project match returns the canonical project ID, multiple grounded matches retain candidate canonical IDs as ambiguous, and no match stays unresolved; Personal account role alone cannot invent a project. Deadline extraction grounds only valid fully specified dates. Missing years, relative dates, conflicting dates, invalid dates, and times without trustworthy timezones remain ambiguous with exact source evidence; no current year, time, or timezone is fabricated.
+
+The typed analysis result distinguishes connected attention, connected quiet, connected empty, degraded partial input, not configured, authentication failure, provider failure, and malformed response. A small explicit maximum of 12 recent messages is the production verification default, with a hard service maximum of 25. The analysis path passes no custom Gmail query or label ID, performs no thread expansion, and never enumerates the full inbox or `Old Stuff`.
+
+Credential-free SID-146 coverage adds 26 tests for academic administration, scheduling, financial/security requirements, direct project communication, receipt/reference, promotional mail, insufficient label evidence, protected/bulk conflicts, exact and ambiguous deadlines, all project-association states, thread deduplication and representative selection, missing-thread fallback, grounded waiting, connected-empty and provider failures, degraded input, opaque deterministic IDs, quiet/surface separation, the injected interpretation seam, the zero-model production default, bounded provider reads, zero action/mutation output, and redacted diagnostics/verifier boundaries. The full checkpoint reached 268 backend tests and 21 frontend tests passing, plus Python compilation, the Next.js 15.5.19 production build, `git diff --check`, secret/address scanning, external-model import scanning, Gmail mutation scanning, bounded-live-path scanning, and exact implementation-scope scanning.
+
+The real Personal Gmail gate analyzed at most 12 recent records and passed with provider `connected`: 12 message records became 11 unique thread/message assessments with one deduplication, eight attention candidates, three quiet assessments, and seven uncertain reviews. The one-page read remained explicitly incomplete/truncated. Candidate kinds, dispositions, importance, urgency, surface decisions, project-association states, evidence categories, and confidence were reported only as aggregate enums/counts. External-model calls and provider mutation calls were both zero. No full-inbox or `Old Stuff` scan occurred, and no message content, identity, address, or secret was printed.
+
+SID-146 does not add Today/UI surfacing, task or Calendar proposals/actions, pending actions, mailbox organization execution, labels or other Gmail writes, persistence, Memory ingestion, A&M/Blinn/Freelance accounts, background polling, Superhuman integration, or OAuth/Calendar changes.
+
 ---
 
 # 18. Current Verification History
@@ -3702,6 +3724,7 @@ Recorded development checkpoints include:
 | Tasks projection over shared recommendations | 213 tests passing | 21 frontend tests and build passing | Passing |
 | Provider-neutral Email Attention domain | 226 tests passing | 21 frontend tests and build passing | Passing |
 | Personal Gmail read provider (authenticated) | 242 tests passing plus redacted live read | 21 frontend tests and build passing | Passing |
+| Local Personal Email importance analysis (authenticated) | 268 tests passing plus bounded redacted live analysis | 21 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -6910,7 +6933,7 @@ Personal Email integration can establish the provider architecture.
 
 ## Issue: Build Email Importance and Action Analysis
 
-**Status:** Todo
+**Status:** Done (credential-free suite and bounded redacted live analysis passed)
 
 **Priority:** High
 
@@ -6920,7 +6943,7 @@ Analyze connected email and identify messages that deserve the user's attention.
 
 The user explicitly wants PCOS to err toward catching messages that are even somewhat important to responsibilities while avoiding a notification for every email.
 
-Analysis should combine deterministic evidence and model interpretation.
+V1 analysis uses deterministic local evidence only. No Personal Gmail content is sent to OpenAI or another model. A narrow injected interpretation seam remains structurally separate and is unset in production.
 
 Potential deterministic signals include:
 
@@ -6934,15 +6957,11 @@ Potential deterministic signals include:
 - known project people;
 - repeated unread important threads.
 
-Model interpretation may summarize why a message matters.
+Importance, urgency, attention kind, organization disposition, and surface/quiet decisions remain separate. Material uncertainty is surfaced for review rather than converted into false certainty or false quiet.
 
 **Dependencies / blockers:**
 
-Personal Email connection.
-
-A&M Email connection.
-
-Email Attention Model.
+SID-143 Email Attention domain and SID-144 Personal Email connection are complete. A&M Email is not a blocker for the Personal-first implementation and remains a later provider using the same provider-neutral model.
 
 **Acceptance criteria:**
 
@@ -6956,6 +6975,9 @@ Email Attention Model.
 - Analysis explains why a message matters.
 - Duplicate attention candidates are avoided.
 - Tests cover academic administration, scheduling, project communication, and low-value email.
+- Analysis is bounded to recent Personal Gmail records and performs no full-inbox or `Old Stuff` scan.
+- No external model, mailbox mutation, task/Calendar action, Memory ingestion, persistence, UI, or other account is added.
+- The redacted live gate passes with zero model and provider mutation calls.
 
 ---
 
@@ -9041,11 +9063,12 @@ Implemented systems include:
 - mapped Linear Project Brain ingestion and Project Work Packages;
 - provider-neutral Email Attention and Action Candidate domain model;
 - authenticated read-only Personal Gmail provider, secure Desktop OAuth setup, and redacted live verifier;
+- deterministic local Personal Email importance and organization analysis with bounded redacted live verification;
 - local startup and shutdown scripts.
 
 “Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, confirmation still has a legacy process-global path, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
 
-The Personal Gmail checkpoint reached 242 backend tests and 21 frontend tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, implementation-scope scanning, and secret/address scanning passing. Its redacted real-account verification also passed profile health, bounded recent-message reads, pagination metadata, exact thread retrieval, label discovery, safe MIME parsing, and the zero-mutation assertion. The provider-neutral Email Attention checkpoint reached 226 backend tests and 21 frontend tests passing. The mapped Linear Project Brain checkpoint reached 149 backend tests and 3 frontend presentation tests passing. Earlier checkpoints remain recorded as implementation history rather than current feature claims.
+The Personal Email analysis checkpoint reached 268 backend tests and 21 frontend tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, exact-scope, secret/address, external-model, mutation, and bounded-live-path scans passing. Its redacted real-account gate analyzed at most 12 recent records, preserved thread deduplication and uncertainty, reported only aggregate categories/counts, and performed zero external-model or provider mutation calls. The Personal Gmail provider checkpoint reached 242 backend tests plus its redacted authenticated read; the provider-neutral Email Attention checkpoint reached 226 backend tests. Earlier checkpoints remain recorded as implementation history rather than current feature claims.
 
 The current product is not yet the full Personal Operating System described in the vision.
 

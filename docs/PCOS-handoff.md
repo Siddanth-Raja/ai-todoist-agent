@@ -3665,7 +3665,9 @@ Credential-free coverage verifies exact scope isolation, Calendar-token separati
 
 SID-144 does not begin importance classification, Today/UI work, task or Calendar proposals, durable actions, inbox organization, mailbox writes, Memory ingestion, database persistence, background polling, attachment downloads, Gmail filters, other accounts, Superhuman integration, or Calendar OAuth changes.
 
-The credential-free SID-144 checkpoint reached 242 backend tests and 21 frontend tests passing. Python compilation across app/scripts/tests, the Next.js 15.5.19 production build, `git diff --check`, implementation-scope scanning, and secret/address scanning passed. SID-144 remains In Progress until the redacted authenticated Personal Gmail verification completes successfully.
+The credential-free SID-144 checkpoint reached 242 backend tests and 21 frontend tests passing. Python compilation across app/scripts/tests, the Next.js 15.5.19 production build, `git diff --check`, implementation-scope scanning, and secret/address scanning passed.
+
+The completion gate then passed against the real Personal Gmail account using the separate External/In Production Gmail project and exactly `gmail.readonly`; Calendar configuration remained untouched. Redacted live evidence reported `connected` health, profile message and thread counts available, three bounded recent message records from one page with continuation/truncation preserved, bounded body text for all three records, zero MIME diagnostic codes, one exact thread message, 17 labels, the configured target label found, and zero provider mutation calls. No address, subject, body, token, client secret, message ID, or thread ID was printed or committed.
 
 ---
 
@@ -3699,7 +3701,7 @@ Recorded development checkpoints include:
 | Connected-state Calendar Chat grounding | 205 tests passing | 16 frontend tests and build passing | Passing |
 | Tasks projection over shared recommendations | 213 tests passing | 21 frontend tests and build passing | Passing |
 | Provider-neutral Email Attention domain | 226 tests passing | 21 frontend tests and build passing | Passing |
-| Personal Gmail read provider (credential-free) | 242 tests passing | 21 frontend tests and build passing | Passing |
+| Personal Gmail read provider (authenticated) | 242 tests passing plus redacted live read | 21 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -6810,7 +6812,7 @@ SID-150 remains required before a later email proposal can become a durable conf
 
 ## Issue: Connect Personal Email
 
-**Status:** In Progress (credential-free implementation complete; authenticated read pending)
+**Status:** Done (credential-free verification and authenticated Personal Gmail read passed)
 
 **Priority:** High
 
@@ -6830,7 +6832,7 @@ Credential-independent provider and authentication design are implemented.
 
 Background execution foundation for proactive monitoring. Initial connection and read validation can proceed before that runtime; continuous monitoring cannot.
 
-The remaining completion gate is external Google OAuth configuration and one real authenticated Personal Gmail read. If the Google project remains External/Testing, the Personal account must be allowlisted as a test user and the refresh token will expire after seven days. Durable production use requires the applicable restricted-scope verification path.
+The external Google OAuth gate is complete. The separate Gmail project is External/In Production rather than Testing, requests only `gmail.readonly`, and leaves the Calendar project and credentials untouched. A real authenticated Personal Gmail read passed the redacted verification gate with zero provider mutation calls.
 
 **Acceptance criteria:**
 
@@ -9038,12 +9040,12 @@ Implemented systems include:
 - durable Linear project-to-canonical-project mappings;
 - mapped Linear Project Brain ingestion and Project Work Packages;
 - provider-neutral Email Attention and Action Candidate domain model;
-- credential-free Personal Gmail read provider, secure Desktop OAuth setup, and redacted live verifier (authenticated connection pending);
+- authenticated read-only Personal Gmail provider, secure Desktop OAuth setup, and redacted live verifier;
 - local startup and shutdown scripts.
 
 “Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, confirmation still has a legacy process-global path, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
 
-The credential-free Personal Gmail checkpoint reached 242 backend tests and 21 frontend tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, implementation-scope scanning, and secret/address scanning passing. It is not documented as live-connected until the authenticated read gate passes. The provider-neutral Email Attention checkpoint reached 226 backend tests and 21 frontend tests passing. The mapped Linear Project Brain checkpoint reached 149 backend tests and 3 frontend presentation tests passing. Earlier checkpoints remain recorded as implementation history rather than current feature claims.
+The Personal Gmail checkpoint reached 242 backend tests and 21 frontend tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, implementation-scope scanning, and secret/address scanning passing. Its redacted real-account verification also passed profile health, bounded recent-message reads, pagination metadata, exact thread retrieval, label discovery, safe MIME parsing, and the zero-mutation assertion. The provider-neutral Email Attention checkpoint reached 226 backend tests and 21 frontend tests passing. The mapped Linear Project Brain checkpoint reached 149 backend tests and 3 frontend presentation tests passing. Earlier checkpoints remain recorded as implementation history rather than current feature claims.
 
 The current product is not yet the full Personal Operating System described in the vision.
 

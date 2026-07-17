@@ -14,42 +14,23 @@ import {
   Layers3,
   RefreshCw,
 } from "lucide-react";
-import { apiRequest, type TaskItem, type TaskSection, type TasksResponse } from "@/lib/api";
+import { apiRequest, type TaskItem, type TaskSection, type TasksLifeArea, type TasksResponse } from "@/lib/api";
 import { formatTaskDate, taskDateTime, taskDueDateValue } from "@/lib/task-date";
+import {
+  presentTaskRecommendations,
+  recommendationChanges,
+  recommendationSnapshots,
+  type FocusRecommendation,
+  type RecommendationChange,
+  type RecommendationSnapshot,
+} from "@/lib/tasks-projection-presentation";
 
 type TaskView = "today" | "upcoming" | "life-area";
 type TaskFilter = "all" | "today" | "overdue" | "high";
-type LifeArea = "A&M" | "XO" | "Nebulo" | "Freelance" | "Personal" | "Misc";
-type FocusRecommendation = {
-  area: LifeArea;
-  sectionName: string;
-  task: TaskItem | null;
-  reason: string;
-  taskCount: number;
-  tasks: TaskItem[];
-};
-type RecommendationScore = {
-  priority: number;
-  age: number;
-  unblocking: number;
-  momentum: number;
-  due: number;
-};
-type RecommendationSnapshot = {
-  area: LifeArea;
-  taskId: string | null;
-  taskContent: string | null;
-  score: RecommendationScore | null;
-};
-type RecommendationChange = {
-  area: LifeArea;
-  previous: string;
-  current: string;
-  reason: string;
-};
+type LifeArea = TasksLifeArea;
 
 const lifeAreas: LifeArea[] = ["A&M", "XO", "Nebulo", "Freelance", "Personal", "Misc"];
-const recommendationStorageKey = "pcos.taskRecommendations.v1";
+const recommendationStorageKey = "pcos.taskRecommendations.v2";
 
 const sectionToLifeArea: Record<string, LifeArea> = {
   "A&M": "A&M",
@@ -217,206 +198,6 @@ function taskKey(task: TaskItem) {
   return task.id ?? `${task.content}-${taskSectionName(task)}`;
 }
 
-function normalizedTaskText(task: TaskItem) {
-  return `${task.content} ${task.description ?? ""} ${(task.labels ?? []).join(" ")}`.toLowerCase();
-}
-
-function dueUrgencyScore(task: TaskItem) {
-  if (task.due_status === "overdue") {
-    return 5;
-  }
-  if (task.due_status === "today") {
-    return 4;
-  }
-  if (task.due_status === "tomorrow") {
-    return 3;
-  }
-  if (task.due_status === "this_week") {
-    return 2;
-  }
-  if (task.due_status === "later" || taskDueDateValue(task)) {
-    return 1;
-  }
-  return 0;
-}
-
-function ageScore(task: TaskItem) {
-  const createdAt = createdAtTime(task);
-  if (createdAt === null) {
-    return 0;
-  }
-
-  const ageDays = Math.max(0, Math.floor((Date.now() - createdAt) / 86_400_000));
-  return Math.min(ageDays, 30);
-}
-
-function unblockingScore(task: TaskItem) {
-  const text = normalizedTaskText(task);
-  let score = 0;
-
-  if (/\bbuild\b/.test(text)) {
-    score += 2;
-  }
-  if (/\bsetup\b|\bset up\b/.test(text)) {
-    score += 2;
-  }
-  if (text.includes("create system")) {
-    score += 3;
-  }
-  if (/\bfoundation\b|\bfoundational\b/.test(text)) {
-    score += 3;
-  }
-  if (/\btool\b|\btemplate\b|\bworkflow\b|\baccount\b/.test(text)) {
-    score += 1;
-  }
-
-  return score;
-}
-
-function projectMomentumScore(task: TaskItem, areaTasks: TaskItem[]) {
-  const text = normalizedTaskText(task);
-  let score = 0;
-
-  if (/\bdemo\b|\bclient\b|\boutreach\b|\bproposal\b|\bship\b|\blaunch\b|\bpublish\b|\bsend\b/.test(text)) {
-    return 3;
-  }
-
-  const siblingTasks = areaTasks.filter((candidate) => taskKey(candidate) !== taskKey(task));
-  if (task.project_name && siblingTasks.some((candidate) => candidate.project_name === task.project_name)) {
-    score += 1;
-  }
-  if (task.labels?.length && siblingTasks.some((candidate) => candidate.labels?.some((label) => task.labels.includes(label)))) {
-    score += 1;
-  }
-
-  return score;
-}
-
-function createdAtTime(task: TaskItem) {
-  return taskDateTime(task.created_at);
-}
-
-function recommendationScore(task: TaskItem, areaTasks: TaskItem[]): RecommendationScore {
-  return {
-    priority: todoistPriorityValue(task),
-    age: ageScore(task),
-    unblocking: unblockingScore(task),
-    momentum: projectMomentumScore(task, areaTasks),
-    due: dueUrgencyScore(task),
-  };
-}
-
-function compareRecommendationScores(first: RecommendationScore, second: RecommendationScore) {
-  const priorityDelta = second.priority - first.priority;
-  if (priorityDelta !== 0) {
-    return priorityDelta;
-  }
-
-  const ageDelta = second.age - first.age;
-  if (ageDelta !== 0) {
-    return ageDelta;
-  }
-
-  const unblockingDelta = second.unblocking - first.unblocking;
-  if (unblockingDelta !== 0) {
-    return unblockingDelta;
-  }
-
-  const momentumDelta = second.momentum - first.momentum;
-  if (momentumDelta !== 0) {
-    return momentumDelta;
-  }
-
-  const dueDelta = second.due - first.due;
-  if (dueDelta !== 0) {
-    return dueDelta;
-  }
-
-  return 0;
-}
-
-function rankRecommendedTasks(tasks: TaskItem[]) {
-  return [...tasks].sort((first, second) => {
-    const scoreDelta = compareRecommendationScores(recommendationScore(first, tasks), recommendationScore(second, tasks));
-
-    if (scoreDelta !== 0) {
-      return scoreDelta;
-    }
-
-    const dueDateDelta = compareTaskDates(first, second);
-    if (dueDateDelta !== 0) {
-      return dueDateDelta;
-    }
-
-    return first.content.localeCompare(second.content);
-  });
-}
-
-function focusReason(area: LifeArea, task: TaskItem, areaTasks: TaskItem[]) {
-  const score = recommendationScore(task, areaTasks);
-  const text = normalizedTaskText(task);
-
-  if (area === "Freelance" && /\bbuild\b/.test(text) && /\b(scrap\w*|outreach|client|tool)\b/.test(text)) {
-    return "This unlocks future client outreach.";
-  }
-  if (area === "Nebulo" && /\bdemo\b/.test(text)) {
-    return "Closest task to external progress.";
-  }
-  if (area === "Personal" && /\b(invest\w*|account|setup|set up)\b/.test(text)) {
-    return "One-time setup with long-term benefit.";
-  }
-  if (areaTasks.length === 1) {
-    return `Only active ${area} task`;
-  }
-  if (score.priority >= 4 && score.unblocking > 0) {
-    return "High-priority foundation task that unlocks later work.";
-  }
-  if (score.unblocking > 0) {
-    return "Foundation task that unlocks follow-on work.";
-  }
-  if (score.momentum > 0) {
-    return "Closest task to visible project progress.";
-  }
-  if (task.due_status === "overdue") {
-    return `Overdue task in ${area}.`;
-  }
-  if (todoistPriorityValue(task) === Math.max(...areaTasks.map(todoistPriorityValue))) {
-    return `Highest Todoist priority in ${area}.`;
-  }
-  if (score.age >= 14) {
-    return "Older task with enough weight to clear next.";
-  }
-  if (task.due_status === "today") {
-    return `Due today in ${area}.`;
-  }
-  return `Best next task in ${area}.`;
-}
-
-function recommendedByLifeArea(tasks: TaskItem[]): FocusRecommendation[] {
-  return lifeAreas.map((area) => {
-    const areaTasks = tasks.filter((task) => taskLifeArea(task) === area);
-    const rankedTasks = rankRecommendedTasks(areaTasks);
-    const task = rankedTasks[0] ?? null;
-    return {
-      area,
-      sectionName: lifeAreaToSection[area],
-      task,
-      reason: task ? focusReason(area, task, areaTasks) : `No active ${area} tasks`,
-      taskCount: areaTasks.length,
-      tasks: rankedTasks,
-    };
-  });
-}
-
-function recommendationSnapshots(recommendations: FocusRecommendation[]): RecommendationSnapshot[] {
-  return recommendations.map((recommendation) => ({
-    area: recommendation.area,
-    taskId: recommendation.task?.id ?? null,
-    taskContent: recommendation.task?.content ?? null,
-    score: recommendation.task ? recommendationScore(recommendation.task, recommendation.tasks) : null,
-  }));
-}
-
 function readStoredRecommendationState(): { updatedAt: string | null; snapshots: RecommendationSnapshot[] } {
   if (typeof window === "undefined") {
     return { updatedAt: null, snapshots: [] };
@@ -444,59 +225,6 @@ function writeStoredRecommendationState(updatedAt: string, snapshots: Recommenda
   }
 
   window.localStorage.setItem(recommendationStorageKey, JSON.stringify({ updatedAt, snapshots }));
-}
-
-function recommendationChanged(previous: RecommendationSnapshot, current: RecommendationSnapshot) {
-  if (previous.taskId && current.taskId) {
-    return previous.taskId !== current.taskId;
-  }
-  return previous.taskContent !== current.taskContent;
-}
-
-function changeReason(previous: RecommendationSnapshot, current: RecommendationSnapshot) {
-  if (!previous.taskContent) {
-    return "New recommendation after refresh.";
-  }
-  if (!current.score || !previous.score) {
-    return "Recommendation changed after refresh.";
-  }
-  if (current.score.priority > previous.score.priority) {
-    return "Higher-priority task added.";
-  }
-  if (current.score.age > previous.score.age) {
-    return "Older task now needs attention.";
-  }
-  if (current.score.unblocking > previous.score.unblocking) {
-    return "Current task unlocks more follow-on work.";
-  }
-  if (current.score.momentum > previous.score.momentum) {
-    return "Current task is closer to external progress.";
-  }
-  if (current.score.due > previous.score.due) {
-    return "Due date became more urgent.";
-  }
-  return "Recommendation changed after refresh.";
-}
-
-function recommendationChanges(
-  previousSnapshots: RecommendationSnapshot[],
-  currentSnapshots: RecommendationSnapshot[],
-): RecommendationChange[] {
-  return currentSnapshots.flatMap((current) => {
-    const previous = previousSnapshots.find((snapshot) => snapshot.area === current.area);
-    if (!previous || !current.taskContent || !recommendationChanged(previous, current)) {
-      return [];
-    }
-
-    return [
-      {
-        area: current.area,
-        previous: previous.taskContent ?? "No recommendation",
-        current: current.taskContent,
-        reason: changeReason(previous, current),
-      },
-    ];
-  });
 }
 
 function formatUpdatedAgo(updatedAt: string | null, nowMs: number) {
@@ -758,7 +486,7 @@ export default function TasksPage() {
     () => filteredTasks.filter((task) => ["tomorrow", "this_week", "later"].includes(task.due_status ?? "")),
     [filteredTasks],
   );
-  const focusRecommendations = useMemo(() => recommendedByLifeArea(tasks), [tasks]);
+  const focusRecommendations = useMemo(() => presentTaskRecommendations(data?.recommendations ?? []), [data]);
   const recommendationChangesByArea = useMemo(
     () =>
       recommendationChangeList.reduce<Partial<Record<LifeArea, RecommendationChange>>>((changes, change) => {
@@ -801,17 +529,15 @@ export default function TasksPage() {
     setError(null);
     try {
       const nextData = await apiRequest<TasksResponse>("/tasks");
-      const refreshedTasks = sortTasks(flattenSections(nextData.sections));
-      const nextRecommendations = recommendedByLifeArea(refreshedTasks);
-      const nextSnapshots = recommendationSnapshots(nextRecommendations);
+      const nextSnapshots = recommendationSnapshots(nextData.recommendations);
       const storedState = readStoredRecommendationState();
       const previousSnapshots = recommendationSnapshotsRef.current ?? storedState.snapshots;
-      const updatedAt = new Date().toISOString();
+      const updatedAt = nextData.computed_at;
 
       recommendationSnapshotsRef.current = nextSnapshots;
       setData(nextData);
       setRecommendationUpdatedAt(updatedAt);
-      setRecommendationChangeList(recommendationChanges(previousSnapshots, nextSnapshots));
+      setRecommendationChangeList(recommendationChanges(previousSnapshots, nextData.recommendations));
       writeStoredRecommendationState(updatedAt, nextSnapshots);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Unable to load tasks.");

@@ -253,12 +253,13 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                 "labels": [],
             },
         ]
-        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)):
+        with patch("app.tasks_projection.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)):
             payload = main.tasks_index(
                 current_time=datetime(2026, 6, 5, 12, 0, tzinfo=ZoneInfo("America/Chicago")),
                 authorization=self.authorization,
             )
 
+        main.TasksResponse.model_validate(payload)
         sections = {section["name"]: section["tasks"] for section in payload["sections"]}
         self.assertEqual(sections["A&M"][0]["content"], "Study for college exam")
         self.assertEqual(sections["A&M"][0]["due_date"], "2026-06-05")
@@ -267,6 +268,9 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         self.assertEqual(sections["Freelance Web Design"][0]["content"], "Call freelance client")
         self.assertEqual(sections["Freelance Web Design"][0]["category"], "Freelance")
         self.assertTrue(sections["Personal"][0]["completed"])
+        recommendations = {item["area"]: item for item in payload["recommendations"]}
+        self.assertEqual(recommendations["Freelance"]["recommendation"]["provider_record_id"], "task-client")
+        self.assertEqual(payload["provider"]["status"], "available")
         self.assertEqual(payload["errors"], [])
 
     def test_tasks_endpoint_normalizes_optional_created_and_due_dates(self):
@@ -298,7 +302,7 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                 "created_at": "not-a-date",
             },
         ]
-        with patch("app.main.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)):
+        with patch("app.tasks_projection.list_active_tasks", return_value=TodoistReadResult(tasks=tasks)):
             payload = main.tasks_index(
                 current_time=datetime(2026, 6, 5, 12, 0, tzinfo=ZoneInfo("America/Chicago")),
                 authorization=self.authorization,

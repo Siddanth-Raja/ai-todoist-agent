@@ -12,7 +12,6 @@ from .calendar_tools import check_google_auth, categories_conflict, list_upcomin
 from .config import get_settings
 from .dependency_evaluator import DependencySummary, EvaluatedDependencyEvidence
 from .linear_client import LinearClient
-from .planner import enrich_task
 from .project_brain import project_brain_service
 from .project_work_packages import LinearProjectDiagnostic, ProjectWorkPackage
 from .storage import (
@@ -30,8 +29,8 @@ from .storage import (
     update_habit,
     update_memory_entry,
 )
-from .todoist_tools import list_active_tasks
-from .todoist_tools import LIFE_AREA_TO_TODOIST_SECTION, TODOIST_SECTION_TO_LIFE_AREA, life_area_for_todoist_section, list_todoist_sections
+from .tasks_projection import tasks_projection_service
+from .todoist_tools import list_todoist_sections
 from .today_projection import today_projection_service
 
 
@@ -80,8 +79,6 @@ class ConfirmRequest(BaseModel):
     current_time: datetime | None = None
 
 
-TASK_SECTION_NAMES = ("A&M", "XO", "Freelance", "Nebulo", "Personal", "Misc")
-TODOIST_TASK_SECTION_NAMES = tuple(LIFE_AREA_TO_TODOIST_SECTION.values())
 class MemoryCreate(BaseModel):
     type: str = Field(..., min_length=1, max_length=80)
     title: str = Field(..., min_length=1, max_length=160)
@@ -204,8 +201,64 @@ class TaskSection(BaseModel):
     tasks: list[TaskItem]
 
 
+class TaskRecommendationEvidence(BaseModel):
+    signal: str
+    value: Any
+    score_delta: float
+    explanation: str
+
+
+class TaskRecommendationAlternative(BaseModel):
+    provider: str
+    provider_record_id: str
+    title: str
+    task: TaskItem
+    score: float
+    action: str
+
+
+class TaskRecommendationContext(BaseModel):
+    current_time: datetime | None = None
+    usable_free_block_minutes: int | None = None
+    energy: str | None = None
+    upcoming_commitment_title: str | None = None
+    minutes_until_upcoming_commitment: int | None = None
+    project_momentum_provider_record_ids: list[str] = Field(default_factory=list)
+
+
+class TaskRecommendation(BaseModel):
+    provider: str
+    provider_record_id: str
+    title: str
+    task: TaskItem
+    action: str
+    score: float
+    explanation: str
+    evidence: list[TaskRecommendationEvidence]
+    alternatives: list[TaskRecommendationAlternative]
+    computed_at: datetime
+    context: TaskRecommendationContext
+
+
+class TaskAreaRecommendation(BaseModel):
+    area: Literal["A&M", "XO", "Nebulo", "Freelance", "Personal", "Misc"]
+    section_name: str
+    task_count: int
+    state: Literal["recommended", "empty", "unavailable"]
+    recommendation: TaskRecommendation | None = None
+
+
+class TaskProviderState(BaseModel):
+    name: Literal["todoist"]
+    status: Literal["available", "degraded", "unavailable"]
+    message: str | None = None
+
+
 class TasksResponse(BaseModel):
     sections: list[TaskSection]
+    recommendations: list[TaskAreaRecommendation]
+    computed_at: datetime
+    provider: TaskProviderState
     errors: list[str] = Field(default_factory=list)
 
 
@@ -730,24 +783,10 @@ def tasks_index(
     authorization: str | None = Header(default=None),
 ) -> dict[str, Any]:
     require_agent_api_key(authorization)
-    settings = get_settings()
-    todoist_result = list_active_tasks(settings)
-    local_now = current_time.astimezone(settings.local_tz) if current_time else datetime.now(settings.local_tz)
-    enriched_tasks = [
-        enrich_task(task, local_now.date()) for task in todoist_result.tasks if task.get("content")
-    ]
-
-    grouped: dict[str, list[dict[str, Any]]] = {section: [] for section in TODOIST_TASK_SECTION_NAMES}
-    for task in enriched_tasks:
-        section = _todoist_task_section_for(task)
-        grouped[section].append(_task_item(task, section))
-
-    return {
-        "sections": [
-            {"name": section, "tasks": grouped[section]} for section in TODOIST_TASK_SECTION_NAMES
-        ],
-        "errors": [todoist_result.error] if todoist_result.error else [],
-    }
+    return tasks_projection_service.build(
+        settings=get_settings(),
+        current_time=current_time,
+    )
 
 
 @app.get("/today", response_model=TodayResponse)
@@ -830,74 +869,6 @@ def activity_create(
         source=payload.get("source") or "manual",
         payload=payload.get("payload") or payload.get("metadata"),
     )
-
-
-def _task_section_for(task: dict[str, Any]) -> str:
-    category = str(task.get("category") or task.get("project_category") or "").strip()
-    if category in TASK_SECTION_NAMES:
-        return category
-
-    section_name = str(task.get("section_name") or "").strip()
-    section_category = life_area_for_todoist_section(section_name)
-    if section_category:
-        return section_category
-
-    todoist_section_name = str(task.get("todoist_section_name") or "").strip()
-    todoist_section_category = life_area_for_todoist_section(todoist_section_name)
-    if todoist_section_category:
-        return todoist_section_category
-
-    return "Misc"
-
-
-def _todoist_task_section_for(task: dict[str, Any]) -> str:
-    section_name = str(task.get("todoist_section_name") or task.get("section_name") or "").strip()
-    canonical_section = LIFE_AREA_TO_TODOIST_SECTION.get(_task_section_for(task), LIFE_AREA_TO_TODOIST_SECTION["Misc"])
-    if section_name in TODOIST_SECTION_TO_LIFE_AREA:
-        return section_name
-    return canonical_section
-
-
-def _task_completed(task: dict[str, Any]) -> bool:
-    return bool(task.get("completed") or task.get("is_completed") or task.get("checked"))
-
-
-def _task_item(task: dict[str, Any], section: str) -> dict[str, Any]:
-    return {
-        "id": task.get("id"),
-        "content": str(task.get("content") or ""),
-        "description": task.get("description"),
-        "section": section,
-        "parent_id": task.get("parent_id"),
-        "project_name": task.get("project_name"),
-        "section_name": task.get("section_name"),
-        "category": task.get("category") or task.get("project_category") or _task_section_for(task),
-        "todoist_section_name": task.get("todoist_section_name") or task.get("section_name"),
-        "todoist_section_id": task.get("todoist_section_id") or task.get("section_id"),
-        "classification_source": task.get("classification_source") or "fallback",
-        "due": task.get("due"),
-        "due_date": task.get("due_date"),
-        "due_status": task.get("due_status"),
-        "priority": task.get("priority"),
-        "todoist_priority": task.get("todoist_priority"),
-        "created_at": _normalized_task_created_at(task.get("created_at")),
-        "completed": _task_completed(task),
-        "labels": task.get("labels") or [],
-        "url": task.get("url"),
-    }
-
-
-def _normalized_task_created_at(value: Any) -> str | None:
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if not isinstance(value, str) or not value.strip():
-        return None
-
-    try:
-        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    return parsed.isoformat()
 
 
 def _detect_calendar_conflicts(events: list[dict[str, Any]]) -> list[dict[str, Any]]:

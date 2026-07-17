@@ -61,8 +61,62 @@ export type TaskSection = {
   tasks: TaskItem[];
 };
 
+export type TasksLifeArea = "A&M" | "XO" | "Nebulo" | "Freelance" | "Personal" | "Misc";
+
+export type TaskRecommendationEvidence = {
+  signal: string;
+  value: unknown;
+  score_delta: number;
+  explanation: string;
+};
+
+export type TaskRecommendationAlternative = {
+  provider: string;
+  provider_record_id: string;
+  title: string;
+  task: TaskItem;
+  score: number;
+  action: string;
+};
+
+export type TaskRecommendation = {
+  provider: string;
+  provider_record_id: string;
+  title: string;
+  task: TaskItem;
+  action: string;
+  score: number;
+  explanation: string;
+  evidence: TaskRecommendationEvidence[];
+  alternatives: TaskRecommendationAlternative[];
+  computed_at: string;
+  context: {
+    current_time: string | null;
+    usable_free_block_minutes: number | null;
+    energy: string | null;
+    upcoming_commitment_title: string | null;
+    minutes_until_upcoming_commitment: number | null;
+    project_momentum_provider_record_ids: string[];
+  };
+};
+
+export type TaskAreaRecommendation = {
+  area: TasksLifeArea;
+  section_name: string;
+  task_count: number;
+  state: "recommended" | "empty" | "unavailable";
+  recommendation: TaskRecommendation | null;
+};
+
 export type TasksResponse = {
   sections: TaskSection[];
+  recommendations: TaskAreaRecommendation[];
+  computed_at: string;
+  provider: {
+    name: "todoist";
+    status: "available" | "degraded" | "unavailable";
+    message: string | null;
+  };
   errors: string[];
 };
 

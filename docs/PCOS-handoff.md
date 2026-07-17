@@ -155,7 +155,7 @@ Future native surfaces
 
 Important current-state distinction: this is the target architecture and a major product decision, but the repository does not yet implement it completely.
 
-Project Brain V1 now supplies Today and Chat project-state intelligence, while Tasks and generic planning behavior still compute state through separate paths.
+Project Brain V1 supplies Today and Chat project-state intelligence. Tasks now delegates normalized Todoist work to the same shared Recommendation Service through a focused backend projection; generic planning remains the principal compatibility path with separate computation.
 
 Consolidating those paths is active roadmap work and must not be documented as already complete.
 
@@ -766,13 +766,13 @@ The module currently models:
 - task enrichment;
 - task ranking.
 
-`main.py` imports `enrich_task` and `rank_tasks` from this module.
+Generic planning callers continue to import enrichment and ranking behavior from this module.
 
 The current planner is primarily task-oriented.
 
 It does not yet constitute the unified multi-provider recommendation engine described in the long-term product vision.
 
-The richer Tasks page also contains frontend-side recommendation ranking behavior, creating two recommendation paths that must eventually be consolidated.
+The Tasks page no longer imports or reproduces this ranking policy; SID-128 moved its recommendation computation to the shared backend service.
 
 ---
 
@@ -1205,13 +1205,13 @@ This is implemented infrastructure, but the current interaction model is not con
 
 `GET /tasks`
 
-The Tasks endpoint reads active Todoist tasks and returns normalized task state for the frontend.
+The Tasks endpoint reads active Todoist tasks once, normalizes them through the Todoist work adapter, and returns task sections plus backend-computed per-life-area recommendations.
 
 SID-225 repairs the endpoint's date contract. The response mapper now returns a normalized ISO `created_at` when Todoist supplies a valid timestamp and returns `null` for null, missing, empty, or malformed values. Normalized due dates follow the same absent-on-invalid behavior.
 
 Todoist remains the currently implemented task provider.
 
-The endpoint supports the existing Tasks command-center surface.
+The recommendation contract includes provider and task identity, action, score, explanation, structured evidence, backend-ordered alternatives with full task presentation, computation time, and explicit provider availability/degradation. Connected empty areas and provider-unavailable results are distinct states.
 
 Linear is not implemented in the audited repository.
 
@@ -1638,9 +1638,9 @@ The page includes views and filters around:
 - overdue tasks;
 - high-priority tasks.
 
-The current frontend also implements explainable per-life-area recommendation ranking.
+The frontend renders explainable per-life-area recommendations computed by `backend/app/tasks_projection.py` and the shared Recommendation Service.
 
-Ranking signals in the Tasks page include concepts such as:
+Backend ranking evidence includes concepts such as:
 
 - Todoist priority;
 - task age;
@@ -1648,33 +1648,13 @@ Ranking signals in the Tasks page include concepts such as:
 - unblocking or foundation language;
 - project momentum.
 
-The page flattens and ranks the returned tasks without Project Brain's parent-container filtering. Its date parsing, sorting, age scoring, refresh-state display, and due-date rendering now share a guarded date boundary. Missing or invalid timestamps do not receive invented ages or reach `Intl.DateTimeFormat`.
+The page retains display-only list sorting and filtering. Recommendation and alternative ordering come from the backend projection, which uses normalized executable-work/container semantics. Its display sorting, refresh-state display, and due-date rendering continue to share the guarded SID-225 date boundary. Missing or invalid timestamps do not receive invented ages or reach `Intl.DateTimeFormat`.
 
-The page persists recommendation timing/state in `localStorage` and can show recommendation changes.
+The page persists only prior backend recommendation identity and presentation text in `localStorage` and can show recommendation changes using the new backend explanation. It stores no score or independent reason policy.
 
 It includes expand/collapse behavior for life areas.
 
-### Architectural limitation
-
-This frontend-side ranking is not the same implementation as the backend planner ranking.
-
-PCOS currently therefore has multiple recommendation paths.
-
-This is a concrete example of the architecture problem described earlier:
-
-```text
-Tasks frontend recommendation logic
-        ≠
-backend planner ranking
-        ≠
-Project Brain aggregation
-        ≠
-Today recommendation path
-```
-
-The exact behaviors overlap but are not yet one shared intelligence model.
-
-Consolidating this is a high-value architectural issue.
+Recommendation refresh performs a new authenticated `GET /tasks` read and backend recomputation. The Tasks client contains no priority, age, due-urgency, foundation, momentum, alternative-ordering, or score-comparison recommendation engine.
 
 ---
 
@@ -1874,7 +1854,7 @@ Source of truth for PCOS-owned:
 
 ## 13.4 Frontend `localStorage`
 
-Currently stores local client connection configuration and some frontend recommendation state.
+Currently stores local client connection configuration and Tasks' prior backend recommendation identity/presentation text for refresh comparison. It stores no recommendation score or ranking policy.
 
 This is not an appropriate long-term source of cross-device product state.
 
@@ -1909,7 +1889,7 @@ They are documented here without yet converting them into roadmap issues; the Li
 
 ## 14.1 Project Brain is not yet the universal intelligence source
 
-Tasks and generic backend planning still contain logic that overlaps with Project Brain's shared recommendation path. Today no longer owns an independent ranking path.
+Generic backend planning still contains logic that overlaps with Project Brain's shared recommendation path. Today and Tasks no longer own independent ranking paths.
 
 This can produce inconsistent recommendations.
 
@@ -3629,6 +3609,22 @@ SID-132 does not begin reconnect UX, OAuth observation work, Tasks migration, iC
 
 Verification for SID-132 reached 205 backend tests and 16 frontend tests passing. Focused service, Chat, endpoint, provider-failure, connected-empty, exact, ambiguous, follow-up, UTC/local, ongoing-event, malformed-response, write-bypass, Project Chat, and planner regressions passed. Python compilation, the Next.js 15.5.19 production build, frontend tests, and `git diff --check` passed. A privacy-safe authenticated runtime returned HTTP 200 with `provider_unavailable` plus the exact disconnected diagnostic, and the `/chat` UI route compiled and returned HTTP 200 with meaningful content. Headless Chrome approval timed out twice, so no visual-browser success is claimed.
 
+## 17.31 Tasks Projection over Shared Recommendations
+
+SID-128 replaces the Tasks page's independent recommendation scorer with `backend/app/tasks_projection.py`, a focused application service behind the unchanged authenticated `GET /tasks` route. `backend/app/main.py` now owns only the typed response contract, authentication, and projection invocation for this surface.
+
+The projection reads Todoist once, normalizes provider records through `TodoistWorkAdapter`, groups all six established life areas, and delegates each area's `current_action` computation to the shared Recommendation Service. It supplies only the request time; it does not infer energy, Calendar availability, a free block, an upcoming commitment, or project-momentum IDs. Existing normalized priority, safe due urgency, valid task age, foundation/unblocking language, and visible-momentum language remain structured shared-service evidence.
+
+The response preserves the existing task sections and adds future-client-ready recommendation records with life-area and section identity, provider and provider-record identity, full selected task presentation, action, score, explanation, structured evidence, backend-ordered alternatives with task presentation, computation timestamps, context, and explicit provider state. All six areas are always present. Connected empty areas return `empty`; a failed provider read returns `unavailable`; partial results with an error return `degraded` without discarding known work.
+
+The Tasks UX retains Today, Upcoming, and By Life Area views, filters, cards, date-safe formatting, recommendation reasons, alternative expansion, refresh, and recommendation-change presentation. Refresh performs a real backend recomputation. `localStorage` retains only the previous backend identity and display text; the frontend scoring, ranking, special-case reason policy, and score-delta comparison are removed. SID-225's malformed, impossible, null, missing, and empty date boundary remains intact for task cards and display sorting.
+
+Regression tests were added before implementation and failed because `app.tasks_projection` did not exist and the Tasks page still contained its scoring policy. Focused backend coverage now verifies all areas, explicit empties, deterministic ties, structured evidence, alternatives, full task presentation, provider failure and degradation, malformed-date safety, no invented context, one Todoist read, normalized adapter usage, and per-area shared-service delegation. Frontend coverage verifies backend choice/reason/alternative rendering, empty versus unavailable presentation, identity-only refresh comparison, backend explanation use, and the absence of legacy scoring helpers.
+
+SID-128 does not begin Linear ingestion, Email Intelligence, visual redesign, Calendar work, Finance, or Habits. Generic planner callers remain unchanged.
+
+Verification for SID-128 reached 213 backend tests and 21 frontend tests passing. Python compilation, the Next.js 15.5.19 production build, and `git diff --check` passed. An authenticated live `/tasks` read returned HTTP 200 with 21 tasks, six sections, six recommendations, provider `available`, no provider errors, and no inferred Calendar, energy, or free-block signals. Authenticated headless Chrome rendered all six recommendation panels and task cards, expanded backend alternatives, and switched to By Life Area with no application error overlay; its only console entry was the existing missing `/favicon.ico` 404.
+
 ---
 
 # 18. Current Verification History
@@ -3711,13 +3707,11 @@ The current objective is to make PCOS's existing intelligence architecture coher
 
 Project Brain V1 is now the canonical project-state source for Projects, Today, and project-grounded Chat questions, but not yet for every PCOS surface.
 
-Tasks and generic backend planning still compute overlapping recommendation state through different paths.
+Generic backend planning still computes overlapping recommendation state through a compatibility path. Tasks now consumes the shared Recommendation Service through its backend projection.
 
 The current fragmentation is conceptually:
 
 ```text
-Tasks frontend ranking
-        !=
 backend planner ranking
         !=
 Project Brain next-move logic
@@ -4013,14 +4007,14 @@ The backend should preserve enough structured evidence for debugging.
 
 ### Existing recommendation-path audit
 
-The shared-service implementation began by auditing all four existing paths. Two remaining compatibility paths await dedicated migration issues:
+The shared-service implementation began by auditing all four existing paths. One compatibility path remains for its dedicated migration:
 
 - `backend/app/planner.py` enriches raw task dictionaries and scores due urgency, Todoist priority, estimated-duration/free-block fit, inferred task energy versus inferred user energy, and Calendar focus category. It still serves existing generic planning callers but no longer serves Today.
 - `backend/app/project_brain.py` previously projected normalized Todoist work back into planner dictionaries, ranked executable leaves through `rank_tasks`, and formatted the first result as `Work next: ...`. It now sends typed `NormalizedWorkItem` records to the shared service while retaining the same public wording and response shape.
 - `backend/app/today_projection.py` consumes a structured Project Brain snapshot, normalized work, the shared Recommendation Service, and the Calendar contract. It preserves preparation inside 60 minutes without creating another independent ranking path; `backend/app/main.py` is only the route adapter.
-- `frontend/src/app/tasks/page.tsx` still computes per-life-area recommendations using normalized Todoist priority, task age, due urgency, foundation/unblocking language, and project momentum. It also preserves recommendation-change snapshots in localStorage. SID-128 owns the backend migration, and localStorage change behavior is intentionally not ported by the shared-service issue.
+- `backend/app/tasks_projection.py` now adapts Todoist records to typed normalized work and invokes the shared service once per life area. `frontend/src/app/tasks/page.tsx` only presents the returned choice, reason, alternatives, provider state, and identity-only refresh comparison.
 
-This audit avoids creating another ranking path: the shared backend service is the canonical destination, Project Brain and Today consume it, and Tasks plus generic planning remain compatibility consumers until their dedicated issues.
+This audit avoids creating another ranking path: the shared backend service is the canonical destination for Project Brain, Today, and Tasks. Generic planning remains the compatibility consumer until its dedicated issue.
 
 ### Implemented recommendation contract
 
@@ -4210,9 +4204,9 @@ PCOS should:
 
 ## 20.6 Project Intelligence Can Disagree Across Surfaces
 
-**Status:** Partially resolved by SID-127
+**Status:** Partially resolved by SID-127 and SID-128
 
-Today and Project Brain now use one canonical recommendation path. Tasks and generic planner logic can still produce inconsistent next moves until their dedicated migrations.
+Today, Tasks, and Project Brain now use the shared Recommendation Service. Generic planner logic can still produce inconsistent next moves until its dedicated migration.
 
 Even if each local ranking algorithm is individually reasonable, disagreement damages the Chief of Staff experience.
 
@@ -4681,22 +4675,19 @@ Linear issues are planned.
 
 The model can represent Linear-style dependencies and blocked state, but the Todoist adapter intentionally leaves those fields empty/false because Todoist does not provide them.
 
-The remaining plumbing includes later migration of Tasks and generic Chat planning. Normalized provider work is intentionally not persisted or synchronized.
+The remaining plumbing includes later migration of generic Chat planning. Normalized provider work is intentionally not persisted or synchronized.
 
 ---
 
 ## 22.4 Shared Recommendation Service
 
-**Status:** Implemented for typed domain computation, Project Brain, and Today
+**Status:** Implemented for typed domain computation, Project Brain, Today, and Tasks
 
 The typed shared service now owns canonical project-next-move and context-aware current-action computation over `NormalizedWorkItem` records. Project Brain preserves its existing response contract, and Today consumes the same structured snapshot and service through a focused projection.
 
-Compatibility logic remains split across:
+Compatibility logic remains in `planner.py` for existing generic planning callers.
 
-- `planner.py`;
-- Tasks frontend logic.
-
-Chat project-state questions consume Project Brain through SID-129, and Today consumes it through SID-127. Tasks migration remains assigned to SID-128. `planner.py` remains because existing global-planning and other callers still depend on it.
+Chat project-state questions consume Project Brain through SID-129, Today consumes the shared service through SID-127, and Tasks consumes it through SID-128. `planner.py` remains because existing global-planning and other callers still depend on it.
 
 ---
 
@@ -6004,15 +5995,15 @@ Hardened Calendar time and free-block behavior for Today fields. This trust work
 
 ## Issue: Move Tasks Recommendation Logic to the Backend
 
-**Status:** Todo
+**Status:** Done
 
 **Priority:** High
 
 **Description:**
 
-Remove the Tasks page as an independent recommendation engine.
+The Tasks page no longer acts as an independent recommendation engine.
 
-The current Tasks frontend contains meaningful ranking logic and local recommendation state.
+The focused backend Tasks projection now owns ranking, evidence, alternatives, and recomputation over normalized Todoist work through the shared Recommendation Service.
 
 Future clients should not need to reproduce this TypeScript scoring implementation.
 
@@ -8569,7 +8560,7 @@ Any feature using current time, free blocks, next events, preparation windows, o
 
 ## 54.2 Recommendation Fragmentation
 
-Today and Project Brain now share typed recommendation computation. Generic backend planner logic and Tasks frontend logic still overlap with that shared path.
+Today, Tasks, and Project Brain now share typed recommendation computation. Generic backend planner logic still overlaps with that shared path.
 
 Adding another recommendation path is a regression in architecture even if the isolated feature appears intelligent.
 

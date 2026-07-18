@@ -3695,6 +3695,26 @@ The real Personal Gmail gate analyzed at most 12 recent records and passed with 
 
 SID-146 does not add Today/UI surfacing, task or Calendar proposals/actions, pending actions, mailbox organization execution, labels or other Gmail writes, persistence, Memory ingestion, A&M/Blinn/Freelance accounts, background polling, Superhuman integration, or OAuth/Calendar changes.
 
+## 17.35 Full Personal Email Inventory and Read-Only Organization Proposals
+
+SID-230 adds `backend/app/email_inventory.py` and a purpose-built full-label inventory path in `backend/app/gmail_client.py`. It inventories the Personal Gmail `INBOX` system label and the one existing user label discovered from the configured `Old Stuff` name while preserving the provider-returned exact label ID and displayed name. This path is separate from SID-146's intentionally bounded recent-message analysis and does not widen that service.
+
+The provider exhausts every Gmail message-list cursor without a product count limit, deduplicates repeated provider message references, rejects malformed or repeated cursors, and retains page, remaining-cursor, size-estimate, duplicate, metadata-request, retry, and provider-diagnostic evidence. Every metadata record must still carry the requested provider label. Connected-empty, provider failure, malformed response, missing label, incomplete inventory, and truly complete inventory remain distinct; partial or malformed reads can never produce proposals.
+
+The full population is metadata-only. Gmail `format=metadata` preserves opaque account/message/thread identity, sender and subject headers for local deterministic analysis, provider dates, labels, unread and Important state. A second complete `has:attachment` identity pass protects attachment-bearing messages without reading MIME bodies or downloading attachments. The typed result fixes body requests, external-model calls, Memory writes, and provider mutation calls at zero. Raw addresses and message content are discarded from the inventory facts and never printed by the verifier; sender summaries use stable fingerprints, and representative examples use opaque redacted tokens.
+
+`EmailInventoryService` deterministically reports exact message and unique-thread counts, date range, top sender fingerprints and domains, unread/Important/protected/uncertain counts, existing-label distribution, coarse message types, provider diagnostics, and a stable inventory fingerprint. The implementation does not trust Linear's planning counts and never hard-codes mailbox volume.
+
+`EmailOrganizationProposalService` emits advisory, non-executable exact manifests only after both inventories are complete. It preserves Personal provider/account/thread/message identity, groups targets by thread without losing exact message membership, and includes exact counts, deterministic selection criteria, explicit exclusions, uncertainty, redacted examples, and a stable selection fingerprint. Organization labels are closed to `PCOS/Action`, `PCOS/Waiting`, `PCOS/Keep`, and `PCOS/Review`; optional topic labels are closed to Finance, School, Freelance, and Travel and appear only from grounded local metadata. Label, archive, and mark-read are separate future operation types. Every proposal requires approval, but SID-230 registers no pending action and has no executor.
+
+Provider Important, security, financial, academic, client, direct-human, attachment-bearing, and uncertain mail are protected from default batch selection. Missing sender/subject/date/attachment evidence, parse diagnostics, and ungrounded coarse type remain explicit uncertainty rather than a cleanup guess. Delete, trash, unsubscribe, spam, sender blocking, replies/sends, task/Calendar actions, label creation, and any other provider mutation are absent from the domain and adapter.
+
+Credential-free SID-230 coverage adds 14 tests for multipage exhaustion, provider-reference and thread deduplication, exact provider-label identity, repeated cursors, partial malformed metadata, bounded transient retry, zero body access, deterministic fingerprints and reruns, summaries for both labels, protected/uncertain exclusions, closed label/topic vocabularies, distinct future operations, exact manifests, incomplete-inventory refusal, redacted verification, and forbidden capabilities. The finished-tree checkpoint reached 299 backend tests and 24 frontend tests passing, plus full Python compilation, the Next.js 15.5.19 production build, `git diff --check`, and privacy/scope/mutation/model/persistence scans.
+
+`backend/scripts/verify_personal_email_inventory.py` passed against the real configured Personal Gmail account using the unchanged single `gmail.readonly` scope. The redacted gate exhausted 160 Inbox pages and 26 Old Stuff pages, producing complete inventories of 15,967 and 2,547 message records with 15,802 and 2,468 unique threads. Both inventories had date ranges, sender/domain/label/type summaries, stable fingerprints, zero remaining cursors, zero duplicate provider references, zero transient retries, and zero body requests. The gate reported 5,898 protected and 182 uncertain Inbox records plus 457 protected and 15 uncertain Old Stuff records. It produced 12 stable advisory batches across eight label, two archive, and two mark-read proposals, covering only the four approved PCOS labels and grounded Travel topic evidence. Every batch required approval and was non-executable. External-model calls, Memory writes, and provider mutation calls were all zero; no address, subject, body, OAuth value, message ID, or thread ID was printed.
+
+SID-230 does not change OAuth scopes or configuration; create/apply/remove labels; archive; mark read/unread; register or execute pending actions; add approval UI; persist inventory or proposals; ingest email into Memory; create tasks or Calendar events; scan other accounts; add scheduling/autonomous cleanup; unsubscribe/block/send/reply; or add Superhuman-specific behavior. Those write and approval concerns remain gated behind SID-231 and explicit user reauthorization.
+
 ---
 
 # 18. Current Verification History
@@ -3729,6 +3749,7 @@ Recorded development checkpoints include:
 | Provider-neutral Email Attention domain | 226 tests passing | 21 frontend tests and build passing | Passing |
 | Personal Gmail read provider (authenticated) | 242 tests passing plus redacted live read | 21 frontend tests and build passing | Passing |
 | Local Personal Email importance analysis (authenticated) | 268 tests passing plus bounded redacted live analysis | 21 frontend tests and build passing | Passing |
+| Full Personal Email inventory and advisory organization proposals (authenticated) | 299 tests passing plus complete redacted Inbox and Old Stuff inventory | 24 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -6985,6 +7006,41 @@ SID-143 Email Attention domain and SID-144 Personal Email connection are complet
 
 ---
 
+## Issue: Inventory Personal Inbox and Propose Declutter Batches Read-Only
+
+**Status:** Done (SID-230; credential-free suite and complete redacted live inventory passed)
+
+**Priority:** High
+
+**Description:**
+
+Perform the expensive read-only audit of the Personal Inbox and the exact existing Old Stuff provider label before any Gmail write permission is requested. Produce deterministic, explainable, approval-required organization batches without changing the mailbox.
+
+The full inventory uses purpose-built pagination rather than widening SID-146's bounded recent analysis. It preserves exact Personal provider/account/message/thread and provider-label identity, metadata-first facts, completeness/cursors, date range, sender/domain and existing-label distributions, unread/Important state, coarse message types, attachment evidence, protection/uncertainty counts, and stable fingerprints. Bodies are not read.
+
+Organization proposals preserve exact thread-deduplicated target manifests and message membership. `PCOS/Action`, `PCOS/Waiting`, `PCOS/Keep`, and `PCOS/Review` are the only organization labels. Finance, School, Freelance, and Travel are the only topic-label vocabulary and require grounded metadata. Label, archive, and mark-read remain separate future operations. Every proposal is advisory, approval-required, and non-executable.
+
+**Dependencies / blockers:**
+
+SID-143, SID-144, and SID-146 are complete. SID-231 remains the separate manual OAuth and mutation gate; no part of SID-230 authorizes it.
+
+**Acceptance evidence:**
+
+- 299 backend tests, 24 frontend tests, Python compilation, frontend production build, diff check, and privacy/scope/capability scans pass.
+- Real `gmail.readonly` verification exhausted 160 Inbox pages and 26 Old Stuff pages with no remaining cursor.
+- The live inventories contained 15,967 Inbox and 2,547 Old Stuff messages; these live counts replaced rather than encoded the stale planning snapshot.
+- Metadata summaries, unique threads, protected/uncertain counts, exact label identity, stable fingerprints, and provider diagnostics were present for both inventories.
+- Twelve stable advisory batches were produced: eight label, two archive, and two mark-read. Every batch required approval and was non-executable.
+- Important/security/financial/academic/client/direct-human/attachment-bearing/uncertain records were excluded from default selection.
+- Body requests, external-model calls, Memory writes, and provider mutation calls were zero.
+- No address, subject, body, OAuth value, provider message ID, or provider thread ID was printed.
+
+**Explicit exclusions preserved:**
+
+No OAuth scope/config change, mailbox mutation, pending-action registration, approval UI, label creation, archive execution, mark-read/unread execution, unsubscribe, sender block, send/reply, task or Calendar proposal/action, persistence, Memory ingestion, other email account, scheduler, autonomous cleanup, or Superhuman-specific behavior.
+
+---
+
 ## Issue: Surface Email Attention in Today
 
 **Status:** Todo
@@ -9091,12 +9147,13 @@ Implemented systems include:
 - provider-neutral Email Attention and Action Candidate domain model;
 - authenticated read-only Personal Gmail provider, secure Desktop OAuth setup, and redacted live verifier;
 - deterministic local Personal Email importance and organization analysis with bounded redacted live verification;
+- complete read-only Personal Inbox and Old Stuff inventory with deterministic advisory organization proposals and redacted live verification;
 - typed durable pending actions with atomic exactly-once confirmation, cancellation, restart/refresh recovery, and provider-neutral executor dispatch for the six existing Todoist and Calendar mutations;
 - local startup and shutdown scripts.
 
 “Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, broader conversation context is still process-local, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
 
-The SID-150 durable pending-action checkpoint reached 285 backend tests and 24 frontend tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, exact-scope/privacy scans, and a local authenticated recovery/cancellation smoke with zero provider writes. The Personal Email analysis checkpoint reached 268 backend tests and 21 frontend tests passing, with its redacted real-account gate analyzing at most 12 recent records, preserving thread deduplication and uncertainty, reporting only aggregate categories/counts, and performing zero external-model or provider mutation calls. The Personal Gmail provider checkpoint reached 242 backend tests plus its redacted authenticated read; the provider-neutral Email Attention checkpoint reached 226 backend tests. Earlier checkpoints remain recorded as implementation history rather than current feature claims.
+The SID-230 full Personal Email inventory checkpoint reached 299 backend tests and 24 frontend tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, privacy/scope/capability scans, and a complete redacted real-account inventory of 15,967 Inbox plus 2,547 Old Stuff messages across 186 provider pages with zero body reads, model calls, Memory writes, or mailbox mutations. The SID-150 durable pending-action checkpoint reached 285 backend tests and 24 frontend tests passing, with Python compilation, the production build, diff check, exact-scope/privacy scans, and a local authenticated recovery/cancellation smoke with zero provider writes. The Personal Email analysis checkpoint reached 268 backend tests and 21 frontend tests passing, with its redacted real-account gate analyzing at most 12 recent records, preserving thread deduplication and uncertainty, reporting only aggregate categories/counts, and performing zero external-model or provider mutation calls. The Personal Gmail provider checkpoint reached 242 backend tests plus its redacted authenticated read; the provider-neutral Email Attention checkpoint reached 226 backend tests. Earlier checkpoints remain recorded as implementation history rather than current feature claims.
 
 The current product is not yet the full Personal Operating System described in the vision.
 

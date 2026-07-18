@@ -11,7 +11,8 @@ import hashlib
 from html.parser import HTMLParser
 import hmac
 import re
-from typing import Any
+import time
+from typing import Any, Literal
 
 from google.auth.exceptions import RefreshError, TransportError
 from google.auth.transport.requests import Request as GoogleAuthRequest
@@ -37,6 +38,8 @@ GMAIL_PAGE_SIZE = 100
 MAX_GMAIL_LIST_PAGES = 20
 MAX_ANALYZABLE_BODY_CHARS = 20_000
 MAX_SNIPPET_CHARS = 500
+INVENTORY_METADATA_HEADERS = ("From", "To", "Cc", "Bcc", "Subject", "Date")
+MAX_INVENTORY_READ_ATTEMPTS = 3
 
 
 class GmailProviderState(StrEnum):
@@ -90,6 +93,8 @@ class GmailMessageRecord(BaseModel):
     body_text: str | None = None
     body_truncated: bool = False
     attachments: tuple[GmailAttachmentMetadata, ...] = ()
+    has_attachment: bool | None = None
+    body_accessed: bool = False
     parse_diagnostics: tuple[str, ...] = ()
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -104,6 +109,26 @@ class GmailMessagePage(BaseModel):
     truncated: bool
     pages_fetched: int = Field(default=0, ge=0)
     result_size_estimate: int | None = Field(default=None, ge=0)
+    diagnostic: GmailProviderDiagnostic | None = None
+
+
+class GmailInventoryPage(BaseModel):
+    """Complete-or-explicitly-partial metadata-only label inventory."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: GmailProviderState
+    messages: tuple[GmailMessageRecord, ...] = ()
+    complete: bool
+    pages_fetched: int = Field(default=0, ge=0)
+    attachment_pages_fetched: int = Field(default=0, ge=0)
+    next_page_token: str | None = None
+    attachment_next_page_token: str | None = None
+    result_size_estimate: int | None = Field(default=None, ge=0)
+    duplicate_message_count: int = Field(default=0, ge=0)
+    metadata_requests: int = Field(default=0, ge=0)
+    provider_retry_count: int = Field(default=0, ge=0)
+    body_requests: Literal[0] = 0
     diagnostic: GmailProviderDiagnostic | None = None
 
 
@@ -142,6 +167,17 @@ class _GmailConnection:
     account: EmailProviderAccountIdentity
     message_total: int | None
     thread_total: int | None
+
+
+@dataclass(frozen=True)
+class _ReferenceInventory:
+    complete: bool
+    pages_fetched: int
+    next_page_token: str | None
+    result_size_estimate: int | None
+    duplicate_count: int
+    retry_count: int = 0
+    diagnostic: GmailProviderDiagnostic | None = None
 
 
 class GmailClient:
@@ -291,6 +327,224 @@ class GmailClient:
             result_size_estimate=result_size_estimate,
         )
 
+    def inventory_label_messages(self, *, provider_label_id: str) -> GmailInventoryPage:
+        """Read every message in one exact provider label without reading bodies.
+
+        Gmail's metadata format cannot expose attachment structure, so a second
+        complete `has:attachment` identity pass supplies attachment evidence.
+        Both cursors are retained and any partial/malformed pass fails closed.
+        """
+
+        if not provider_label_id.strip():
+            raise ValueError("provider_label_id cannot be blank")
+        connection, error = self._connect()
+        if error:
+            return GmailInventoryPage(
+                state=_state_for_error(error), complete=False, diagnostic=error
+            )
+        assert connection is not None
+
+        references, primary = self._list_all_message_references(
+            connection, provider_label_id=provider_label_id, query=None
+        )
+        attachment_references, attachments = self._list_all_message_references(
+            connection, provider_label_id=provider_label_id, query="has:attachment"
+        )
+        attachment_ids = {item[0] for item in attachment_references}
+        diagnostic = primary.diagnostic or attachments.diagnostic
+        records: list[GmailMessageRecord] = []
+        metadata_requests = 0
+        retry_count = primary.retry_count + attachments.retry_count
+        if diagnostic is None:
+            for message_id, _thread_id in references:
+                raw, error, retries = self._execute_inventory_read(
+                    connection.service.users()
+                    .messages()
+                    .get(
+                        userId="me",
+                        id=message_id,
+                        format="metadata",
+                        metadataHeaders=list(INVENTORY_METADATA_HEADERS),
+                    )
+                )
+                metadata_requests += 1
+                retry_count += retries
+                if error:
+                    diagnostic = error
+                    break
+                try:
+                    record = _normalize_message(raw, connection.account, body_accessed=False)
+                except (TypeError, ValueError):
+                    diagnostic = _malformed_diagnostic(
+                        "Gmail inventory metadata response was malformed."
+                    )
+                    break
+                if provider_label_id not in record.label_ids:
+                    diagnostic = _malformed_diagnostic(
+                        "Gmail inventory metadata did not preserve the requested label."
+                    )
+                    break
+                records.append(
+                    record.model_copy(
+                        update={"has_attachment": message_id in attachment_ids}
+                    )
+                )
+
+        complete = (
+            diagnostic is None
+            and primary.complete
+            and attachments.complete
+            and len(records) == len(references)
+        )
+        if complete:
+            state = (
+                GmailProviderState.CONNECTED
+                if records
+                else GmailProviderState.CONNECTED_EMPTY
+            )
+        elif diagnostic is not None:
+            state = _state_for_error(diagnostic)
+        else:
+            state = GmailProviderState.MALFORMED_RESPONSE
+            diagnostic = _malformed_diagnostic("Gmail inventory did not complete.")
+        return GmailInventoryPage(
+            state=state,
+            messages=tuple(records),
+            complete=complete,
+            pages_fetched=primary.pages_fetched,
+            attachment_pages_fetched=attachments.pages_fetched,
+            next_page_token=primary.next_page_token,
+            attachment_next_page_token=attachments.next_page_token,
+            result_size_estimate=primary.result_size_estimate,
+            duplicate_message_count=primary.duplicate_count,
+            metadata_requests=metadata_requests,
+            provider_retry_count=retry_count,
+            diagnostic=diagnostic,
+        )
+
+    def _list_all_message_references(
+        self,
+        connection: _GmailConnection,
+        *,
+        provider_label_id: str,
+        query: str | None,
+    ) -> tuple[list[tuple[str, str]], "_ReferenceInventory"]:
+        references: list[tuple[str, str]] = []
+        seen_ids: set[str] = set()
+        seen_tokens: set[str] = set()
+        next_token: str | None = None
+        pages_fetched = 0
+        duplicate_count = 0
+        result_size_estimate: int | None = None
+        retry_count = 0
+        while True:
+            kwargs: dict[str, Any] = {
+                "userId": "me",
+                "maxResults": GMAIL_PAGE_SIZE,
+                "q": _gmail_query(query),
+                "labelIds": [provider_label_id],
+                "includeSpamTrash": False,
+            }
+            if next_token:
+                kwargs["pageToken"] = next_token
+            payload, error, retries = self._execute_inventory_read(
+                connection.service.users().messages().list(**kwargs)
+            )
+            retry_count += retries
+            if error:
+                return references, _ReferenceInventory(
+                    complete=False,
+                    pages_fetched=pages_fetched,
+                    next_page_token=next_token,
+                    result_size_estimate=result_size_estimate,
+                    duplicate_count=duplicate_count,
+                    retry_count=retry_count,
+                    diagnostic=error,
+                )
+            pages_fetched += 1
+            if not isinstance(payload, dict) or not isinstance(
+                payload.get("messages", []), list
+            ):
+                error = _malformed_diagnostic(
+                    "Gmail inventory list response was malformed."
+                )
+                return references, _ReferenceInventory(
+                    complete=False,
+                    pages_fetched=pages_fetched,
+                    next_page_token=next_token,
+                    result_size_estimate=result_size_estimate,
+                    duplicate_count=duplicate_count,
+                    retry_count=retry_count,
+                    diagnostic=error,
+                )
+            if result_size_estimate is None:
+                result_size_estimate = _optional_nonnegative_int(
+                    payload.get("resultSizeEstimate")
+                )
+            for reference in payload.get("messages", []):
+                if not _valid_message_reference(reference):
+                    error = _malformed_diagnostic(
+                        "Gmail inventory message identity was malformed."
+                    )
+                    return references, _ReferenceInventory(
+                        complete=False,
+                        pages_fetched=pages_fetched,
+                        next_page_token=next_token,
+                        result_size_estimate=result_size_estimate,
+                        duplicate_count=duplicate_count,
+                        retry_count=retry_count,
+                        diagnostic=error,
+                    )
+                message_id = reference["id"]
+                if message_id in seen_ids:
+                    duplicate_count += 1
+                    continue
+                seen_ids.add(message_id)
+                references.append((message_id, reference["threadId"]))
+            raw_next = payload.get("nextPageToken")
+            if raw_next is None:
+                return references, _ReferenceInventory(
+                    complete=True,
+                    pages_fetched=pages_fetched,
+                    next_page_token=None,
+                    result_size_estimate=result_size_estimate,
+                    duplicate_count=duplicate_count,
+                    retry_count=retry_count,
+                )
+            if (
+                not isinstance(raw_next, str)
+                or not raw_next.strip()
+                or raw_next in seen_tokens
+            ):
+                error = _malformed_diagnostic(
+                    "Gmail inventory pagination token was malformed or repeated."
+                )
+                return references, _ReferenceInventory(
+                    complete=False,
+                    pages_fetched=pages_fetched,
+                    next_page_token=(raw_next if isinstance(raw_next, str) else None),
+                    result_size_estimate=result_size_estimate,
+                    duplicate_count=duplicate_count,
+                    retry_count=retry_count,
+                    diagnostic=error,
+                )
+            seen_tokens.add(raw_next)
+            next_token = raw_next
+
+    def _execute_inventory_read(
+        self, request
+    ) -> tuple[Any | None, GmailProviderDiagnostic | None, int]:
+        retries = 0
+        for attempt in range(MAX_INVENTORY_READ_ATTEMPTS):
+            payload, error = self._execute(request)
+            if error is None or not _retryable_inventory_error(error):
+                return payload, error, retries
+            if attempt + 1 >= MAX_INVENTORY_READ_ATTEMPTS:
+                return payload, error, retries
+            retries += 1
+            time.sleep(0.1 * (attempt + 1))
+        raise AssertionError("unreachable inventory retry state")
+
     def get_thread(self, thread_id: str) -> GmailThreadResult:
         if not thread_id.strip():
             raise ValueError("thread_id cannot be blank")
@@ -362,6 +616,25 @@ class GmailClient:
             (label for label in result.labels if label.name.casefold() == target),
             None,
         )
+        return GmailLabelResult(
+            state=(
+                GmailProviderState.CONNECTED
+                if match is not None
+                else GmailProviderState.CONNECTED_EMPTY
+            ),
+            labels=result.labels,
+            matched_label=match,
+        )
+
+    def find_label_exact(self, name: str) -> GmailLabelResult:
+        """Resolve a provider label by exact, case-sensitive displayed name."""
+
+        if not name.strip() or name != name.strip():
+            raise ValueError("exact label name cannot be blank or padded")
+        result = self.list_labels()
+        if result.diagnostic:
+            return result
+        match = next((label for label in result.labels if label.name == name), None)
         return GmailLabelResult(
             state=(
                 GmailProviderState.CONNECTED
@@ -536,6 +809,8 @@ def personal_email_health_payload(settings: Settings) -> dict[str, Any]:
 def _normalize_message(
     raw: Any,
     account: EmailProviderAccountIdentity,
+    *,
+    body_accessed: bool = True,
 ) -> GmailMessageRecord:
     if not isinstance(raw, dict):
         raise ValueError("message must be an object")
@@ -567,10 +842,15 @@ def _normalize_message(
     diagnostics: list[str] = []
     internal_date = _parse_internal_date(raw.get("internalDate"), diagnostics)
     message_date = _parse_message_date(_first_header(header_values, "date"), diagnostics)
-    body_text, attachments, body_diagnostics, body_truncated = _parse_mime_payload(
-        payload
-    )
-    diagnostics.extend(body_diagnostics)
+    if body_accessed:
+        body_text, attachments, body_diagnostics, body_truncated = _parse_mime_payload(
+            payload
+        )
+        diagnostics.extend(body_diagnostics)
+    else:
+        body_text = None
+        attachments = ()
+        body_truncated = False
 
     labels = raw.get("labelIds", [])
     if not isinstance(labels, list) or any(not isinstance(label, str) for label in labels):
@@ -601,6 +881,8 @@ def _normalize_message(
         body_text=body_text,
         body_truncated=body_truncated,
         attachments=attachments,
+        has_attachment=(bool(attachments) if body_accessed else None),
+        body_accessed=body_accessed,
         parse_diagnostics=tuple(dict.fromkeys(diagnostics)),
         provider_metadata={
             "history_id": raw.get("historyId"),
@@ -855,6 +1137,13 @@ def _state_for_error(error: GmailProviderDiagnostic) -> GmailProviderState:
     if error.code == "malformed_response":
         return GmailProviderState.MALFORMED_RESPONSE
     return GmailProviderState.PROVIDER_FAILURE
+
+
+def _retryable_inventory_error(error: GmailProviderDiagnostic) -> bool:
+    return error.code == "provider" or (
+        error.http_status is not None
+        and (error.http_status == 429 or error.http_status >= 500)
+    )
 
 
 def _message_error_result(

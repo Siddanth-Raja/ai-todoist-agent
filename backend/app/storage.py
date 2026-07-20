@@ -443,12 +443,19 @@ def ensure_database() -> None:
                         'create_many_todoist_tasks',
                         'create_many_todoist_subtasks',
                         'create_calendar_event',
-                        'update_calendar_event'
+                        'update_calendar_event',
+                        'gmail_apply_label',
+                        'gmail_remove_label',
+                        'gmail_archive',
+                        'gmail_restore_inbox',
+                        'gmail_mark_read',
+                        'gmail_mark_unread',
+                        'gmail_create_label'
                     )),
                     schema_version INTEGER NOT NULL,
                     payload TEXT NOT NULL,
                     canonical_project_id TEXT,
-                    provider TEXT NOT NULL CHECK(provider IN ('todoist', 'google_calendar')),
+                    provider TEXT NOT NULL CHECK(provider IN ('todoist', 'google_calendar', 'gmail')),
                     target_references TEXT NOT NULL,
                     confirmation_prompt TEXT NOT NULL,
                     evidence TEXT NOT NULL,
@@ -474,9 +481,26 @@ def ensure_database() -> None:
 
                 CREATE INDEX IF NOT EXISTS idx_pending_actions_session_state
                     ON pending_actions(session_id, lifecycle, proposed_at DESC);
+
+                CREATE TABLE IF NOT EXISTS gmail_mutation_gate (
+                    singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+                    authorized_scope TEXT,
+                    approval_reference TEXT,
+                    oauth_authorized_at TEXT,
+                    canary_action_id TEXT,
+                    canary_manifest_fingerprint TEXT,
+                    canary_label_id TEXT,
+                    canary_applied_at TEXT,
+                    canary_undo_action_id TEXT,
+                    canary_undo_verified_at TEXT,
+                    provider_mutation_calls INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             _ensure_activity_columns(connection)
+            _ensure_pending_action_contract(connection)
+            _ensure_gmail_mutation_gate_columns(connection)
             _seed_default_habits(connection)
             _seed_default_memories(connection)
             _seed_default_canonical_projects(connection)
@@ -622,6 +646,78 @@ def _ensure_activity_columns(connection: sqlite3.Connection) -> None:
     }
     if "source" not in columns:
         connection.execute("ALTER TABLE activity_logs ADD COLUMN source TEXT NOT NULL DEFAULT 'app'")
+
+
+def _ensure_pending_action_contract(connection: sqlite3.Connection) -> None:
+    """Expand SID-150's closed action table without weakening stored contracts."""
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'pending_actions'"
+    ).fetchone()
+    schema = str(row["sql"] or "") if row else ""
+    if "gmail_apply_label" in schema and "'gmail'" in schema:
+        return
+
+    connection.execute("DROP INDEX IF EXISTS idx_pending_actions_session_state")
+    connection.execute("ALTER TABLE pending_actions RENAME TO pending_actions_sid150")
+    connection.executescript(
+        """
+        CREATE TABLE pending_actions (
+            id TEXT PRIMARY KEY,
+            action_type TEXT NOT NULL CHECK(action_type IN (
+                'create_todoist_task', 'create_todoist_subtask',
+                'create_many_todoist_tasks', 'create_many_todoist_subtasks',
+                'create_calendar_event', 'update_calendar_event',
+                'gmail_apply_label', 'gmail_remove_label', 'gmail_archive',
+                'gmail_restore_inbox', 'gmail_mark_read', 'gmail_mark_unread',
+                'gmail_create_label'
+            )),
+            schema_version INTEGER NOT NULL,
+            payload TEXT NOT NULL,
+            canonical_project_id TEXT,
+            provider TEXT NOT NULL CHECK(provider IN ('todoist', 'google_calendar', 'gmail')),
+            target_references TEXT NOT NULL,
+            confirmation_prompt TEXT NOT NULL,
+            evidence TEXT NOT NULL,
+            payload_fingerprint TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            session_id TEXT,
+            source TEXT NOT NULL,
+            source_ref TEXT,
+            lifecycle TEXT NOT NULL CHECK(lifecycle IN (
+                'pending', 'executing', 'succeeded', 'failed', 'cancelled',
+                'expired', 'outcome_unknown'
+            )),
+            version INTEGER NOT NULL DEFAULT 1,
+            proposed_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            confirmed_at TEXT,
+            execution_started_at TEXT,
+            completed_at TEXT,
+            expires_at TEXT,
+            result TEXT,
+            failure TEXT
+        );
+
+        INSERT INTO pending_actions SELECT * FROM pending_actions_sid150;
+        DROP TABLE pending_actions_sid150;
+        CREATE INDEX idx_pending_actions_session_state
+            ON pending_actions(session_id, lifecycle, proposed_at DESC);
+        """
+    )
+
+
+def _ensure_gmail_mutation_gate_columns(connection: sqlite3.Connection) -> None:
+    columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(gmail_mutation_gate)").fetchall()
+    }
+    if "provider_mutation_calls" not in columns:
+        connection.execute(
+            """
+            ALTER TABLE gmail_mutation_gate
+            ADD COLUMN provider_mutation_calls INTEGER NOT NULL DEFAULT 0
+            """
+        )
 
 
 def list_memory_entries() -> list[dict[str, Any]]:

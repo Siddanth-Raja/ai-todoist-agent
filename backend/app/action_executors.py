@@ -1,4 +1,4 @@
-"""Executor registry and provider adapters for the six SID-150 action variants."""
+"""Executor registry and provider adapters for typed pending-action variants."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from .action_domain import (
     CreateTodoistTaskPayload,
     PendingActionType,
     ProviderTargetReference,
+    StoredTargetResult,
     TodoistTaskSpec,
     UpdateCalendarEventPayload,
 )
@@ -28,6 +29,14 @@ from .todoist_tools import (
     create_task,
     list_todoist_sections,
 )
+from .gmail_organization import (
+    GmailBatchMutationResult,
+    GmailCreatedLabel,
+    GmailMutationGateRepository,
+    GmailObservedMessageState,
+    GmailOrganizationAdapter,
+    GmailOrganizationGateError,
+)
 
 
 @dataclass(frozen=True)
@@ -36,6 +45,7 @@ class ActionExecutionContext:
     tasks: tuple[dict[str, Any], ...]
     calendar_events: tuple[dict[str, Any], ...]
     local_now: datetime
+    action_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +54,9 @@ class ActionExecutionResult:
     errors: tuple[str, ...] = ()
     provider_references: tuple[ProviderTargetReference, ...] = ()
     partial_mutation: bool = False
+    target_results: tuple[StoredTargetResult, ...] = ()
+    undo_payload: ActionPayload | None = None
+    undo_confirmation_prompt: str | None = None
 
 
 class UncertainProviderOutcome(RuntimeError):
@@ -88,7 +101,81 @@ def build_default_executor_registry() -> ActionExecutorRegistry:
     )
     registry.register(PendingActionType.CREATE_CALENDAR_EVENT, _create_calendar_event)
     registry.register(PendingActionType.UPDATE_CALENDAR_EVENT, _update_calendar_event)
+    for action_type in (
+        PendingActionType.GMAIL_APPLY_LABEL,
+        PendingActionType.GMAIL_REMOVE_LABEL,
+        PendingActionType.GMAIL_ARCHIVE,
+        PendingActionType.GMAIL_RESTORE_INBOX,
+        PendingActionType.GMAIL_MARK_READ,
+        PendingActionType.GMAIL_MARK_UNREAD,
+        PendingActionType.GMAIL_CREATE_LABEL,
+    ):
+        registry.register(action_type, _execute_gmail_organization)
     return registry
+
+
+class _BlockedGmailTransport:
+    """No credentials or live transport exist on the credential-free side of the gate."""
+
+    def get_message_states(
+        self, message_ids: tuple[str, ...]
+    ) -> tuple[GmailObservedMessageState, ...]:
+        raise AssertionError("Gmail transport was reached before manual OAuth wiring")
+
+    def modify_message_labels(
+        self,
+        message_ids: tuple[str, ...],
+        *,
+        add_label_ids: tuple[str, ...] = (),
+        remove_label_ids: tuple[str, ...] = (),
+    ) -> GmailBatchMutationResult:
+        raise AssertionError("Gmail transport was reached before manual OAuth wiring")
+
+    def create_label(self, name: str) -> GmailCreatedLabel:
+        raise AssertionError("Gmail transport was reached before manual OAuth wiring")
+
+
+def _execute_gmail_organization(
+    payload: ActionPayload,
+    context: ActionExecutionContext,
+) -> ActionExecutionResult:
+    adapter = GmailOrganizationAdapter(
+        _BlockedGmailTransport(),
+        GmailMutationGateRepository(),
+    )
+    try:
+        result = adapter.execute(context.action_id or "missing-action-id", payload)
+    except GmailOrganizationGateError as exc:
+        return ActionExecutionResult(errors=(f"{exc.code}: {exc}",))
+    if result.outcome_unknown:
+        raise UncertainProviderOutcome("Gmail mutation outcome could not be verified")
+    actions = (
+        {
+            "type": payload.action_type.value,
+            "status": "success",
+            "target_results": [item.model_dump(mode="json") for item in result.target_results],
+        },
+    )
+    return ActionExecutionResult(
+        actions_taken=actions if result.complete else (),
+        errors=result.errors,
+        provider_references=result.provider_references,
+        partial_mutation=result.partial_mutation,
+        target_results=tuple(
+            StoredTargetResult(
+                target_token=item.message_token,
+                status=item.status,
+                diagnostic_code=item.diagnostic_code,
+            )
+            for item in result.target_results
+        ),
+        undo_payload=result.undo_payload,
+        undo_confirmation_prompt=(
+            "Review and confirm the exact Gmail undo proposal. It will never run automatically."
+            if result.undo_payload
+            else None
+        ),
+    )
 
 
 def _create_todoist_task(

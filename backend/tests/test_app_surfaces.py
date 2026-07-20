@@ -113,6 +113,17 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                 pending_action={"type": "resolve_calendar_conflict"},
             )
 
+    def test_email_organization_gate_is_local_locked_and_credential_free(self):
+        status = main.email_organization_gate(authorization=self.authorization)
+
+        self.assertEqual(status.state.value, "manual_oauth_required")
+        self.assertFalse(status.oauth_authorized)
+        self.assertEqual(status.provider_mutation_calls, 0)
+        self.assertTrue(status.calendar_oauth_unchanged)
+        self.assertEqual(status.allowed_next_operations, ())
+        with self.assertRaises(HTTPException):
+            main.email_organization_gate(authorization="Bearer incorrect")
+
     def test_memory_crud_and_activity_log(self):
         initial_count = len(main.memory_index(authorization=self.authorization))
         memory = main.memory_create(

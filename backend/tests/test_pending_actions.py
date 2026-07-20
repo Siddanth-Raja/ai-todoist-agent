@@ -189,7 +189,7 @@ class PendingActionArchitectureTests(unittest.TestCase):
             for name, value in legacy_actions().items()
         }
 
-        self.assertEqual(set(parsed), {item.value for item in PendingActionType})
+        self.assertEqual(set(parsed), set(legacy_actions()))
         for name, payload in parsed.items():
             self.assertEqual(payload.action_type.value, name)
             self.assertEqual(payload.schema_version, 1)
@@ -340,7 +340,10 @@ class PendingActionArchitectureTests(unittest.TestCase):
             )
             self.assertEqual(execution.record.lifecycle, PendingActionLifecycle.SUCCEEDED)
 
-        self.assertEqual(dispatched, list(PendingActionType))
+        self.assertEqual(
+            dispatched,
+            [PendingActionType(value) for value in legacy_actions()],
+        )
 
     def test_simultaneous_confirmations_make_one_provider_call(self):
         call_lock = threading.Lock()

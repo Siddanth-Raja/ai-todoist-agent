@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+import hashlib
 import hmac
 import json
 import logging
@@ -22,6 +23,8 @@ from .action_domain import (
     ProviderTargetReference,
     StoredActionFailure,
     StoredActionResult,
+    GmailOrganizationManifest,
+    gmail_manifest_fingerprint,
     legacy_client_payload,
     parse_legacy_pending_action,
     payload_fingerprint,
@@ -53,6 +56,7 @@ class PendingActionExecution:
     record: PendingActionRecord
     actions_taken: tuple[dict[str, Any], ...] = ()
     errors: tuple[str, ...] = ()
+    undo_record: PendingActionRecord | None = None
 
 
 class PendingActionRepository:
@@ -394,6 +398,43 @@ class PendingActionService:
             proposed_at=now,
         )
 
+    def propose_typed(
+        self,
+        payload: ActionPayload,
+        *,
+        confirmation_prompt: str,
+        evidence: tuple[ActionEvidence, ...],
+        session_id: str | None,
+        source: str,
+        source_ref: str | None = None,
+        idempotency_key: str | None = None,
+        canonical_project_id: str | None = None,
+        expires_at: datetime | None = None,
+    ) -> PendingActionRecord:
+        prompt = confirmation_prompt.strip()
+        if not prompt:
+            raise PendingActionError(
+                "invalid_confirmation_prompt",
+                "Executable pending action requires a confirmation prompt.",
+            )
+        now = self.clock()
+        action_id = str(uuid.uuid4())
+        fingerprint = payload_fingerprint(payload)
+        key = idempotency_key or f"{source}:{action_id}:{fingerprint[:16]}"
+        return self.repository.create(
+            action_id=action_id,
+            payload=payload,
+            canonical_project_id=canonical_project_id,
+            confirmation_prompt=prompt,
+            evidence=evidence,
+            idempotency_key=key,
+            session_id=session_id,
+            source=source,
+            source_ref=source_ref,
+            expires_at=expires_at,
+            proposed_at=now,
+        )
+
     def confirm(
         self,
         action_id: str,
@@ -409,7 +450,10 @@ class PendingActionService:
             now=self.clock(),
         )
         try:
-            execution = self.executor_registry.execute(claimed.payload, context)
+            execution = self.executor_registry.execute(
+                claimed.payload,
+                replace(context, action_id=claimed.action_id),
+            )
         except UncertainProviderOutcome:
             logger.warning(
                 "pending_action_outcome_unknown action_id=%s action_type=%s",
@@ -429,6 +473,7 @@ class PendingActionService:
             result = StoredActionResult(
                 status="failed",
                 provider_references=execution.provider_references,
+                target_results=execution.target_results,
                 action_count=len(execution.actions_taken),
             )
             failure = StoredActionFailure(
@@ -453,10 +498,41 @@ class PendingActionService:
                 errors=execution.errors,
             )
 
+        undo_record: PendingActionRecord | None = None
+        if execution.undo_payload is not None:
+            undo_record = self.propose_typed(
+                execution.undo_payload,
+                confirmation_prompt=(
+                    execution.undo_confirmation_prompt
+                    or "Review and confirm this exact undo. It will not run automatically."
+                ),
+                evidence=(
+                    ActionEvidence(
+                        kind="verified_provider_undo",
+                        source="pending_action_execution",
+                        summary=(
+                            "Undo was proposed from the exact verified post-action state; "
+                            "separate confirmation is required."
+                        ),
+                        source_ref=claimed.action_id,
+                    ),
+                ),
+                session_id=claimed.session_id,
+                source="gmail_organization_undo",
+                source_ref=claimed.action_id,
+                idempotency_key=(
+                    f"gmail-undo:{claimed.action_id}:"
+                    f"{payload_fingerprint(execution.undo_payload)[:32]}"
+                ),
+                canonical_project_id=claimed.canonical_project_id,
+            )
+
         result = StoredActionResult(
             status="succeeded",
             provider_references=execution.provider_references,
+            target_results=execution.target_results,
             action_count=len(execution.actions_taken),
+            undo_action_id=undo_record.action_id if undo_record else None,
         )
         record = self.repository.finish(
             claimed.action_id,
@@ -469,6 +545,7 @@ class PendingActionService:
         return PendingActionExecution(
             record=record,
             actions_taken=execution.actions_taken,
+            undo_record=undo_record,
         )
 
     def cancel(
@@ -496,6 +573,97 @@ class PendingActionService:
         if record and record.lifecycle == PendingActionLifecycle.EXPIRED:
             return None
         return record
+
+    def adjust_gmail_targets(
+        self,
+        action_id: str,
+        *,
+        expected_version: int,
+        expected_fingerprint: str,
+        selected_message_tokens: tuple[str, ...],
+    ) -> PendingActionRecord:
+        record = self.get(action_id)
+        _validate_expected(record, expected_version, expected_fingerprint)
+        if record.lifecycle != PendingActionLifecycle.PENDING or record.provider != "gmail":
+            raise PendingActionError(
+                "not_adjustable",
+                "Only a pending Gmail organization action can be adjusted.",
+            )
+        manifest = getattr(record.payload, "manifest", None)
+        if not isinstance(manifest, GmailOrganizationManifest):
+            raise PendingActionError(
+                "not_adjustable",
+                "This Gmail action does not contain an adjustable message manifest.",
+            )
+        if not selected_message_tokens or len(selected_message_tokens) != len(
+            set(selected_message_tokens)
+        ):
+            raise PendingActionError(
+                "invalid_target_selection",
+                "Select a non-empty unique target set.",
+            )
+        targets_by_token = {
+            hashlib.sha256(item.provider_message_id.encode("utf-8")).hexdigest()[:16]: item
+            for item in manifest.targets
+        }
+        if len(targets_by_token) != len(manifest.targets):
+            raise PendingActionError(
+                "redacted_token_collision",
+                "The redacted target set cannot be adjusted safely.",
+            )
+        if any(value not in targets_by_token for value in selected_message_tokens):
+            raise PendingActionError(
+                "invalid_target_selection",
+                "Adjusted targets must be an exact subset of the pending manifest.",
+            )
+        targets = tuple(targets_by_token[value] for value in selected_message_tokens)
+        adjusted_manifest = GmailOrganizationManifest(
+            **{
+                **manifest.model_dump(mode="python"),
+                "targets": targets,
+                "selection_fingerprint": gmail_manifest_fingerprint(
+                    manifest.account,
+                    targets,
+                ),
+                "selection_criteria": (
+                    *manifest.selection_criteria,
+                    "user-adjusted exact target subset",
+                ),
+            }
+        )
+        adjusted_payload = ACTION_PAYLOAD_ADAPTER.validate_python(
+            {
+                **record.payload.model_dump(mode="python"),
+                "manifest": adjusted_manifest.model_dump(mode="python"),
+            }
+        )
+        self.cancel(
+            record.action_id,
+            expected_version=record.version,
+            expected_fingerprint=record.payload_fingerprint,
+        )
+        adjusted_fingerprint = payload_fingerprint(adjusted_payload)
+        return self.propose_typed(
+            adjusted_payload,
+            confirmation_prompt=record.confirmation_prompt,
+            evidence=(
+                *record.evidence,
+                ActionEvidence(
+                    kind="user_adjusted_manifest",
+                    source="email_organization_ui",
+                    summary="User selected an exact redacted subset; a new action identity and fingerprint were issued.",
+                    source_ref=record.action_id,
+                ),
+            ),
+            session_id=record.session_id,
+            source="email_organization_ui",
+            source_ref=record.action_id,
+            idempotency_key=(
+                f"gmail-adjust:{record.action_id}:{adjusted_fingerprint[:32]}"
+            ),
+            canonical_project_id=record.canonical_project_id,
+            expires_at=record.expires_at,
+        )
 
     @staticmethod
     def public_payload(record: PendingActionRecord) -> dict[str, Any]:

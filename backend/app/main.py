@@ -8,12 +8,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .agent import MODE, confirm_pending_action, handle_chat
+from .action_executors import ActionExecutionContext
 from .pending_actions import PendingActionError, pending_action_service
 from .calendar_tools import check_google_auth, categories_conflict, list_upcoming_events
 from .config import get_settings
 from .dependency_evaluator import DependencySummary, EvaluatedDependencyEvidence
 from .linear_client import LinearClient
 from .gmail_client import personal_email_health_payload
+from .gmail_organization import GmailMutationGateRepository, GmailMutationGateStatus
 from .project_brain import project_brain_service
 from .project_work_packages import LinearProjectDiagnostic, ProjectWorkPackage
 from .storage import (
@@ -52,6 +54,7 @@ app.add_middleware(
 
 OPENAI_MODELS_BASE_URL = "https://api.openai.com/v1/models"
 PROVIDER_HEALTH_TIMEOUT_SECONDS = 10
+gmail_mutation_gate_repository = GmailMutationGateRepository()
 
 
 class ChatRequest(BaseModel):
@@ -177,6 +180,100 @@ class ConfirmCancelRequest(BaseModel):
     action_id: str = Field(..., min_length=1, max_length=128)
     expected_version: int = Field(..., ge=1)
     fingerprint: str = Field(..., pattern=r"^[a-f0-9]{64}$")
+
+
+class EmailTargetAdjustmentRequest(BaseModel):
+    expected_version: int = Field(..., ge=1)
+    fingerprint: str = Field(..., pattern=r"^[a-f0-9]{64}$")
+    selected_message_tokens: tuple[str, ...] = Field(min_length=1, max_length=1000)
+
+
+class EmailActionExecutionResponse(BaseModel):
+    action: dict[str, Any]
+    undo_action: dict[str, Any] | None = None
+    actions_taken: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+@app.get(
+    "/email/organization/gate",
+    response_model=GmailMutationGateStatus,
+)
+def email_organization_gate(
+    authorization: str | None = Header(default=None),
+) -> GmailMutationGateStatus:
+    """Expose only the durable credential-free gate; this never contacts Gmail."""
+    require_agent_api_key(authorization)
+    return gmail_mutation_gate_repository.status()
+
+
+@app.post("/email/organization/actions/{action_id}/adjust")
+def adjust_email_organization_targets(
+    action_id: str,
+    request: EmailTargetAdjustmentRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    require_agent_api_key(authorization)
+    try:
+        record = pending_action_service.adjust_gmail_targets(
+            action_id,
+            expected_version=request.expected_version,
+            expected_fingerprint=request.fingerprint,
+            selected_message_tokens=request.selected_message_tokens,
+        )
+    except PendingActionError as exc:
+        raise _pending_action_http_error(exc) from exc
+    return pending_action_service.public_payload(record)
+
+
+@app.post(
+    "/email/organization/actions/{action_id}/confirm",
+    response_model=EmailActionExecutionResponse,
+)
+def confirm_email_organization_action(
+    action_id: str,
+    request: ConfirmRequest,
+    authorization: str | None = Header(default=None),
+) -> EmailActionExecutionResponse:
+    require_agent_api_key(authorization)
+    if request.action_id != action_id:
+        raise HTTPException(status_code=400, detail="Action identity does not match route.")
+    settings = get_settings()
+    local_now = (
+        request.current_time.astimezone(settings.local_tz)
+        if request.current_time
+        else datetime.now(settings.local_tz)
+    )
+    try:
+        record = pending_action_service.get(action_id)
+        if record.provider != "gmail":
+            raise PendingActionError(
+                "provider_mismatch",
+                "Email confirmation accepts only Gmail organization actions.",
+            )
+        execution = pending_action_service.confirm(
+            action_id,
+            expected_version=request.expected_version,
+            expected_fingerprint=request.fingerprint,
+            context=ActionExecutionContext(
+                settings=settings,
+                tasks=(),
+                calendar_events=(),
+                local_now=local_now,
+            ),
+        )
+    except PendingActionError as exc:
+        raise _pending_action_http_error(exc) from exc
+    return EmailActionExecutionResponse(
+        action=pending_action_service.public_payload(execution.record),
+        undo_action=(
+            pending_action_service.public_payload(execution.undo_record)
+            if execution.undo_record
+            else None
+        ),
+        actions_taken=list(execution.actions_taken),
+        errors=list(execution.errors),
+    )
 
 
 class PendingActionRecovery(BaseModel):

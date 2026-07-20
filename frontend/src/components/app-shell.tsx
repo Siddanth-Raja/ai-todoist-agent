@@ -8,6 +8,7 @@ import {
   CheckSquare,
   FolderKanban,
   MessageCircle,
+  Mail,
   Repeat,
   Settings,
   Sparkles,
@@ -25,6 +26,7 @@ const navItems: Array<{
   { href: "/chat", label: "Chat", description: "Assistant tool", icon: MessageCircle },
   { href: "/calendar", label: "Calendar", description: "Schedule view", icon: CalendarDays },
   { href: "/tasks", label: "Tasks", description: "Todoist focus list", icon: CheckSquare },
+  { href: "/email", label: "Email", description: "Approval-gated organization", icon: Mail },
   { href: "/habits", label: "Habits", description: "Recurring routines", icon: Repeat },
   { href: "/memory", label: "Memory", description: "Personal context", icon: Brain },
   { href: "/settings", label: "Settings", description: "Connection details", icon: Settings },
@@ -118,7 +120,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <nav className="fixed inset-x-0 bottom-0 z-30 px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] xl:hidden">
-        <div className="mx-auto grid max-w-lg grid-cols-8 gap-1 rounded-[1.6rem] border border-white/10 bg-black/55 p-2 shadow-soft backdrop-blur-2xl">
+        <div className="mx-auto grid max-w-xl grid-cols-9 gap-1 rounded-[1.6rem] border border-white/10 bg-black/55 p-2 shadow-soft backdrop-blur-2xl">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.href;

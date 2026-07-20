@@ -3715,6 +3715,22 @@ Credential-free SID-230 coverage adds 14 tests for multipage exhaustion, provide
 
 SID-230 does not change OAuth scopes or configuration; create/apply/remove labels; archive; mark read/unread; register or execute pending actions; add approval UI; persist inventory or proposals; ingest email into Memory; create tasks or Calendar events; scan other accounts; add scheduling/autonomous cleanup; unsubscribe/block/send/reply; or add Superhuman-specific behavior. Those write and approval concerns remain gated behind SID-231 and explicit user reauthorization.
 
+## 17.36 Credential-Free Personal Gmail Organization Actions and Approval Gate
+
+SID-231 is implemented through the credential-free architecture and approval-UI checkpoint and remains **In Progress** at the manual OAuth gate. No Gmail scope, OAuth configuration, refresh token, Calendar configuration, or mailbox state changed during this checkpoint. The configured Personal Gmail provider remains exactly `gmail.readonly`; the future scope displayed for informed approval is exactly `https://www.googleapis.com/auth/gmail.modify`, but PCOS has not requested or authorized it.
+
+The durable SID-150 action union now has separate immutable Gmail variants for applying and removing one exact user label, archive and restore-Inbox, mark read and mark unread, and creating one closed-vocabulary user label. Personal provider/account identity, exact message and thread identity, expected labels and unread state, complete SID-230 inventory/proposal fingerprints, exact selected manifest and fingerprint, criteria, exclusions, redacted examples, confirmation language, and undo lineage are preserved. Protected or uncertain records cannot validate into a manifest. Destructive mailbox operations are not action variants and are absent from the transport seam.
+
+`GmailOrganizationProposalBuilder` converts only a complete matching SID-230 inventory and registered advisory proposal into an action. User adjustment may select only a non-empty exact subset of that proposal; adjustment cancels the old durable action and issues a new action ID, version, and fingerprint. Confirmation binds to that immutable identity. Before every provider call, the adapter re-reads the exact label/read/thread state and rejects stale or incomplete evidence. Post-state is also verified exactly. Per-target failures and uncertain provider outcomes remain non-success terminal states, automatic retry/reconfirmation is blocked, and a successful reversible action creates a new pending undo proposal rather than executing undo automatically.
+
+The durable mutation gate begins at `manual_oauth_required` and makes zero provider calls. After a future explicit approval and isolated Personal Gmail reauthorization, the only permitted first operation is an apply-label canary using one already discovered exact user label across at most ten individually hand-reviewed messages. A successful canary locks the gate to the exact separately confirmed remove-label undo over the verified post-state manifest. Archive, mark-read, label creation, and larger batches remain blocked until that undo succeeds and the restored state is verified. Calendar OAuth remains outside this gate.
+
+The new `/email` surface reads the local gate and durable `email-organization` pending action only. It displays the exact future scope and why it is gated, Calendar/read-only state, provider-mutation count, canary sequence, immutable evidence contract, redacted targets, and separate adjust, reject, and exact-confirm controls. Confirm stays disabled at the manual gate. The Gmail-specific confirmation endpoint builds an empty unrelated-provider context, so future Email approval cannot trigger Todoist or Calendar reads as a side effect. The default Gmail executor intentionally has no credentialed transport on this side of the gate.
+
+Credential-free verification passed with 310 backend tests and 29 frontend tests, full Python compilation, the Next.js 15.5.19 production build including `/email`, `git diff --check`, and privacy/scope/forbidden-capability scans. Tests cover the locked default, exact future scope, canary maximum, hand review, exact canary undo, stale state, incomplete state, partial failure, the injected credential-independent Google transport and provider-limit batching, duplicate rejection, protected/uncertain exclusion, closed labels, SID-230 evidence conversion, durable exactly-once confirmation, non-automatic undo, restart persistence, redacted target adjustment, authenticated local gate access, and approval UI boundaries. No live Gmail read or write was run for SID-231.
+
+The precise external gate is now: the user must explicitly approve adding only `https://www.googleapis.com/auth/gmail.modify` to the isolated Personal Email OAuth client and generating a separate replacement Personal Email refresh token. That approval does not authorize Calendar changes. Even after approval, live verification must stop after a reversible existing-label canary of at most ten hand-reviewed messages and its exact verified undo; archive, mark-read, or a larger batch requires the canary undo evidence first.
+
 ---
 
 # 18. Current Verification History
@@ -3750,6 +3766,7 @@ Recorded development checkpoints include:
 | Personal Gmail read provider (authenticated) | 242 tests passing plus redacted live read | 21 frontend tests and build passing | Passing |
 | Local Personal Email importance analysis (authenticated) | 268 tests passing plus bounded redacted live analysis | 21 frontend tests and build passing | Passing |
 | Full Personal Email inventory and advisory organization proposals (authenticated) | 299 tests passing plus complete redacted Inbox and Old Stuff inventory | 24 frontend tests and build passing | Passing |
+| Personal Gmail organization actions and approval UI (credential-free; manual OAuth gate) | 310 tests passing; zero live Gmail calls | 29 frontend tests and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -7041,6 +7058,36 @@ No OAuth scope/config change, mailbox mutation, pending-action registration, app
 
 ---
 
+## Issue: Execute Approved Personal Gmail Organization Actions
+
+**Status:** In Progress (SID-231; credential-free architecture and approval UI complete, stopped at manual OAuth gate)
+
+**Priority:** High
+
+**Description:**
+
+Turn the exact protected SID-230 advisory manifests into separately typed, durable, approval-bound Personal Gmail actions. Preserve provider/account/message/thread identity, immutable selection fingerprints and expected mailbox state, per-target results, partial/uncertain outcomes, stale-state rejection, exactly-once execution, and separately approved undo. The Email surface must support inspection, exact target adjustment, rejection, and exact-version confirmation without exposing raw provider identities.
+
+**Implemented evidence:**
+
+- SID-230 inventory/proposal evidence converts to an executable manifest only when the complete inventory fingerprint, registered proposal, exact target subset, label identity, and protected/uncertain exclusions all match.
+- Apply/remove label, archive/restore Inbox, mark read/unread, and closed user-label creation are distinct immutable variants registered through the provider-neutral executor registry.
+- The default durable gate is `manual_oauth_required`; its credential-free status reports zero provider mutation calls and unchanged Calendar OAuth.
+- The first future live operation is structurally limited to an existing-label canary of at most ten hand-reviewed messages. Its exact verified remove-label undo is the only next operation; archive, read-state changes, label creation, and larger batches remain locked.
+- Provider state is checked before and after execution. Partial and unknown outcomes cannot become success; repeated confirmation cannot execute twice; undo is a new durable proposal and never automatic.
+- `/email` renders the manual boundary and real durable proposal review controls for redacted target adjustment, rejection, and exact confirmation.
+- 310 backend tests, 29 frontend tests, full Python compilation, the Next.js production build, diff check, and privacy/scope/forbidden-capability scans pass.
+
+**Manual external gate:**
+
+No OAuth or live Gmail mutation was performed. Personal Gmail remains on the isolated read-only token and Calendar is untouched. Continuing requires explicit user approval for exactly `https://www.googleapis.com/auth/gmail.modify`, followed by isolated Personal Email reauthorization. Live verification must begin with the reversible label-only canary above and prove its exact undo before any archive, mark-read, or larger batch. Until then, keep SID-231 In Progress.
+
+**Explicit exclusions preserved:**
+
+No destructive mailbox capability, spam/block/unsubscribe/send/reply behavior, other email account, Memory ingestion, task or Calendar action, classification change, scheduling/autonomous cleanup, Superhuman behavior, Gmail scope change, OAuth reauthorization, or live mailbox mutation is included in the credential-free checkpoint.
+
+---
+
 ## Issue: Surface Email Attention in Today
 
 **Status:** Todo
@@ -9148,12 +9195,13 @@ Implemented systems include:
 - authenticated read-only Personal Gmail provider, secure Desktop OAuth setup, and redacted live verifier;
 - deterministic local Personal Email importance and organization analysis with bounded redacted live verification;
 - complete read-only Personal Inbox and Old Stuff inventory with deterministic advisory organization proposals and redacted live verification;
+- credential-free Personal Gmail organization action architecture and approval UI, locked at the manual OAuth gate;
 - typed durable pending actions with atomic exactly-once confirmation, cancellation, restart/refresh recovery, and provider-neutral executor dispatch for the six existing Todoist and Calendar mutations;
 - local startup and shutdown scripts.
 
 “Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, broader conversation context is still process-local, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
 
-The SID-230 full Personal Email inventory checkpoint reached 299 backend tests and 24 frontend tests passing, with Python compilation, the Next.js 15.5.19 production build, `git diff --check`, privacy/scope/capability scans, and a complete redacted real-account inventory of 15,967 Inbox plus 2,547 Old Stuff messages across 186 provider pages with zero body reads, model calls, Memory writes, or mailbox mutations. The SID-150 durable pending-action checkpoint reached 285 backend tests and 24 frontend tests passing, with Python compilation, the production build, diff check, exact-scope/privacy scans, and a local authenticated recovery/cancellation smoke with zero provider writes. The Personal Email analysis checkpoint reached 268 backend tests and 21 frontend tests passing, with its redacted real-account gate analyzing at most 12 recent records, preserving thread deduplication and uncertainty, reporting only aggregate categories/counts, and performing zero external-model or provider mutation calls. The Personal Gmail provider checkpoint reached 242 backend tests plus its redacted authenticated read; the provider-neutral Email Attention checkpoint reached 226 backend tests. Earlier checkpoints remain recorded as implementation history rather than current feature claims.
+The SID-231 credential-free checkpoint reached 310 backend tests and 29 frontend tests passing, with full Python compilation, the Next.js 15.5.19 production build including `/email`, `git diff --check`, privacy/scope/forbidden-capability scans, and zero live Gmail calls; it remains In Progress at the manual OAuth gate. The SID-230 full Personal Email inventory checkpoint reached 299 backend tests and 24 frontend tests passing, with Python compilation, the production build, diff check, privacy/scope/capability scans, and a complete redacted real-account inventory of 15,967 Inbox plus 2,547 Old Stuff messages across 186 provider pages with zero body reads, model calls, Memory writes, or mailbox mutations. The SID-150 durable pending-action checkpoint reached 285 backend tests and 24 frontend tests passing, with Python compilation, the production build, diff check, exact-scope/privacy scans, and a local authenticated recovery/cancellation smoke with zero provider writes. The Personal Email analysis checkpoint reached 268 backend tests and 21 frontend tests passing, with its redacted real-account gate analyzing at most 12 recent records, preserving thread deduplication and uncertainty, reporting only aggregate categories/counts, and performing zero external-model or provider mutation calls. The Personal Gmail provider checkpoint reached 242 backend tests plus its redacted authenticated read; the provider-neutral Email Attention checkpoint reached 226 backend tests. Earlier checkpoints remain recorded as implementation history rather than current feature claims.
 
 The current product is not yet the full Personal Operating System described in the vision.
 

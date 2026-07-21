@@ -527,6 +527,51 @@ class GmailProviderTests(unittest.TestCase):
         self.assertFalse(bounded_result.complete)
         self.assertTrue(bounded_result.truncated)
 
+    def test_bounded_metadata_read_uses_headers_only_and_scrubs_body_fields(self):
+        service = FakeService(
+            list_pages=[{
+                "messages": [{"id": "review-1", "threadId": "thread-review-1"}],
+                "nextPageToken": "not-exposed-for-continuation",
+                "resultSizeEstimate": 500,
+            }],
+            message_details={
+                "review-1": message(
+                    "review-1",
+                    "thread-review-1",
+                    snippet="Sensitive snippet must not cross the boundary",
+                )
+            },
+        )
+        gmail, _, _ = client(service)
+
+        result = gmail.list_message_metadata(
+            max_messages=1,
+            query="-has:attachment",
+            label_ids=("INBOX",),
+        )
+
+        self.assertEqual(result.state, GmailProviderState.CONNECTED)
+        self.assertEqual(len(result.messages), 1)
+        self.assertFalse(result.complete)
+        self.assertTrue(result.truncated)
+        record = result.messages[0]
+        self.assertFalse(record.body_accessed)
+        self.assertIsNone(record.body_text)
+        self.assertIsNone(record.snippet)
+        self.assertIsNone(record.has_attachment)
+        self.assertEqual(record.attachments, ())
+        list_call = next(value for name, value in service.calls if name == "messages.list")
+        self.assertEqual(
+            list_call["q"],
+            "(-has:attachment) -in:spam -in:trash",
+        )
+        self.assertEqual(list_call["labelIds"], ["INBOX"])
+        get_call = next(value for name, value in service.calls if name == "messages.get")
+        self.assertEqual(get_call["format"], "metadata")
+        self.assertEqual(get_call["metadataHeaders"], ["From", "Subject", "Date"])
+        with self.assertRaises(ValueError):
+            gmail.list_message_metadata(max_messages=51)
+
     def test_exact_thread_retrieval_and_identity_validation(self):
         first = message("first", "thread-1")
         second = message("second", "thread-1", labels=["INBOX"])

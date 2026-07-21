@@ -1,7 +1,8 @@
-"""Generate and securely store a distinct read-only Personal Gmail token."""
+"""Generate and securely store a distinct Personal Gmail refresh token."""
 
 from __future__ import annotations
 
+import argparse
 import hmac
 from pathlib import Path
 import sys
@@ -15,7 +16,12 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 
 from app.config import get_settings  # noqa: E402
-from app.gmail_client import PERSONAL_GMAIL_SCOPES  # noqa: E402
+from app.gmail_scopes import (  # noqa: E402
+    GMAIL_MODIFY_SCOPE,
+    PERSONAL_GMAIL_READ_SCOPES,
+    PERSONAL_GMAIL_REAUTH_SCOPES,
+)
+from app.gmail_organization import GmailMutationGateRepository  # noqa: E402
 
 
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -25,6 +31,7 @@ REFRESH_TOKEN_ENV_KEY = "PERSONAL_EMAIL_GOOGLE_REFRESH_TOKEN"
 
 
 def main() -> None:
+    args = _parse_args()
     settings = get_settings()
     client_id = settings.personal_email_client_id
     client_secret = settings.personal_email_client_secret
@@ -38,8 +45,17 @@ def main() -> None:
 
     print("Personal Gmail OAuth Setup")
     print("--------------------------")
-    print("This flow requests exactly one scope:")
-    print(f"  - {PERSONAL_GMAIL_SCOPES[0]}")
+    requested_scopes = (
+        PERSONAL_GMAIL_REAUTH_SCOPES
+        if args.approve_modify
+        else PERSONAL_GMAIL_READ_SCOPES
+    )
+    print("This flow requests exactly these isolated Personal Email scopes:")
+    for scope in requested_scopes:
+        print(f"  - {scope}")
+    if args.approve_modify:
+        print("gmail.modify is the only scope added to the existing read-only grant.")
+        print("This approval records OAuth authorization only; it performs no Gmail mutation.")
     print("The existing Google Calendar refresh token will not be read or modified.")
     print("A local loopback callback will be opened using a Desktop OAuth client.")
 
@@ -53,7 +69,7 @@ def main() -> None:
                 "redirect_uris": ["http://localhost"],
             }
         },
-        scopes=list(PERSONAL_GMAIL_SCOPES),
+        scopes=list(requested_scopes),
     )
     credentials = flow.run_local_server(
         host="localhost",
@@ -64,8 +80,8 @@ def main() -> None:
         open_browser=True,
     )
     granted_scopes = _credential_scopes(credentials)
-    if set(granted_scopes) != set(PERSONAL_GMAIL_SCOPES):
-        print("Google did not grant the exact Personal Gmail read-only scope.")
+    if set(granted_scopes) != set(requested_scopes):
+        print("Google did not grant the exact approved Personal Gmail scope set.")
         print("No refresh token was stored.")
         raise SystemExit(1)
     if not credentials.refresh_token:
@@ -83,7 +99,7 @@ def main() -> None:
         profile = service.users().getProfile(userId="me").execute()
     except HttpError:
         print("The authenticated Gmail profile check failed.")
-        print("Confirm that the Gmail API is enabled and gmail.readonly is configured.")
+        print("Confirm that the Gmail API and the exact approved scopes are configured.")
         print("No refresh token was stored.")
         raise SystemExit(1)
     except Exception:  # noqa: BLE001 - never expose credential or profile details.
@@ -105,10 +121,37 @@ def main() -> None:
         raise SystemExit(1)
 
     _write_env_value(ENV_PATH, REFRESH_TOKEN_ENV_KEY, credentials.refresh_token)
+    if args.approve_modify:
+        GmailMutationGateRepository().record_manual_oauth_authorization(
+            authorized_scope=GMAIL_MODIFY_SCOPE,
+            approval_reference=args.approval_reference,
+        )
     print("Personal Gmail profile verification succeeded.")
     print(f"Stored {REFRESH_TOKEN_ENV_KEY} directly in ignored backend/.env.")
     print("The refresh token was not printed. backend/.env permissions are owner-only.")
     print("Restart PCOS before running the redacted live verification script.")
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Secure Desktop OAuth setup for the isolated Personal Gmail client."
+    )
+    parser.add_argument(
+        "--approve-modify",
+        action="store_true",
+        help="Request gmail.modify in addition to the existing gmail.readonly grant.",
+    )
+    parser.add_argument(
+        "--approval-reference",
+        default="",
+        help="Non-secret reference to the explicit user approval.",
+    )
+    args = parser.parse_args()
+    if args.approve_modify and not args.approval_reference.strip():
+        parser.error("--approval-reference is required with --approve-modify")
+    if not args.approve_modify and args.approval_reference:
+        parser.error("--approval-reference is valid only with --approve-modify")
+    return args
 
 
 def _credential_scopes(credentials) -> list[str]:

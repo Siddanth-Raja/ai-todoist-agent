@@ -38,10 +38,10 @@ from .email_inventory import (
     OrganizationBatchProposal,
     PersonalEmailInventoryResult,
 )
+from .gmail_scopes import GMAIL_MODIFY_SCOPE
 from .storage import database_connection
 
 
-GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 MAX_GMAIL_MUTATION_BATCH_SIZE = 1000
 MAX_LIVE_LABEL_CANARY_MESSAGES = 10
 

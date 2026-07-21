@@ -1,5 +1,6 @@
 export const GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify" as const;
 export const MAX_LABEL_CANARY_MESSAGES = 10 as const;
+export const GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly" as const;
 
 export type GmailMutationGateState =
   | "manual_oauth_required"
@@ -31,6 +32,96 @@ export type EmailOrganizationTarget = {
   current_labels: Array<{ label_token: string; name: string }>;
   selection_reason: string;
 };
+
+export type GmailReadonlyReviewState =
+  | "ready"
+  | "empty"
+  | "not_configured"
+  | "authentication_failure"
+  | "provider_failure"
+  | "malformed_response";
+
+export type GmailReadonlyReviewLabel = {
+  label_token: string;
+  name: string;
+};
+
+export type GmailReadonlyReviewLabelOption = GmailReadonlyReviewLabel & {
+  eligible_message_count: number;
+};
+
+export type GmailReadonlyReviewTarget = {
+  message_token: string;
+  thread_token: string | null;
+  sender_display: string;
+  sender_domain: string;
+  subject: string;
+  received_at: string;
+  current_labels: GmailReadonlyReviewLabel[];
+  unread: boolean;
+  selection_reason: string;
+  eligible_label_tokens: string[];
+};
+
+export type GmailReadonlyReviewSurface = {
+  state: GmailReadonlyReviewState;
+  configured_scope: typeof GMAIL_READONLY_SCOPE;
+  account_role: "personal";
+  account_token: string | null;
+  source_issue: "SID-230";
+  source_label: "INBOX";
+  query_summary: string;
+  maximum_targets: typeof MAX_LABEL_CANARY_MESSAGES;
+  scanned_message_count: number;
+  next_page_available: boolean;
+  labels: GmailReadonlyReviewLabelOption[];
+  targets: GmailReadonlyReviewTarget[];
+  exclusions: Array<{ reason: string; count: number }>;
+  snapshot_fingerprint: string;
+  originating_inventory_fingerprint: string;
+  originating_proposal_id: string;
+  originating_proposal_fingerprint: string;
+  provider_evidence: {
+    label_list_requests: number;
+    message_list_requests: number;
+    metadata_requests: number;
+    body_requests: 0;
+    full_inventory_scans: 0;
+    external_model_calls: 0;
+    memory_writes: 0;
+    provider_mutation_calls: 0;
+  };
+  diagnostic_code: string | null;
+  executable: false;
+  oauth_change_required_before_execution: true;
+};
+
+export type GmailReadonlySelectionPreview = {
+  snapshot_fingerprint: string;
+  selection_fingerprint: string;
+  manifest_fingerprint: string;
+  originating_inventory_fingerprint: string;
+  originating_proposal_id: string;
+  originating_proposal_fingerprint: string;
+  label: GmailReadonlyReviewLabel;
+  targets: GmailReadonlyReviewTarget[];
+  exact_message_count: number;
+  exact_thread_count: number;
+  hand_reviewed: true;
+  stale_state_revalidated: true;
+  executable: false;
+  provider_mutation_calls: 0;
+  oauth_change_required_before_execution: true;
+};
+
+export function reviewTargetsForLabel(
+  review: GmailReadonlyReviewSurface,
+  labelToken: string,
+): GmailReadonlyReviewTarget[] {
+  return review.targets
+    .filter((target) => target.eligible_label_tokens.includes(labelToken))
+    .slice(0, MAX_LABEL_CANARY_MESSAGES);
+}
 
 export type EmailOrganizationProposal = {
   action_id: string;

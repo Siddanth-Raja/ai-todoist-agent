@@ -29,11 +29,16 @@ from .email_domain import (
 )
 
 
-GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
-PERSONAL_GMAIL_SCOPES = (GMAIL_READONLY_SCOPE,)
+from .gmail_scopes import GMAIL_READONLY_SCOPE, PERSONAL_GMAIL_READ_SCOPES
+
+
+# Backward-compatible public name for the provider's deliberately read-only
+# runtime scope set.
+PERSONAL_GMAIL_SCOPES = PERSONAL_GMAIL_READ_SCOPES
 GMAIL_TOKEN_URI = "https://oauth2.googleapis.com/token"
 DEFAULT_GMAIL_QUERY = "-in:spam -in:trash"
 MAX_RECENT_MESSAGES = 100
+MAX_REVIEW_METADATA_MESSAGES = 50
 GMAIL_PAGE_SIZE = 100
 MAX_GMAIL_LIST_PAGES = 20
 MAX_ANALYZABLE_BODY_CHARS = 20_000
@@ -325,6 +330,102 @@ class GmailClient:
             truncated=not complete,
             pages_fetched=pages_fetched,
             result_size_estimate=result_size_estimate,
+        )
+
+    def list_message_metadata(
+        self,
+        *,
+        max_messages: int = 20,
+        query: str | None = None,
+        label_ids: tuple[str, ...] = (),
+    ) -> GmailMessagePage:
+        """Read one bounded page of headers and mailbox state without MIME bodies."""
+
+        if max_messages < 1 or max_messages > MAX_REVIEW_METADATA_MESSAGES:
+            raise ValueError(
+                f"max_messages must be between 1 and {MAX_REVIEW_METADATA_MESSAGES}"
+            )
+        if any(not value.strip() for value in label_ids):
+            raise ValueError("label IDs cannot be blank")
+
+        connection, error = self._connect()
+        if error:
+            return _message_error_result(error)
+        assert connection is not None
+
+        kwargs: dict[str, Any] = {
+            "userId": "me",
+            "maxResults": max_messages,
+            "q": _gmail_query(query),
+            "includeSpamTrash": False,
+        }
+        if label_ids:
+            kwargs["labelIds"] = list(label_ids)
+        payload, error = self._execute(
+            connection.service.users().messages().list(**kwargs)
+        )
+        if error:
+            return _message_error_result(error)
+        if not isinstance(payload, dict):
+            return _message_malformed("Gmail metadata list response was malformed.")
+        references = payload.get("messages", [])
+        if not isinstance(references, list) or len(references) > max_messages:
+            return _message_malformed("Gmail metadata list entries were malformed.")
+
+        records: list[GmailMessageRecord] = []
+        for reference in references:
+            if not _valid_message_reference(reference):
+                return _message_malformed("Gmail metadata identity was malformed.")
+            raw, error = self._execute(
+                connection.service.users()
+                .messages()
+                .get(
+                    userId="me",
+                    id=reference["id"],
+                    format="metadata",
+                    metadataHeaders=["From", "Subject", "Date"],
+                )
+            )
+            if error:
+                return _message_error_result(error, pages_fetched=1)
+            try:
+                record = _normalize_message(raw, connection.account, body_accessed=False)
+            except (TypeError, ValueError):
+                return _message_malformed(
+                    "Gmail metadata detail response was malformed."
+                )
+            records.append(
+                record.model_copy(
+                    update={
+                        "snippet": None,
+                        "body_text": None,
+                        "body_accessed": False,
+                        "attachments": (),
+                        "has_attachment": None,
+                    }
+                )
+            )
+
+        raw_next_token = payload.get("nextPageToken")
+        if raw_next_token is not None and (
+            not isinstance(raw_next_token, str) or not raw_next_token.strip()
+        ):
+            return _message_malformed("Gmail metadata pagination token was malformed.")
+        complete = raw_next_token is None
+        return GmailMessagePage(
+            state=(
+                GmailProviderState.CONNECTED
+                if records
+                else GmailProviderState.CONNECTED_EMPTY
+            ),
+            messages=tuple(records),
+            next_page_token=raw_next_token,
+            complete=complete,
+            truncated=not complete,
+            pages_fetched=1,
+            result_size_estimate=_optional_nonnegative_int(
+                payload.get("resultSizeEstimate")
+            ),
         )
 
     def inventory_label_messages(self, *, provider_label_id: str) -> GmailInventoryPage:

@@ -338,16 +338,7 @@ class GmailUserLabelIdentity(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     provider_label_id: str = Field(min_length=1, max_length=500)
-    name: Literal[
-        "PCOS/Action",
-        "PCOS/Waiting",
-        "PCOS/Keep",
-        "PCOS/Review",
-        "Finance",
-        "School",
-        "Freelance",
-        "Travel",
-    ]
+    name: str = Field(min_length=1, max_length=200)
     label_type: Literal["user"] = "user"
 
     @field_validator("provider_label_id")
@@ -356,6 +347,14 @@ class GmailUserLabelIdentity(BaseModel):
         if not value.startswith("Label_"):
             raise ValueError("label actions require an exact user-label identity")
         return value
+
+    @field_validator("name")
+    @classmethod
+    def validate_safe_exact_name(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if not normalized or "@" in normalized:
+            raise ValueError("label actions require a safe exact user-label name")
+        return normalized
 
 
 class GmailApplyLabelPayload(BaseModel):

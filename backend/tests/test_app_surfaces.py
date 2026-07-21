@@ -124,6 +124,48 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         with self.assertRaises(HTTPException):
             main.email_organization_gate(authorization="Bearer incorrect")
 
+    def test_email_readonly_review_endpoints_are_authenticated_and_service_bounded(self):
+        surface = SimpleNamespace(state="ready")
+        sealed = SimpleNamespace(executable=False)
+        with patch("app.main.GmailClient") as gmail_client, patch.object(
+            main.gmail_readonly_review_service,
+            "load",
+            return_value=surface,
+        ) as load, patch.object(
+            main.gmail_readonly_review_service,
+            "seal_selection",
+            return_value=sealed,
+        ) as seal:
+            self.assertIs(
+                main.email_organization_review(authorization=self.authorization),
+                surface,
+            )
+            request = main.GmailReadonlySelectionRequest(
+                expected_snapshot_fingerprint="a" * 64,
+                label_token="b" * 16,
+                selected_message_tokens=("c" * 16,),
+            )
+            self.assertIs(
+                main.seal_email_organization_review(
+                    request,
+                    authorization=self.authorization,
+                ),
+                sealed,
+            )
+
+        self.assertEqual(gmail_client.call_count, 2)
+        load.assert_called_once()
+        seal.assert_called_once_with(
+            gmail_client.return_value,
+            expected_snapshot_fingerprint="a" * 64,
+            expected_selection_fingerprint=None,
+            label_token="b" * 16,
+            selected_message_tokens=("c" * 16,),
+            prior_review_message_tokens=None,
+        )
+        with self.assertRaises(HTTPException):
+            main.email_organization_review(authorization="Bearer incorrect")
+
     def test_memory_crud_and_activity_log(self):
         initial_count = len(main.memory_index(authorization=self.authorization))
         memory = main.memory_create(

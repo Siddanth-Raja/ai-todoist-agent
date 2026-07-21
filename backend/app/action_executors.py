@@ -30,13 +30,11 @@ from .todoist_tools import (
     list_todoist_sections,
 )
 from .gmail_organization import (
-    GmailBatchMutationResult,
-    GmailCreatedLabel,
     GmailMutationGateRepository,
-    GmailObservedMessageState,
     GmailOrganizationAdapter,
     GmailOrganizationGateError,
 )
+from .gmail_mutation_transport import GmailOrganizationGoogleTransport
 
 
 @dataclass(frozen=True)
@@ -114,33 +112,12 @@ def build_default_executor_registry() -> ActionExecutorRegistry:
     return registry
 
 
-class _BlockedGmailTransport:
-    """No credentials or live transport exist on the credential-free side of the gate."""
-
-    def get_message_states(
-        self, message_ids: tuple[str, ...]
-    ) -> tuple[GmailObservedMessageState, ...]:
-        raise AssertionError("Gmail transport was reached before manual OAuth wiring")
-
-    def modify_message_labels(
-        self,
-        message_ids: tuple[str, ...],
-        *,
-        add_label_ids: tuple[str, ...] = (),
-        remove_label_ids: tuple[str, ...] = (),
-    ) -> GmailBatchMutationResult:
-        raise AssertionError("Gmail transport was reached before manual OAuth wiring")
-
-    def create_label(self, name: str) -> GmailCreatedLabel:
-        raise AssertionError("Gmail transport was reached before manual OAuth wiring")
-
-
 def _execute_gmail_organization(
     payload: ActionPayload,
     context: ActionExecutionContext,
 ) -> ActionExecutionResult:
     adapter = GmailOrganizationAdapter(
-        _BlockedGmailTransport(),
+        GmailOrganizationGoogleTransport(context.settings),
         GmailMutationGateRepository(),
     )
     try:

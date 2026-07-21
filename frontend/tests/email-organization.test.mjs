@@ -8,6 +8,7 @@ import {
   canConfirmProposal,
   gateHeadline,
   removeProposalTarget,
+  reviewTargetsForLabel,
 } from "../src/lib/email-organization.ts";
 
 function gate(state) {
@@ -114,6 +115,16 @@ test("canary undo is separately gated and must reference the prior action", () =
     ),
     false,
   );
+
+  const source = readFileSync(new URL("../src/app/email/page.tsx", import.meta.url), "utf8");
+  assert.match(source, /Exact undo approval required/);
+  assert.match(source, /One confirmed canary; undo pending/);
+  assert.match(source, /Canary verified; undo pending/);
+  assert.match(source, /no other Gmail operation is permitted/);
+  assert.match(source, /Canary and undo verified/);
+  assert.match(source, /Canary and undo complete; state restored/);
+  assert.match(source, /Original mailbox state is restored/);
+  assert.match(source, /No further Gmail operation is authorized without a new exact confirmation/);
 });
 
 test("Email approval UI exposes separate adjust, reject, and exact confirm controls", () => {
@@ -130,4 +141,36 @@ test("Email approval UI exposes separate adjust, reject, and exact confirm contr
   assert.match(source, /target\.selection_reason/);
   assert.match(source, /this screen cannot request it or start OAuth/);
   assert.match(source, /email\/organization\/actions\/\$\{proposal\.action_id\}\/confirm/);
+});
+
+test("bounded readonly review filters exact label eligibility and caps the canary", () => {
+  const targets = Array.from({ length: 12 }, (_, index) => ({
+    message_token: `message-${index}`,
+    eligible_label_tokens: index === 11 ? ["other-label"] : ["label-action"],
+  }));
+  const review = { targets };
+
+  const filtered = reviewTargetsForLabel(review, "label-action");
+
+  assert.equal(filtered.length, 10);
+  assert.ok(filtered.every((target) => target.eligible_label_tokens.includes("label-action")));
+});
+
+test("Email UI loads, revalidates, and seals live readonly metadata before OAuth", () => {
+  const source = readFileSync(new URL("../src/app/email/page.tsx", import.meta.url), "utf8");
+  assert.match(source, /\/email\/organization\/review/);
+  assert.match(source, /\/email\/organization\/review\/selection/);
+  assert.match(source, /Revalidate and seal readonly selection/);
+  assert.match(source, /target\.sender_display/);
+  assert.match(source, /target\.sender_domain/);
+  assert.match(source, /target\.subject/);
+  assert.match(source, /target\.received_at/);
+  assert.match(source, /target\.current_labels/);
+  assert.match(source, /target\.unread/);
+  assert.match(source, /target\.selection_reason/);
+  assert.match(source, /target\.message_token/);
+  assert.match(source, /target\.thread_token/);
+  assert.match(source, /Non-executable\. The manual OAuth gate remains locked/);
+  assert.match(source, /never\s+reads snippets or MIME bodies/);
+  assert.doesNotMatch(source, /startOAuth|reauthorizeGmail|gmail\.modify.*fetch/);
 });

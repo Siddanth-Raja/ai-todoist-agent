@@ -16,11 +16,15 @@ import {
 import { apiRequest } from "@/lib/api";
 import {
   GMAIL_MODIFY_SCOPE,
+  GMAIL_READONLY_SCOPE,
   MAX_LABEL_CANARY_MESSAGES,
   canConfirmProposal,
   gateHeadline,
+  reviewTargetsForLabel,
   type EmailOrganizationProposal,
   type GmailMutationGateStatus,
+  type GmailReadonlyReviewSurface,
+  type GmailReadonlySelectionPreview,
 } from "@/lib/email-organization";
 
 type PendingEmailAction = {
@@ -73,6 +77,10 @@ export default function EmailPage() {
   const [loading, setLoading] = useState(true);
   const [proposal, setProposal] = useState<EmailOrganizationProposal | null>(null);
   const [selectedTokens, setSelectedTokens] = useState<string[]>([]);
+  const [review, setReview] = useState<GmailReadonlyReviewSurface | null>(null);
+  const [selectedLabelToken, setSelectedLabelToken] = useState("");
+  const [selectedReviewTokens, setSelectedReviewTokens] = useState<string[]>([]);
+  const [sealedReview, setSealedReview] = useState<GmailReadonlySelectionPreview | null>(null);
   const [saving, setSaving] = useState(false);
   const [lastOutcome, setLastOutcome] = useState<EmailExecutionOutcome | null>(null);
 
@@ -80,13 +88,25 @@ export default function EmailPage() {
     setLoading(true);
     setError(null);
     try {
-      const [gateValue, pendingValue] = await Promise.all([
+      const [gateValue, pendingValue, reviewValue] = await Promise.all([
         apiRequest<GmailMutationGateStatus>("/email/organization/gate"),
         apiRequest<PendingEmailAction | null>(
           "/pending-actions/current?session_id=email-organization",
         ),
+        apiRequest<GmailReadonlyReviewSurface>("/email/organization/review"),
       ]);
       setGate(gateValue);
+      setReview(reviewValue);
+      const nextLabelToken = reviewValue.labels[0]?.label_token ?? "";
+      setSelectedLabelToken(nextLabelToken);
+      setSelectedReviewTokens(
+        nextLabelToken
+          ? reviewTargetsForLabel(reviewValue, nextLabelToken).map(
+              (target) => target.message_token,
+            )
+          : [],
+      );
+      setSealedReview(null);
       const pending = pendingValue?.pending_action ?? null;
       setProposal(pending);
       setSelectedTokens(
@@ -107,6 +127,47 @@ export default function EmailPage() {
   const selectionChanged = Boolean(
     proposal && selectedTokens.length !== proposal.details.targets.length,
   );
+  const liveReviewTargets = review && selectedLabelToken
+    ? reviewTargetsForLabel(review, selectedLabelToken)
+    : [];
+
+  function chooseReviewLabel(labelToken: string) {
+    setSelectedLabelToken(labelToken);
+    setSelectedReviewTokens(
+      review
+        ? reviewTargetsForLabel(review, labelToken).map((target) => target.message_token)
+        : [],
+    );
+    setSealedReview(null);
+  }
+
+  async function sealReadonlyReview() {
+    if (!review || !selectedLabelToken || selectedReviewTokens.length === 0) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const value = await apiRequest<GmailReadonlySelectionPreview>(
+        "/email/organization/review/selection",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_snapshot_fingerprint: review.snapshot_fingerprint,
+            expected_selection_fingerprint: sealedReview?.selection_fingerprint ?? null,
+            label_token: selectedLabelToken,
+            selected_message_tokens: selectedReviewTokens,
+          }),
+        },
+      );
+      setSealedReview(value);
+      if (gate?.state === "label_canary_required") {
+        await refresh();
+      }
+    } catch (value) {
+      setError(value instanceof Error ? value.message : "Unable to seal the read-only review.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function adjustProposal() {
     if (!proposal || selectedTokens.length === 0 || !selectionChanged) return;
@@ -184,11 +245,22 @@ export default function EmailPage() {
               Personal Email organization
             </div>
             <h3 className="mt-3 text-3xl font-semibold tracking-tight text-pearl">
-              Approval boundary is locked
+              {state === "canary_verified"
+                ? "Canary and undo verified"
+                : state === "label_canary_undo_required"
+                ? "Exact undo approval required"
+                : gate?.oauth_authorized
+                  ? "Exact canary approval required"
+                  : "Approval boundary is locked"}
             </h3>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-stone-300">
-              SID-230 inventory evidence can support exact proposals, but no mailbox change is available
-              until you explicitly approve a separate Personal Gmail reauthorization.
+              {state === "canary_verified"
+                ? "The exact nine-message label canary and its separately confirmed undo both succeeded. Original mailbox state is restored; every future operation still requires a new exact approval."
+                : state === "label_canary_undo_required"
+                ? "The exact label canary succeeded. Its separately sealed undo is pending below; no other Gmail operation is permitted."
+                : gate?.oauth_authorized
+                  ? "The isolated Personal Email client is reauthorized. No mailbox change occurs until you separately confirm the exact durable label-only proposal below."
+                  : "SID-230 inventory evidence can support exact proposals, but no mailbox change is available until you explicitly approve a separate Personal Gmail reauthorization."}
             </p>
           </div>
           <button
@@ -208,8 +280,15 @@ export default function EmailPage() {
             <div>
               <p className="font-medium text-gold">{gateHeadline(state)}</p>
               <p className="mt-1 text-sm leading-6 text-stone-300">
-                Required later scope: <code className="rounded bg-black/25 px-1.5 py-1 text-xs">{GMAIL_MODIFY_SCOPE}</code>.
-                It is displayed for informed approval only; this screen cannot request it or start OAuth.
+                {gate?.oauth_authorized ? "Authorized scope: " : "Required later scope: "}
+                <code className="rounded bg-black/25 px-1.5 py-1 text-xs">{GMAIL_MODIFY_SCOPE}</code>.
+                {state === "canary_verified"
+                  ? " The label canary and its exact undo are verified. No further Gmail operation is authorized without a new exact confirmation."
+                  : state === "label_canary_undo_required"
+                  ? " The one confirmed label canary succeeded. Exact undo confirmation is required; no other Gmail operation is permitted."
+                  : gate?.oauth_authorized
+                    ? " OAuth authorization alone made no Gmail change; exact action confirmation is still required."
+                    : " It is displayed for informed approval only; this screen cannot request it or start OAuth."}
               </p>
             </div>
           </div>
@@ -234,6 +313,13 @@ export default function EmailPage() {
             (index === 1 && state === "label_canary_required") ||
             (index === 2 && state === "label_canary_undo_required") ||
             (index === 3 && state === "canary_verified");
+          const detail = index === 0 && gate?.oauth_authorized
+            ? state === "canary_verified"
+              ? "Granted only for the isolated Personal Email client. Calendar authorization remains untouched; the confirmed label canary and undo restored the original mailbox state."
+              : state === "label_canary_undo_required"
+              ? "Granted only for the isolated Personal Email client. Calendar authorization remains untouched; the one confirmed canary is awaiting its separate undo approval."
+              : "Granted only for the isolated Personal Email client. Calendar authorization remains untouched and no Gmail mutation has occurred."
+            : stage.detail;
           return (
             <article
               key={stage.title}
@@ -254,12 +340,188 @@ export default function EmailPage() {
                 <div>
                   <p className="text-xs uppercase tracking-[0.18em] text-stone-500">Stage {index + 1}</p>
                   <h4 className="mt-1 font-medium text-pearl">{stage.title}</h4>
-                  <p className="mt-2 text-sm leading-6 text-stone-400">{stage.detail}</p>
+                  <p className="mt-2 text-sm leading-6 text-stone-400">{detail}</p>
                 </div>
               </div>
             </article>
           );
         })}
+      </section>
+
+      <section className="rounded-[1.8rem] border border-iris/25 bg-iris/[0.055] p-5 md:p-6">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div className="max-w-3xl">
+            <p className="text-xs font-medium uppercase tracking-[0.2em] text-iris">
+              Live read-only hand review
+            </p>
+            <h3 className="mt-2 text-2xl font-semibold text-pearl">
+              {state === "canary_verified"
+                ? "Read-only evidence remains available for future exact proposals"
+                : gate?.oauth_authorized
+                ? "Revalidate the exact sealed canary before separate confirmation"
+                : "Inspect the exact canary candidates before OAuth changes"}
+            </h3>
+            <p className="mt-3 text-sm leading-6 text-stone-400">
+              This surface reads one bounded Inbox metadata page with {GMAIL_READONLY_SCOPE}. It never
+              reads snippets or MIME bodies, rescans the full inventory, creates an action, or changes Gmail.
+            </p>
+          </div>
+          <span className={`w-fit rounded-full border px-3 py-1.5 text-xs font-medium ${
+            review?.state === "ready"
+              ? "border-moss/30 bg-moss/10 text-moss"
+              : "border-gold/30 bg-gold/10 text-gold"
+          }`}>
+            {review?.state === "ready" ? "Readonly evidence ready" : review?.state ?? "Loading"}
+          </span>
+        </div>
+
+        {review?.state === "ready" ? (
+          <div className="mt-6 space-y-5">
+            <div className="grid gap-3 rounded-2xl border border-white/10 bg-black/20 p-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
+              <p><span className="text-stone-500">Account</span><br />Personal Gmail · {review.account_token}</p>
+              <p><span className="text-stone-500">Source lineage</span><br />{review.source_issue} · {review.source_label}</p>
+              <p><span className="text-stone-500">Bounded metadata reads</span><br />{review.provider_evidence.metadata_requests}</p>
+              <p><span className="text-stone-500">Bodies / writes</span><br />{review.provider_evidence.body_requests} / {review.provider_evidence.provider_mutation_calls}</p>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-[0.75fr_1.25fr]">
+              <div className="rounded-2xl border border-white/10 bg-black/15 p-4">
+                <label className="text-xs font-medium uppercase tracking-[0.16em] text-stone-400" htmlFor="readonly-label">
+                  Existing label for the canary
+                </label>
+                <select
+                  id="readonly-label"
+                  value={selectedLabelToken}
+                  onChange={(event) => chooseReviewLabel(event.target.value)}
+                  className="mt-3 min-h-11 w-full rounded-xl border border-white/10 bg-ink px-3 text-sm text-pearl"
+                >
+                  {review.labels.map((label) => (
+                    <option key={label.label_token} value={label.label_token}>
+                      {label.name} · {label.eligible_message_count} eligible
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-3 text-xs leading-5 text-stone-500">
+                  Existing user labels are loaded exactly. SID-230 rules determine safe candidates separately; choosing a label does not approve execution. Label creation is unavailable.
+                </p>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-black/15 p-4 text-xs">
+                <p className="font-medium text-stone-300">Protected and uncertain exclusions</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {review.exclusions.length ? review.exclusions.map((item) => (
+                    <span key={item.reason} className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-stone-400">
+                      {item.reason.replaceAll("_", " ")} · {item.count}
+                    </span>
+                  )) : <span className="text-stone-500">No exclusions in the bounded page.</span>}
+                </div>
+                <p className="mt-3 text-stone-500">{review.query_summary}. No continuation cursor is exposed.</p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-stone-400">
+              <p className="font-medium uppercase tracking-[0.16em]">Every selectable message</p>
+              <p>{selectedReviewTokens.length} selected · {liveReviewTargets.length} shown · maximum {review.maximum_targets}</p>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              {liveReviewTargets.map((target) => {
+                const selected = selectedReviewTokens.includes(target.message_token);
+                return (
+                  <label key={target.message_token} className={`block cursor-pointer rounded-2xl border p-4 text-sm transition ${
+                    selected
+                      ? "border-iris/30 bg-iris/[0.07]"
+                      : "border-white/10 bg-black/20 opacity-70"
+                  }`}>
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => {
+                          setSelectedReviewTokens((values) => selected
+                            ? values.filter((value) => value !== target.message_token)
+                            : [...values, target.message_token]);
+                          setSealedReview(null);
+                        }}
+                        className="mt-1"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="break-words font-medium text-pearl">{target.subject}</p>
+                            <p className="mt-1 text-xs text-stone-400">
+                              {target.sender_display} <span className="text-stone-600">·</span> {target.sender_domain}
+                            </p>
+                          </div>
+                          <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-stone-500">
+                            <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+                            {formatReviewDate(target.received_at)}
+                          </span>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-1.5">
+                          {target.current_labels.map((label) => (
+                            <span key={label.label_token} className="rounded-full border border-white/10 bg-white/[0.055] px-2 py-1 text-[0.7rem] text-stone-300">
+                              {label.name}
+                            </span>
+                          ))}
+                          <span className="rounded-full border border-white/10 bg-black/20 px-2 py-1 text-[0.7rem] text-stone-400">
+                            {target.unread ? "Unread" : "Read"}
+                          </span>
+                        </div>
+                        <div className="mt-3 rounded-xl border border-iris/15 bg-black/15 px-3 py-2">
+                          <p className="text-[0.68rem] font-medium uppercase tracking-[0.16em] text-iris">Why selected</p>
+                          <p className="mt-1 text-xs leading-5 text-stone-400">{target.selection_reason}</p>
+                        </div>
+                        <p className="mt-3 font-mono text-[0.68rem] text-stone-600">
+                          Message {target.message_token}{target.thread_token ? ` · Thread ${target.thread_token}` : ""}
+                        </p>
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-black/20 p-4 md:flex-row md:items-center md:justify-between">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-pearl">Readonly selection fingerprint</p>
+                <p className="mt-1 truncate font-mono text-xs text-stone-500">{review.snapshot_fingerprint}</p>
+                <p className="mt-2 text-xs text-stone-500">Sealing re-reads the same bounded evidence and rejects stale message, label, or mailbox state.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void sealReadonlyReview()}
+                disabled={saving || selectedReviewTokens.length === 0 || selectedReviewTokens.length > MAX_LABEL_CANARY_MESSAGES}
+                className="min-h-11 shrink-0 rounded-xl border border-iris/30 bg-iris/10 px-4 text-sm font-medium text-iris transition hover:bg-iris/15 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Revalidate and seal readonly selection
+              </button>
+            </div>
+
+            {sealedReview ? (
+              <div className="rounded-2xl border border-moss/25 bg-moss/[0.07] p-4">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-moss" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <p className="font-medium text-moss">Exact readonly review sealed</p>
+                    <p className="mt-1 text-sm text-stone-300">
+                      {sealedReview.exact_message_count} messages across {sealedReview.exact_thread_count} threads · {sealedReview.label.name}
+                    </p>
+                    <p className="mt-2 truncate font-mono text-xs text-stone-500">{sealedReview.selection_fingerprint}</p>
+                    <p className="mt-2 text-xs text-stone-400">
+                      {gate?.oauth_authorized
+                        ? "Revalidated without mutation. A separate durable proposal must be reviewed and confirmed below."
+                        : "Non-executable. The manual OAuth gate remains locked and no durable action exists yet."}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="mt-5 rounded-2xl border border-gold/25 bg-gold/[0.06] p-4 text-sm text-stone-300">
+            The bounded Personal Gmail review is unavailable or has no safe candidates with an existing eligible label.
+            No OAuth or mailbox state was changed. Diagnostic: {review?.diagnostic_code ?? review?.state ?? "loading"}.
+          </div>
+        )}
       </section>
 
       <section className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
@@ -371,8 +633,14 @@ export default function EmailPage() {
         </article>
 
         <article className="rounded-[1.8rem] border border-moss/20 bg-moss/[0.055] p-5 md:p-6">
-          <p className="text-xs font-medium uppercase tracking-[0.2em] text-moss">Credential-free evidence</p>
-          <h3 className="mt-2 text-xl font-semibold text-pearl">Zero mutation calls</h3>
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-moss">Mutation boundary evidence</p>
+          <h3 className="mt-2 text-xl font-semibold text-pearl">
+            {state === "canary_verified"
+              ? "Canary and undo complete; state restored"
+              : state === "label_canary_undo_required"
+                ? "One confirmed canary; undo pending"
+                : "Zero mutation calls"}
+          </h3>
           <dl className="mt-5 space-y-3 text-sm">
             <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3">
               <dt className="text-stone-400">Provider mutation calls</dt>
@@ -384,7 +652,15 @@ export default function EmailPage() {
             </div>
             <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3">
               <dt className="text-stone-400">Personal Gmail access</dt>
-              <dd className="text-stone-200">Read-only</dd>
+              <dd className="text-stone-200">
+                {state === "canary_verified"
+                  ? "Canary and undo verified"
+                  : state === "label_canary_undo_required"
+                  ? "Canary verified; undo pending"
+                  : gate?.oauth_authorized
+                    ? "OAuth authorized; zero mutations"
+                    : "Read-only"}
+              </dd>
             </div>
             <div className="flex items-center justify-between gap-3">
               <dt className="text-stone-400">Automatic undo</dt>

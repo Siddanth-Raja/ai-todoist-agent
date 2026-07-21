@@ -14,8 +14,19 @@ from .calendar_tools import check_google_auth, categories_conflict, list_upcomin
 from .config import get_settings
 from .dependency_evaluator import DependencySummary, EvaluatedDependencyEvidence
 from .linear_client import LinearClient
-from .gmail_client import personal_email_health_payload
-from .gmail_organization import GmailMutationGateRepository, GmailMutationGateStatus
+from .gmail_client import GmailClient, personal_email_health_payload
+from .gmail_organization import (
+    GmailMutationGateRepository,
+    GmailMutationGateState,
+    GmailMutationGateStatus,
+)
+from .gmail_review import (
+    GmailReadonlyReviewError,
+    GmailReadonlyReviewService,
+    GmailReadonlyReviewSurface,
+    GmailReadonlySelectionPreview,
+    GmailReadonlySelectionRequest,
+)
 from .project_brain import project_brain_service
 from .project_work_packages import LinearProjectDiagnostic, ProjectWorkPackage
 from .storage import (
@@ -55,6 +66,7 @@ app.add_middleware(
 OPENAI_MODELS_BASE_URL = "https://api.openai.com/v1/models"
 PROVIDER_HEALTH_TIMEOUT_SECONDS = 10
 gmail_mutation_gate_repository = GmailMutationGateRepository()
+gmail_readonly_review_service = GmailReadonlyReviewService()
 
 
 class ChatRequest(BaseModel):
@@ -205,6 +217,71 @@ def email_organization_gate(
     """Expose only the durable credential-free gate; this never contacts Gmail."""
     require_agent_api_key(authorization)
     return gmail_mutation_gate_repository.status()
+
+
+@app.get(
+    "/email/organization/review",
+    response_model=GmailReadonlyReviewSurface,
+)
+def email_organization_review(
+    authorization: str | None = Header(default=None),
+) -> GmailReadonlyReviewSurface:
+    """Load one bounded, metadata-only Gmail review using the existing readonly token."""
+    require_agent_api_key(authorization)
+    return gmail_readonly_review_service.load(GmailClient(get_settings()))
+
+
+@app.post(
+    "/email/organization/review/selection",
+    response_model=GmailReadonlySelectionPreview,
+)
+def seal_email_organization_review(
+    request: GmailReadonlySelectionRequest,
+    authorization: str | None = Header(default=None),
+) -> GmailReadonlySelectionPreview:
+    """Seal the exact selection and, after OAuth only, create its durable proposal."""
+    require_agent_api_key(authorization)
+    try:
+        client = GmailClient(get_settings())
+        if (
+            gmail_mutation_gate_repository.status().state
+            == GmailMutationGateState.LABEL_CANARY_REQUIRED
+        ):
+            sealed = gmail_readonly_review_service.build_canary_proposal(
+                client,
+                expected_snapshot_fingerprint=request.expected_snapshot_fingerprint,
+                expected_selection_fingerprint=request.expected_selection_fingerprint,
+                label_token=request.label_token,
+                selected_message_tokens=request.selected_message_tokens,
+                prior_review_message_tokens=request.prior_review_message_tokens,
+            )
+            pending_action_service.propose_typed(
+                sealed.payload,
+                confirmation_prompt=(
+                    f"Apply the exact existing Gmail label to these "
+                    f"{sealed.preview.exact_message_count} hand-reviewed Personal Email "
+                    "messages only? No archive or read-state change is included."
+                ),
+                evidence=sealed.evidence,
+                session_id="email-organization",
+                source="sid_231_live_canary",
+                source_ref=sealed.preview.selection_fingerprint,
+                idempotency_key=sealed.idempotency_key,
+            )
+            return sealed.preview
+        return gmail_readonly_review_service.seal_selection(
+            client,
+            expected_snapshot_fingerprint=request.expected_snapshot_fingerprint,
+            expected_selection_fingerprint=request.expected_selection_fingerprint,
+            label_token=request.label_token,
+            selected_message_tokens=request.selected_message_tokens,
+            prior_review_message_tokens=request.prior_review_message_tokens,
+        )
+    except GmailReadonlyReviewError as exc:
+        status_code = 409 if exc.code == "stale_review" else 400
+        if exc.code == "review_unavailable":
+            status_code = 503
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @app.post("/email/organization/actions/{action_id}/adjust")

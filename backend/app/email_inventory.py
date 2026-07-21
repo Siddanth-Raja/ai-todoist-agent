@@ -424,8 +424,9 @@ _SECURITY_RE = re.compile(
     re.IGNORECASE,
 )
 _FINANCE_RE = re.compile(
-    r"\b(?:bank|credit card|payment|invoice|receipt|billing|tax|balance|statement|"
-    r"refund|transaction|payroll)\b",
+    r"\b(?:bank|banking|bankofamerica|credit card|payment|invoice|receipt|billing|"
+    r"tax|balance|statement|refund|transaction|payroll|retirement|401k|ira|"
+    r"investment|investing|stocks?|equity|brokerage|portfolio|dividend|capital market)\b",
     re.IGNORECASE,
 )
 _ACADEMIC_RE = re.compile(
@@ -450,7 +451,12 @@ _AUTOMATED_LOCAL_RE = re.compile(r"^(?:no[-_.]?reply|do[-_.]?not[-_.]?reply|noti
 
 
 def _summarize_page(label: InventoryLabelIdentity, page: GmailInventoryPage) -> LabelInventory:
-    facts = tuple(sorted((_fact_for_record(item) for item in page.messages), key=_fact_sort_key))
+    facts = tuple(
+        sorted(
+            (inventory_fact_for_record(item) for item in page.messages),
+            key=_fact_sort_key,
+        )
+    )
     dates = [item.received_at for item in facts if item.received_at is not None]
     thread_keys = {
         (
@@ -497,7 +503,7 @@ def _summarize_page(label: InventoryLabelIdentity, page: GmailInventoryPage) -> 
     )
 
 
-def _fact_for_record(record: GmailMessageRecord) -> InventoryMessageFact:
+def inventory_fact_for_record(record: GmailMessageRecord) -> InventoryMessageFact:
     sender = record.sender or ""
     name, address = parseaddr(sender)
     address = address.strip().casefold()
@@ -514,7 +520,11 @@ def _fact_for_record(record: GmailMessageRecord) -> InventoryMessageFact:
     uncertainty: list[str] = []
 
     def match(pattern: re.Pattern[str], item: InventoryCoarseType, protection=None):
-        if pattern.search(subject) or (sender_domain and pattern.search(sender_domain)):
+        if (
+            pattern.search(subject)
+            or pattern.search(name)
+            or (sender_domain and pattern.search(sender_domain))
+        ):
             types.append(item)
             if protection is not None:
                 protections.append(protection)

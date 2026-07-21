@@ -24,6 +24,12 @@ export type EmailOrganizationTarget = {
   thread_token: string | null;
   expected_unread: boolean;
   expected_label_count: number;
+  sender_display: string;
+  sender_domain: string;
+  subject: string;
+  received_at: string;
+  current_labels: Array<{ label_token: string; name: string }>;
+  selection_reason: string;
 };
 
 export type EmailOrganizationProposal = {
@@ -78,7 +84,11 @@ export function canConfirmProposal(
   proposal: EmailOrganizationProposal,
   gate: GmailMutationGateStatus,
 ): boolean {
-  if (proposal.details.targets.length === 0 || proposal.details.uncertainty_count !== 0) {
+  if (
+    proposal.details.targets.length === 0 ||
+    proposal.details.uncertainty_count !== 0 ||
+    !proposal.details.targets.every(hasCompleteReviewMetadata)
+  ) {
     return false;
   }
   if (gate.state === "label_canary_required") {
@@ -86,7 +96,8 @@ export function canConfirmProposal(
       proposal.action_type === "gmail_apply_label" &&
       proposal.details.canary &&
       proposal.details.hand_reviewed &&
-      proposal.details.targets.length <= MAX_LABEL_CANARY_MESSAGES
+      proposal.details.targets.length <= MAX_LABEL_CANARY_MESSAGES &&
+      proposal.details.targets.length <= gate.maximum_canary_messages
     );
   }
   if (gate.state === "label_canary_undo_required") {
@@ -95,10 +106,24 @@ export function canConfirmProposal(
       proposal.details.canary_undo &&
       proposal.details.hand_reviewed &&
       Boolean(proposal.details.undo_of_action_id) &&
-      proposal.details.targets.length <= MAX_LABEL_CANARY_MESSAGES
+      proposal.details.targets.length <= MAX_LABEL_CANARY_MESSAGES &&
+      proposal.details.targets.length <= gate.maximum_canary_messages
     );
   }
   return gate.state === "canary_verified";
+}
+
+export function hasCompleteReviewMetadata(target: EmailOrganizationTarget): boolean {
+  return Boolean(
+    target.sender_display.trim() &&
+    target.sender_domain.trim() &&
+    target.subject.trim() &&
+    Number.isFinite(Date.parse(target.received_at)) &&
+    target.current_labels.length > 0 &&
+    target.current_labels.every((label) => label.label_token.trim() && label.name.trim()) &&
+    target.current_labels.length === target.expected_label_count &&
+    target.selection_reason.trim(),
+  );
 }
 
 export function gateHeadline(state: GmailMutationGateState): string {

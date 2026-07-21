@@ -112,7 +112,9 @@ class InventoryMessageFact(BaseModel):
     identity: EmailMessageIdentity
     received_at: datetime | None = None
     sender_fingerprint: str = Field(min_length=1)
+    sender_display: str | None = Field(default=None, min_length=1, max_length=200)
     sender_domain: str | None = Field(default=None, min_length=1)
+    subject: str | None = Field(default=None, min_length=1, max_length=500)
     unread: bool
     provider_important: bool
     label_ids: tuple[str, ...]
@@ -204,6 +206,7 @@ class PersonalEmailInventoryResult(BaseModel):
     account_role: Literal[EmailAccountRole.PERSONAL] = EmailAccountRole.PERSONAL
     inbox: LabelInventory
     old_stuff: LabelInventory
+    label_catalog: tuple[InventoryLabelIdentity, ...] = ()
     complete: bool
     stable_fingerprint: str = Field(min_length=1)
     body_requests: Literal[0] = 0
@@ -215,6 +218,9 @@ class PersonalEmailInventoryResult(BaseModel):
     def validate_complete(self) -> "PersonalEmailInventoryResult":
         if self.complete != (self.inbox.complete and self.old_stuff.complete):
             raise ValueError("overall completeness must require both exact labels")
+        label_ids = [item.provider_label_id for item in self.label_catalog]
+        if len(label_ids) != len(set(label_ids)):
+            raise ValueError("label catalog identities must be unique")
         return self
 
 
@@ -331,14 +337,24 @@ class EmailInventoryService:
             label_result.state,
             label_result.diagnostic,
         )
+        label_catalog = tuple(
+            InventoryLabelIdentity(
+                provider_label_id=item.provider_label_id,
+                exact_name=_safe_review_text(item.name, 200),
+            )
+            for item in sorted(labels, key=lambda value: value.provider_label_id)
+            if item.provider_label_id.strip() and _safe_review_text(item.name, 200)
+        )
         fingerprint = _stable_hash(
             "personal-inventory",
             inbox.stable_fingerprint,
             old_stuff.stable_fingerprint,
+            *(f"{item.provider_label_id}:{item.exact_name}" for item in label_catalog),
         )
         return PersonalEmailInventoryResult(
             inbox=inbox,
             old_stuff=old_stuff,
+            label_catalog=label_catalog,
             complete=inbox.complete and old_stuff.complete,
             stable_fingerprint=fingerprint,
         )
@@ -483,11 +499,12 @@ def _summarize_page(label: InventoryLabelIdentity, page: GmailInventoryPage) -> 
 
 def _fact_for_record(record: GmailMessageRecord) -> InventoryMessageFact:
     sender = record.sender or ""
-    _name, address = parseaddr(sender)
+    name, address = parseaddr(sender)
     address = address.strip().casefold()
     local, separator, domain = address.partition("@")
     sender_domain = domain if separator and domain else None
-    subject = record.subject or ""
+    sender_display = _safe_review_text(name, 200) or _safe_sender_local(local)
+    subject = _safe_review_text(record.subject or "", 500)
     labels = set(record.label_ids)
     bulk = bool(labels.intersection({"CATEGORY_PROMOTIONS", "CATEGORY_UPDATES", "CATEGORY_FORUMS"}))
     promotional = bulk or bool(_PROMOTIONAL_RE.search(subject))
@@ -541,7 +558,9 @@ def _fact_for_record(record: GmailMessageRecord) -> InventoryMessageFact:
         identity=record.identity,
         received_at=record.internal_date or record.message_date,
         sender_fingerprint=_stable_hash("sender", sender.casefold() or "unavailable"),
+        sender_display=sender_display or None,
         sender_domain=sender_domain,
+        subject=subject or None,
         unread=record.unread,
         provider_important="IMPORTANT" in labels,
         label_ids=tuple(sorted(labels)),
@@ -551,6 +570,17 @@ def _fact_for_record(record: GmailMessageRecord) -> InventoryMessageFact:
         uncertain=bool(uncertainty),
         uncertainty_reasons=tuple(dict.fromkeys(uncertainty)),
     )
+
+
+def _safe_review_text(value: str, limit: int) -> str:
+    return " ".join(value.split())[:limit].rstrip()
+
+
+def _safe_sender_local(local: str) -> str:
+    if not local:
+        return ""
+    readable = re.sub(r"[._+\-]+", " ", local)
+    return _safe_review_text(readable, 200)
 
 
 def _proposals_for_label(inventory: LabelInventory) -> list[OrganizationBatchProposal]:

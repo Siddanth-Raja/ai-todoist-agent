@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
+  CalendarDays,
   CheckCircle2,
   CircleDashed,
   LockKeyhole,
@@ -55,6 +56,16 @@ const stages = [
     icon: MailCheck,
   },
 ];
+
+const reviewDateFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+function formatReviewDate(value: string): string {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "Date unavailable" : reviewDateFormatter.format(parsed);
+}
 
 export default function EmailPage() {
   const [gate, setGate] = useState<GmailMutationGateStatus | null>(null);
@@ -258,7 +269,7 @@ export default function EmailPage() {
           <p className="mt-3 text-sm leading-6 text-stone-400">
             When the gate opens, every proposal must show the Personal account role, exact operation and
             label, exact message and thread counts, deterministic criteria, protected/uncertain exclusions,
-            redacted examples, and the immutable selection fingerprint.
+            redacted examples, safe per-message review metadata, and the immutable selection fingerprint.
           </p>
           {proposal ? (
             <div className="mt-5 space-y-4">
@@ -285,18 +296,52 @@ export default function EmailPage() {
                     <ul className="mt-2 space-y-1 font-mono text-stone-500">{proposal.details.representative_example_tokens.map((value) => <li key={value}>{value}</li>)}</ul>
                   </div>
                 </div>
-              <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+              <div className="flex items-center justify-between gap-3 text-xs text-stone-400">
+                <p className="font-medium uppercase tracking-[0.16em]">Complete target review</p>
+                <p>{selectedTokens.length} selected · maximum {MAX_LABEL_CANARY_MESSAGES}</p>
+              </div>
+              <div className="max-h-[38rem] space-y-3 overflow-y-auto pr-1">
                 {proposal.details.targets.map((target) => {
                   const selected = selectedTokens.includes(target.message_token);
                   return (
-                    <label key={target.message_token} className="flex cursor-pointer items-center gap-3 rounded-xl border border-white/10 bg-black/15 px-3 py-2 text-xs text-stone-300">
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        onChange={() => setSelectedTokens((values) => selected ? values.filter((value) => value !== target.message_token) : [...values, target.message_token])}
-                      />
-                      <span className="font-mono">{target.message_token}</span>
-                      <span className="ml-auto text-stone-500">{target.expected_label_count} labels</span>
+                    <label key={target.message_token} className="block cursor-pointer rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-stone-300 transition hover:border-white/20">
+                      <div className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() => setSelectedTokens((values) => selected ? values.filter((value) => value !== target.message_token) : [...values, target.message_token])}
+                          className="mt-1"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="break-words font-medium text-pearl">{target.subject}</p>
+                              <p className="mt-1 text-xs text-stone-400">
+                                {target.sender_display} <span className="text-stone-600">·</span> {target.sender_domain}
+                              </p>
+                            </div>
+                            <span className="inline-flex shrink-0 items-center gap-1.5 text-xs text-stone-500">
+                              <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+                              {formatReviewDate(target.received_at)}
+                            </span>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-1.5">
+                            {target.current_labels.map((label) => (
+                              <span key={label.label_token} className="rounded-full border border-white/10 bg-white/[0.055] px-2 py-1 text-[0.7rem] text-stone-300">
+                                {label.name}
+                              </span>
+                            ))}
+                          </div>
+                          <div className="mt-3 rounded-xl border border-iris/15 bg-iris/[0.05] px-3 py-2">
+                            <p className="text-[0.68rem] font-medium uppercase tracking-[0.16em] text-iris">Why selected</p>
+                            <p className="mt-1 text-xs leading-5 text-stone-400">{target.selection_reason}</p>
+                          </div>
+                          <p className="mt-3 font-mono text-[0.68rem] text-stone-600">
+                            Message {target.message_token}
+                            {target.thread_token ? ` · Thread ${target.thread_token}` : ""}
+                          </p>
+                        </div>
+                      </div>
                     </label>
                   );
                 })}

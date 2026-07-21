@@ -305,6 +305,13 @@ class EmailInventoryAndProposalTests(unittest.TestCase):
         self.assertEqual(first.inbox.body_requests, 0)
         self.assertEqual(first.old_stuff.label.exact_name, "Old Stuff")
         self.assertEqual(first.provider_mutation_calls, 0)
+        self.assertEqual(first.inbox.messages[0].sender_display, "Updates")
+        self.assertEqual(first.inbox.messages[0].sender_domain, "example.test")
+        self.assertEqual(first.inbox.messages[0].subject, "Weekly newsletter sale")
+        self.assertEqual(
+            {item.provider_label_id for item in first.label_catalog},
+            {"INBOX", "old-stuff-id"},
+        )
         self.assertNotIn("updates@example.test", first.model_dump_json())
         self.assertNotIn("Account Owner", first.model_dump_json())
 

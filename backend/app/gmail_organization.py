@@ -22,8 +22,10 @@ from .action_domain import (
     GmailExpectedMessageState,
     GmailMarkReadPayload,
     GmailMarkUnreadPayload,
+    GmailMessageReviewMetadata,
     GmailOrganizationManifest,
     GmailRemoveLabelPayload,
+    GmailReviewLabelIdentity,
     GmailRestoreInboxPayload,
     GmailUserLabelIdentity,
     ProviderTargetReference,
@@ -32,6 +34,7 @@ from .action_domain import (
 from .email_inventory import (
     EmailOrganizationProposalResult,
     FutureOrganizationOperation,
+    InventoryCoarseType,
     OrganizationBatchProposal,
     PersonalEmailInventoryResult,
 )
@@ -41,6 +44,21 @@ from .storage import database_connection
 GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 MAX_GMAIL_MUTATION_BATCH_SIZE = 1000
 MAX_LIVE_LABEL_CANARY_MESSAGES = 10
+
+GMAIL_SYSTEM_LABEL_DISPLAY_NAMES = {
+    "CHAT": "Chat",
+    "CATEGORY_FORUMS": "Forums",
+    "CATEGORY_PERSONAL": "Personal",
+    "CATEGORY_PROMOTIONS": "Promotions",
+    "CATEGORY_SOCIAL": "Social",
+    "CATEGORY_UPDATES": "Updates",
+    "DRAFT": "Draft",
+    "IMPORTANT": "Important",
+    "INBOX": "Inbox",
+    "SENT": "Sent",
+    "STARRED": "Starred",
+    "UNREAD": "Unread",
+}
 
 
 class GmailMutationGateState(StrEnum):
@@ -320,12 +338,61 @@ class GmailOrganizationProposalBuilder:
                 "protected_or_uncertain_target",
                 "Protected or uncertain mail cannot enter an executable manifest.",
             )
+        if any(
+            not item.sender_display
+            or not item.sender_domain
+            or not item.subject
+            or item.received_at is None
+            for item in selected_facts
+            if item
+        ):
+            raise GmailOrganizationGateError(
+                "review_metadata_missing",
+                "Every reviewed target requires safe sender, subject, and date metadata.",
+            )
+        label_names = {
+            **GMAIL_SYSTEM_LABEL_DISPLAY_NAMES,
+            **{
+                item.provider_label_id: item.exact_name
+                for item in inventory.label_catalog
+            },
+            inventory.inbox.label.provider_label_id: inventory.inbox.label.exact_name,
+            inventory.old_stuff.label.provider_label_id: inventory.old_stuff.label.exact_name,
+        }
+        missing_label_ids = sorted(
+            {
+                label_id
+                for item in selected_facts
+                if item is not None
+                for label_id in item.label_ids
+                if label_id not in label_names
+            }
+        )
+        if missing_label_ids:
+            raise GmailOrganizationGateError(
+                "review_label_evidence_missing",
+                "Every current Gmail label requires an exact discovered display name.",
+            )
         targets = tuple(
             GmailExpectedMessageState(
                 provider_message_id=item.identity.provider_message_id,
                 provider_thread_id=item.identity.provider_thread_id,
                 expected_label_ids=item.label_ids,
                 expected_unread=item.unread,
+                review=GmailMessageReviewMetadata(
+                    sender_display=item.sender_display,
+                    sender_domain=item.sender_domain,
+                    subject=item.subject,
+                    received_at=item.received_at,
+                    current_labels=tuple(
+                        GmailReviewLabelIdentity(
+                            provider_label_id=label_id,
+                            display_name=_safe_review_text(label_names[label_id], 200),
+                        )
+                        for label_id in item.label_ids
+                    ),
+                    selection_reason=_selection_reason(proposal, item.coarse_types),
+                ),
             )
             for item in selected_facts
             if item is not None
@@ -745,9 +812,65 @@ def _post_states(payload: ActionPayload) -> tuple[GmailExpectedMessageState, ...
                 provider_thread_id=target.provider_thread_id,
                 expected_label_ids=tuple(sorted(labels)),
                 expected_unread=unread,
+                review=target.review.model_copy(
+                    update={
+                        "current_labels": _post_review_labels(payload, target),
+                    }
+                ),
             )
         )
     return tuple(values)
+
+
+def _post_review_labels(
+    payload: ActionPayload,
+    target: GmailExpectedMessageState,
+) -> tuple[GmailReviewLabelIdentity, ...]:
+    labels = {
+        item.provider_label_id: item.display_name
+        for item in target.review.current_labels
+    }
+    if isinstance(payload, GmailApplyLabelPayload):
+        labels[payload.label.provider_label_id] = payload.label.name
+    elif isinstance(payload, GmailRemoveLabelPayload):
+        labels.pop(payload.label.provider_label_id, None)
+    elif isinstance(payload, GmailArchivePayload):
+        labels.pop("INBOX", None)
+    elif isinstance(payload, GmailRestoreInboxPayload):
+        labels["INBOX"] = GMAIL_SYSTEM_LABEL_DISPLAY_NAMES["INBOX"]
+    elif isinstance(payload, GmailMarkReadPayload):
+        labels.pop("UNREAD", None)
+    elif isinstance(payload, GmailMarkUnreadPayload):
+        labels["UNREAD"] = GMAIL_SYSTEM_LABEL_DISPLAY_NAMES["UNREAD"]
+    return tuple(
+        GmailReviewLabelIdentity(provider_label_id=label_id, display_name=name)
+        for label_id, name in sorted(labels.items())
+    )
+
+
+def _selection_reason(
+    proposal: OrganizationBatchProposal,
+    coarse_types: tuple[InventoryCoarseType, ...],
+) -> str:
+    grounded = ", ".join(item.value.replace("_", " ") for item in coarse_types)
+    if proposal.operation == FutureOrganizationOperation.LABEL:
+        destination = (
+            proposal.organization_label.value
+            if proposal.organization_label is not None
+            else "the reviewed label"
+        )
+        return _safe_review_text(
+            f"Grounded {grounded} metadata matched {destination}; protected and uncertain signals were excluded.",
+            500,
+        )
+    return _safe_review_text(
+        f"Grounded {grounded} metadata matched the reviewed {proposal.operation.value.replace('_', ' ')} criteria; protected and uncertain signals were excluded.",
+        500,
+    )
+
+
+def _safe_review_text(value: str, limit: int) -> str:
+    return " ".join(value.split())[:limit].rstrip()
 
 
 def _undo_payload(action_id: str, payload: ActionPayload) -> ActionPayload:

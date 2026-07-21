@@ -204,6 +204,7 @@ class GmailExpectedMessageState(BaseModel):
     expected_unread: bool
     protected: Literal[False] = False
     uncertain: Literal[False] = False
+    review: "GmailMessageReviewMetadata"
 
     @field_validator("expected_label_ids")
     @classmethod
@@ -213,6 +214,85 @@ class GmailExpectedMessageState(BaseModel):
         if len(values) != len(set(values)):
             raise ValueError("expected Gmail label identities must be unique")
         return tuple(sorted(values))
+
+    @model_validator(mode="after")
+    def bind_review_labels_to_expected_state(self) -> "GmailExpectedMessageState":
+        review_label_ids = tuple(
+            sorted(item.provider_label_id for item in self.review.current_labels)
+        )
+        if review_label_ids != self.expected_label_ids:
+            raise ValueError(
+                "review label identities must exactly match expected Gmail state"
+            )
+        return self
+
+
+class GmailReviewLabelIdentity(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider_label_id: str = Field(min_length=1, max_length=500)
+    display_name: str = Field(min_length=1, max_length=200)
+
+    @field_validator("provider_label_id", "display_name")
+    @classmethod
+    def validate_safe_label_text(cls, value: str) -> str:
+        if value != " ".join(value.split()):
+            raise ValueError("Gmail review label text must be normalized")
+        return value
+
+
+class GmailMessageReviewMetadata(BaseModel):
+    """Local, approval-only metadata; raw addresses and bodies are forbidden."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    sender_display: str = Field(min_length=1, max_length=200)
+    sender_domain: str = Field(min_length=1, max_length=253)
+    subject: str = Field(min_length=1, max_length=500)
+    received_at: datetime
+    current_labels: tuple[GmailReviewLabelIdentity, ...] = Field(min_length=1)
+    selection_reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("sender_display", "subject", "selection_reason")
+    @classmethod
+    def validate_safe_review_text(cls, value: str) -> str:
+        if value != " ".join(value.split()):
+            raise ValueError("Gmail review text must be normalized")
+        return value
+
+    @field_validator("sender_display")
+    @classmethod
+    def forbid_sender_address(cls, value: str) -> str:
+        if "@" in value or "<" in value or ">" in value:
+            raise ValueError("Gmail review sender must not expose a raw address")
+        return value
+
+    @field_validator("sender_domain")
+    @classmethod
+    def validate_sender_domain(cls, value: str) -> str:
+        if value != value.strip().casefold() or "@" in value or any(
+            character.isspace() for character in value
+        ):
+            raise ValueError("Gmail review sender domain must be normalized")
+        return value
+
+    @field_validator("current_labels")
+    @classmethod
+    def validate_current_labels(
+        cls, values: tuple[GmailReviewLabelIdentity, ...]
+    ) -> tuple[GmailReviewLabelIdentity, ...]:
+        label_ids = [item.provider_label_id for item in values]
+        if len(label_ids) != len(set(label_ids)):
+            raise ValueError("Gmail review labels must have unique identities")
+        return tuple(sorted(values, key=lambda item: item.provider_label_id))
+
+    @model_validator(mode="after")
+    def require_timezone(self) -> "GmailMessageReviewMetadata":
+        _require_timezone(self.received_at, "Gmail review received_at")
+        return self
+
+
+GmailExpectedMessageState.model_rebuild()
 
 
 class GmailOrganizationManifest(BaseModel):
@@ -762,6 +842,20 @@ def legacy_client_payload(record: PendingActionRecord) -> dict[str, Any]:
                     ),
                     "expected_unread": item.expected_unread,
                     "expected_label_count": len(item.expected_label_ids),
+                    "sender_display": item.review.sender_display,
+                    "sender_domain": item.review.sender_domain,
+                    "subject": item.review.subject,
+                    "received_at": item.review.received_at.isoformat(),
+                    "current_labels": [
+                        {
+                            "label_token": hashlib.sha256(
+                                label.provider_label_id.encode("utf-8")
+                            ).hexdigest()[:16],
+                            "name": label.display_name,
+                        }
+                        for label in item.review.current_labels
+                    ],
+                    "selection_reason": item.review.selection_reason,
                 }
                 for item in payload.manifest.targets
             ],

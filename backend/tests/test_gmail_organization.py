@@ -17,7 +17,9 @@ from app.action_domain import (  # noqa: E402
     GmailApplyLabelPayload,
     GmailArchivePayload,
     GmailExpectedMessageState,
+    GmailMessageReviewMetadata,
     GmailOrganizationManifest,
+    GmailReviewLabelIdentity,
     GmailUserLabelIdentity,
     PendingActionLifecycle,
     PendingActionType,
@@ -77,15 +79,36 @@ LABEL = GmailUserLabelIdentity(
 
 
 def manifest(count: int = 2, *, labeled: bool = False) -> GmailOrganizationManifest:
-    targets = tuple(
-        GmailExpectedMessageState(
-            provider_message_id=f"message-{index}",
-            provider_thread_id=f"thread-{index}",
-            expected_label_ids=("INBOX", "Label_pcos_action") if labeled else ("INBOX",),
-            expected_unread=False,
+    targets = []
+    for index in range(count):
+        label_pairs = (
+            (("INBOX", "Inbox"), ("Label_pcos_action", "PCOS/Action"))
+            if labeled
+            else (("INBOX", "Inbox"),)
         )
-        for index in range(count)
-    )
+        targets.append(
+            GmailExpectedMessageState(
+                provider_message_id=f"message-{index}",
+                provider_thread_id=f"thread-{index}",
+                expected_label_ids=tuple(value[0] for value in label_pairs),
+                expected_unread=False,
+                review=GmailMessageReviewMetadata(
+                    sender_display=f"Synthetic Sender {index + 1}",
+                    sender_domain="example.test",
+                    subject=f"Synthetic review subject {index + 1}",
+                    received_at=NOW,
+                    current_labels=tuple(
+                        GmailReviewLabelIdentity(
+                            provider_label_id=label_id,
+                            display_name=display_name,
+                        )
+                        for label_id, display_name in label_pairs
+                    ),
+                    selection_reason="Synthetic deterministic selection evidence.",
+                ),
+            )
+        )
+    targets = tuple(targets)
     return GmailOrganizationManifest(
         account=ACCOUNT,
         targets=targets,
@@ -117,6 +140,10 @@ def sid230_inventory() -> PersonalEmailInventoryResult:
             provider_thread_id="inventory-thread",
         ),
         sender_fingerprint="sender-token",
+        sender_display="Synthetic Updates",
+        sender_domain="example.test",
+        subject="Action required: synthetic review",
+        received_at=NOW,
         unread=True,
         provider_important=False,
         label_ids=("INBOX", "UNREAD"),
@@ -151,6 +178,10 @@ def sid230_inventory() -> PersonalEmailInventoryResult:
     return PersonalEmailInventoryResult(
         inbox=label_inventory("INBOX", (fact,)),
         old_stuff=label_inventory("Old Stuff", ()),
+        label_catalog=(
+            InventoryLabelIdentity(provider_label_id="INBOX", exact_name="INBOX"),
+            InventoryLabelIdentity(provider_label_id="UNREAD", exact_name="UNREAD"),
+        ),
         complete=True,
         stable_fingerprint="complete-inventory-fingerprint",
     )
@@ -331,6 +362,13 @@ class GmailOrganizationTests(unittest.TestCase):
         self.assertIsNotNone(result.undo_payload)
         self.assertEqual(result.undo_payload.action_type, PendingActionType.GMAIL_REMOVE_LABEL)
         self.assertEqual(result.undo_payload.undo_of_action_id, "canary-action")
+        self.assertEqual(
+            tuple(
+                label.display_name
+                for label in result.undo_payload.manifest.targets[0].review.current_labels
+            ),
+            ("Inbox", "PCOS/Action"),
+        )
         self.assertEqual(self.gate.status().state, GmailMutationGateState.LABEL_CANARY_UNDO_REQUIRED)
         with self.assertRaisesRegex(GmailOrganizationGateError, "exact label canary undo"):
             self.gate.assert_execution_allowed(
@@ -400,6 +438,14 @@ class GmailOrganizationTests(unittest.TestCase):
             GmailOrganizationManifest.model_validate(values)
         with self.assertRaises(ValidationError):
             GmailUserLabelIdentity(provider_label_id="SYSTEM_LABEL", name="PCOS/Action")
+        values = manifest().model_dump(mode="json")
+        values["targets"][0]["review"]["current_labels"] = []
+        with self.assertRaises(ValidationError):
+            GmailOrganizationManifest.model_validate(values)
+        values = manifest().model_dump(mode="json")
+        values["targets"][0]["review"]["sender_display"] = "sender@example.test"
+        with self.assertRaises(ValidationError):
+            GmailOrganizationManifest.model_validate(values)
         duplicated = (manifest().targets[0], manifest().targets[0])
         with self.assertRaises(ValidationError):
             GmailOrganizationManifest(
@@ -426,6 +472,20 @@ class GmailOrganizationTests(unittest.TestCase):
             },
         )
 
+    def test_review_metadata_is_bound_to_the_immutable_manifest_fingerprint(self):
+        original = manifest().targets[0]
+        changed = original.model_copy(
+            update={
+                "review": original.review.model_copy(
+                    update={"subject": "Changed synthetic subject"}
+                )
+            }
+        )
+        self.assertNotEqual(
+            gmail_manifest_fingerprint(ACCOUNT, (original,)),
+            gmail_manifest_fingerprint(ACCOUNT, (changed,)),
+        )
+
     def test_sid230_proposal_builds_an_exact_reviewed_canary_manifest(self):
         inventory = sid230_inventory()
         proposal_result = EmailOrganizationProposalService().propose(inventory)
@@ -448,6 +508,14 @@ class GmailOrganizationTests(unittest.TestCase):
             inventory.stable_fingerprint,
         )
         self.assertEqual(payload.manifest.targets[0].expected_label_ids, ("INBOX", "UNREAD"))
+        self.assertEqual(payload.manifest.targets[0].review.sender_display, "Synthetic Updates")
+        self.assertEqual(payload.manifest.targets[0].review.sender_domain, "example.test")
+        self.assertEqual(payload.manifest.targets[0].review.subject, "Action required: synthetic review")
+        self.assertEqual(
+            tuple(label.display_name for label in payload.manifest.targets[0].review.current_labels),
+            ("INBOX", "UNREAD"),
+        )
+        self.assertIn("PCOS/Action", payload.manifest.targets[0].review.selection_reason)
         self.assertTrue(payload.canary)
         with self.assertRaisesRegex(GmailOrganizationGateError, "exact subset"):
             GmailOrganizationProposalBuilder().build(
@@ -556,6 +624,17 @@ class GmailOrganizationTests(unittest.TestCase):
             session_id="email-organization",
             source="email_organization",
         )
+        public_target = service.public_payload(record)["details"]["targets"][0]
+        self.assertEqual(public_target["sender_display"], "Synthetic Sender 1")
+        self.assertEqual(public_target["sender_domain"], "example.test")
+        self.assertEqual(public_target["subject"], "Synthetic review subject 1")
+        self.assertEqual(public_target["current_labels"][0]["name"], "Inbox")
+        self.assertEqual(len(public_target["current_labels"][0]["label_token"]), 16)
+        self.assertEqual(
+            public_target["selection_reason"],
+            "Synthetic deterministic selection evidence.",
+        )
+        self.assertNotIn("message-0", str(public_target))
         selected_token = hashlib.sha256(b"message-0").hexdigest()[:16]
 
         adjusted = service.adjust_gmail_targets(

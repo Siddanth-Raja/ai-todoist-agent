@@ -51,6 +51,12 @@ function proposal(count = 2) {
         thread_token: `thread-${index}`,
         expected_unread: false,
         expected_label_count: 1,
+        sender_display: `Synthetic Sender ${index + 1}`,
+        sender_domain: "example.test",
+        subject: `Synthetic review subject ${index + 1}`,
+        received_at: `2026-07-${String(index + 10).padStart(2, "0")}T15:00:00+00:00`,
+        current_labels: [{ label_token: "label-inbox", name: "Inbox" }],
+        selection_reason: "Grounded synthetic metadata matched the reviewed canary.",
       })),
     },
   };
@@ -71,6 +77,16 @@ test("first approval is limited to a hand-reviewed label canary of ten or fewer"
     ),
     false,
   );
+});
+
+test("every canary target requires recognizable review metadata", () => {
+  const missingSubject = proposal();
+  missingSubject.details.targets[0].subject = "";
+  assert.equal(canConfirmProposal(missingSubject, gate("label_canary_required")), false);
+
+  const incompleteLabels = proposal();
+  incompleteLabels.details.targets[0].current_labels = [];
+  assert.equal(canConfirmProposal(incompleteLabels, gate("label_canary_required")), false);
 });
 
 test("target adjustment removes one redacted target and updates the exact count", () => {
@@ -106,6 +122,12 @@ test("Email approval UI exposes separate adjust, reject, and exact confirm contr
   assert.match(source, /Reject proposal/);
   assert.match(source, /Confirm exact version/);
   assert.match(source, /provider_mutation_calls/);
+  assert.match(source, /target\.sender_display/);
+  assert.match(source, /target\.sender_domain/);
+  assert.match(source, /target\.subject/);
+  assert.match(source, /target\.received_at/);
+  assert.match(source, /target\.current_labels/);
+  assert.match(source, /target\.selection_reason/);
   assert.match(source, /this screen cannot request it or start OAuth/);
   assert.match(source, /email\/organization\/actions\/\$\{proposal\.action_id\}\/confirm/);
 });

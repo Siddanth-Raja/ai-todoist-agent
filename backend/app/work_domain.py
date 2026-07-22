@@ -25,6 +25,15 @@ class WorkEnergy(StrEnum):
     HIGH = "high"
 
 
+class WorkProviderReadState(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: str
+    provider_reference: str | None = None
+    available: bool
+    error: str | None = None
+
+
 class WorkDependency(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import sys
 import unittest
@@ -17,7 +17,12 @@ from app.project_brain import (  # noqa: E402
 from app.project_work_packages import LinearProjectDiagnostic  # noqa: E402
 from app.recommendation_service import recommendation_service  # noqa: E402
 from app.today_projection import TodayProjectionService  # noqa: E402
-from app.work_domain import NormalizedWorkItem, WorkPriority, WorkStatus  # noqa: E402
+from app.work_domain import (  # noqa: E402
+    NormalizedWorkItem,
+    WorkPriority,
+    WorkProviderReadState,
+    WorkStatus,
+)
 
 
 LOCAL_TZ = ZoneInfo("America/Chicago")
@@ -98,6 +103,7 @@ def brain_snapshot(
     projects: list[ProjectBrainProjectSnapshot],
     *,
     warnings: tuple[str, ...] = (),
+    work_provider_states: tuple[WorkProviderReadState, ...] = (),
 ) -> ProjectBrainSnapshot:
     work = {
         (item.provider, item.provider_record_id): item
@@ -109,6 +115,7 @@ def brain_snapshot(
         projects=tuple(projects),
         normalized_work=tuple(work.values()),
         warnings=warnings,
+        work_provider_states=work_provider_states,
     )
 
 
@@ -176,6 +183,166 @@ class TodayProjectionTests(unittest.TestCase):
             "Work next: Ship the Today projection",
         )
         self.assertFalse(recommendation["contextual_override"])
+
+    def test_due_today_blinn_payment_is_protected_from_freelance_recommendation(self):
+        blinn_payment = NormalizedWorkItem(
+            provider="todoist",
+            provider_record_id="blinn-payment",
+            canonical_project_id="am-id",
+            title="Blinn payment",
+            status=WorkStatus.OPEN,
+            priority=WorkPriority.MEDIUM,
+            due_date=NOW.date(),
+            is_executable=True,
+            provider_metadata={"section_name": "A&M"},
+        )
+        freelance_follow_up = work_item(
+            "freelance-follow-up",
+            "Follow up with the Freelance lead",
+            canonical_project_id="freelance-id",
+            priority=WorkPriority.URGENT,
+            duration=20,
+        )
+        snapshot = brain_snapshot(
+            [
+                project_snapshot("am", "A&M", "am-id", [blinn_payment]),
+                project_snapshot(
+                    "freelance",
+                    "Freelance",
+                    "freelance-id",
+                    [freelance_follow_up],
+                ),
+            ],
+            work_provider_states=(
+                WorkProviderReadState(provider="todoist", available=True),
+            ),
+        )
+
+        payload = self.build(snapshot)
+
+        self.assertEqual(payload["must_do"]["state"], "available")
+        self.assertEqual(
+            [item["title"] for item in payload["must_do"]["items"]],
+            ["Blinn payment"],
+        )
+        self.assertEqual(payload["must_do"]["items"][0]["urgency"], "due_today")
+        self.assertEqual(
+            payload["recommendation"]["provider_record_id"],
+            "freelance-follow-up",
+        )
+        self.assertNotEqual(
+            payload["must_do"]["items"][0]["provider_record_id"],
+            payload["recommendation"]["provider_record_id"],
+        )
+        self.assertTrue(payload["recommendation"]["evidence"])
+
+    def test_must_do_orders_overdue_before_today_and_excludes_ineligible_work(self):
+        overdue = NormalizedWorkItem(
+            provider="todoist",
+            provider_record_id="overdue",
+            canonical_project_id="personal-id",
+            title="Overdue obligation",
+            status=WorkStatus.OPEN,
+            due_date=NOW.date() - timedelta(days=2),
+            is_executable=True,
+        )
+        due_today = NormalizedWorkItem(
+            provider="linear",
+            provider_record_id="today",
+            canonical_project_id="pcos-id",
+            title="Due today obligation",
+            status=WorkStatus.OPEN,
+            due_date=NOW.date(),
+            is_executable=True,
+        )
+        completed = NormalizedWorkItem(
+            provider="todoist",
+            provider_record_id="completed",
+            title="Completed obligation",
+            status=WorkStatus.COMPLETED,
+            due_date=NOW.date() - timedelta(days=3),
+            is_executable=False,
+        )
+        canceled = NormalizedWorkItem(
+            provider="linear",
+            provider_record_id="canceled",
+            title="Canceled obligation",
+            status=WorkStatus.CANCELED,
+            due_date=NOW.date(),
+            is_executable=False,
+        )
+        container = NormalizedWorkItem(
+            provider="todoist",
+            provider_record_id="container",
+            title="Container obligation",
+            status=WorkStatus.OPEN,
+            due_date=NOW.date(),
+            is_container=True,
+            is_executable=False,
+        )
+        blocked = NormalizedWorkItem(
+            provider="linear",
+            provider_record_id="blocked",
+            title="Blocked obligation",
+            status=WorkStatus.OPEN,
+            due_date=NOW.date(),
+            is_blocked=True,
+            is_executable=True,
+        )
+        project = project_snapshot(
+            "personal",
+            "Personal",
+            "personal-id",
+            [overdue, due_today, completed, canceled, container, blocked, overdue],
+        )
+
+        payload = self.build(brain_snapshot([project]))
+
+        self.assertEqual(
+            [item["provider_record_id"] for item in payload["must_do"]["items"]],
+            ["overdue", "today"],
+        )
+        self.assertEqual(payload["must_do"]["items"][0]["days_overdue"], 2)
+
+    def test_must_do_classifies_timed_due_values_in_configured_timezone(self):
+        timed = NormalizedWorkItem(
+            provider="todoist",
+            provider_record_id="timed",
+            canonical_project_id="am-id",
+            title="Evening payment",
+            status=WorkStatus.OPEN,
+            due_date=date(2026, 7, 17),
+            due_at=datetime(2026, 7, 17, 0, 30, tzinfo=ZoneInfo("UTC")),
+            is_executable=True,
+        )
+        snapshot = brain_snapshot(
+            [project_snapshot("am", "A&M", "am-id", [timed])]
+        )
+
+        payload = self.build(snapshot)
+
+        self.assertEqual(payload["must_do"]["items"][0]["urgency"], "due_today")
+        self.assertEqual(payload["must_do"]["items"][0]["due_date"], "2026-07-16")
+
+    def test_must_do_preserves_unavailable_todoist_state_instead_of_empty_success(self):
+        error = "Could not read Todoist tasks."
+        snapshot = brain_snapshot(
+            [],
+            warnings=(error,),
+            work_provider_states=(
+                WorkProviderReadState(
+                    provider="todoist",
+                    available=False,
+                    error=error,
+                ),
+            ),
+        )
+
+        payload = self.build(snapshot)
+
+        self.assertEqual(payload["must_do"]["state"], "unavailable")
+        self.assertEqual(payload["must_do"]["items"], [])
+        self.assertEqual(payload["must_do"]["errors"], [error])
 
     def test_free_block_can_override_canonical_next_move_with_explicit_evidence(self):
         deep = work_item(

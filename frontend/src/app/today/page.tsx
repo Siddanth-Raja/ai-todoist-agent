@@ -26,6 +26,8 @@ import {
   type TodayResponse,
 } from "@/lib/api";
 import {
+  todayMustDoItemLabel,
+  todayMustDoPresentation,
   todayProjectCardPresentation,
   todayRecommendationBadge,
 } from "@/lib/today-projection-presentation";
@@ -125,6 +127,13 @@ function formatMinutes(minutes: number) {
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
+function formatObligationDate(value: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+  }).format(new Date(`${value}T12:00:00`));
+}
+
 function SoftCard({
   children,
   className = "",
@@ -204,6 +213,8 @@ export default function TodayPage() {
   const currentBlock = todayData?.current_free_block ?? null;
   const commitments = todayData?.today_remaining_events ?? [];
   const minutesUntilNext = todayData?.minutes_until_next_event ?? null;
+  const mustDo = todayData?.must_do ?? null;
+  const mustDoPresentation = mustDo ? todayMustDoPresentation(mustDo) : null;
   const recommendation = todayData?.recommendation ?? null;
   const recommendationBadge = todayRecommendationBadge(recommendation);
   const shouldPrepare = recommendation?.type === "prepare";
@@ -340,6 +351,94 @@ export default function TodayPage() {
         </div>
       </section>
 
+      <section className="min-w-0 space-y-5 xl:col-span-2">
+        <SectionTitle
+          eyebrow="Must do"
+          title="Overdue and due today"
+          detail="Concrete obligations are protected here. They do not compete with the separate recommended-work ranking below."
+        />
+
+        {mustDoPresentation?.warning ? (
+          <div className="rounded-[1.4rem] border border-gold/25 bg-gold/10 p-4 text-sm text-gold">
+            <div className="flex items-center gap-2 font-medium">
+              <CircleAlert className="h-4 w-4" aria-hidden="true" />
+              Must do is {mustDo?.state}
+            </div>
+            <p className="mt-2 leading-6">{mustDoPresentation.warning}</p>
+          </div>
+        ) : null}
+
+        <SoftCard className="overflow-hidden border-coral/20 bg-[linear-gradient(135deg,rgba(255,139,116,0.13),rgba(255,255,255,0.045)_52%,rgba(255,205,126,0.08))] p-5 md:p-7">
+          {isTodayLoading ? (
+            <div className="h-28 animate-pulse rounded-[1.4rem] bg-white/[0.06]" />
+          ) : isTodayUnavailable ? (
+            <div className="rounded-[1.4rem] border border-coral/25 bg-coral/10 p-5">
+              <p className="font-medium text-coral">Must do unavailable</p>
+              <p className="mt-2 text-sm leading-6 text-stone-400">
+                Connect the backend in Settings before Today can read live obligations.
+              </p>
+            </div>
+          ) : mustDo?.items.length ? (
+            <div className="grid gap-3 lg:grid-cols-2">
+              {mustDo.items.map((obligation) => {
+                const content = (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`rounded-full px-3 py-1 text-xs font-medium ${
+                        obligation.urgency === "overdue"
+                          ? "bg-coral/15 text-coral"
+                          : "bg-gold/15 text-gold"
+                      }`}>
+                        {todayMustDoItemLabel(obligation)}
+                      </span>
+                      <span className="text-xs uppercase tracking-[0.16em] text-stone-500">
+                        {obligation.provider}
+                      </span>
+                    </div>
+                    <h3 className="mt-4 break-words text-2xl font-semibold text-pearl">
+                      {obligation.title}
+                    </h3>
+                    <p className="mt-2 text-sm text-stone-400">
+                      Due {formatObligationDate(obligation.due_date)}
+                    </p>
+                  </>
+                );
+                return obligation.provider_url ? (
+                  <a
+                    key={`${obligation.provider}:${obligation.provider_record_id}`}
+                    href={obligation.provider_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded-[1.4rem] border border-white/10 bg-black/20 p-5 transition hover:border-white/20 hover:bg-black/25"
+                  >
+                    {content}
+                  </a>
+                ) : (
+                  <article
+                    key={`${obligation.provider}:${obligation.provider_record_id}`}
+                    className="rounded-[1.4rem] border border-white/10 bg-black/20 p-5"
+                  >
+                    {content}
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex items-start gap-3 rounded-[1.4rem] bg-black/20 p-5">
+              <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-moss" aria-hidden="true" />
+              <div>
+                <p className="font-medium text-pearl">{mustDoPresentation?.emptyTitle}</p>
+                <p className="mt-2 text-sm leading-6 text-stone-400">
+                  {mustDo?.state === "available"
+                    ? "Connected work providers have no executable overdue or due-today items."
+                    : "One or more work providers are unavailable, so Today is not treating this as a confirmed empty state."}
+                </p>
+              </div>
+            </div>
+          )}
+        </SoftCard>
+      </section>
+
       <section className="grid min-w-0 gap-4 xl:col-span-2 xl:grid-cols-[minmax(0,1.22fr)_minmax(340px,0.78fr)]">
         <SoftCard className="relative overflow-hidden p-6 md:p-8">
           <div className="absolute right-[-6rem] top-[-6rem] h-64 w-64 rounded-full bg-moss/15 blur-3xl" />
@@ -347,7 +446,7 @@ export default function TodayPage() {
             <span className="mb-8 flex h-14 w-14 items-center justify-center rounded-2xl bg-pearl text-ink shadow-card">
               <Target className="h-6 w-6" aria-hidden="true" />
             </span>
-            <p className="text-xs font-medium uppercase tracking-[0.28em] text-moss">Recommendation</p>
+            <p className="text-xs font-medium uppercase tracking-[0.28em] text-moss">Recommended work · Best next move</p>
             <h3 className="mt-4 max-w-3xl text-4xl font-semibold leading-tight tracking-normal text-pearl md:text-6xl">
               {recommendation?.title ?? (isTodayUnavailable ? "Today unavailable" : "Loading today")}
             </h3>

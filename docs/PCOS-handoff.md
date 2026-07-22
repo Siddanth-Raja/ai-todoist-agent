@@ -1236,6 +1236,8 @@ recommendation
 
 It also returns life-area state used by the Today frontend.
 
+SID-234 adds a distinct provider-neutral `must_do` projection over normalized work. It contains executable overdue and due-today obligations, deterministic overdue-first ordering, provider identity, local-date classification, and explicit available, degraded, or unavailable work-provider state. Completed, canceled, container, non-executable, and blocked work is excluded. Must-do identities are removed from Today's separate recommended-work candidate set so the same provider record is not presented twice.
+
 ### Shared-intelligence projection
 
 Today consumes one structured Project Brain snapshot for project summaries and normalized provider work. It sends that normalized work to the shared Recommendation Service with SID-130 Calendar context and does not independently rank enriched Todoist dictionaries or recompute project next moves.
@@ -1496,6 +1498,8 @@ The life-area cards are clickable. Resolved A&M, XO, Nebulo, Freelance, and Pers
 The Today page is a focused projection over the same Project Brain status and canonical next-move output rendered by Project Workspaces. Its cards retain their existing links and presentation while consuming those shared summaries directly.
 
 Today's current-action recommendation is separately context-aware through the shared Recommendation Service. It preserves provider record identity, canonical project identity, alternatives, degradation state, and structured evidence when the current action differs from the canonical project move.
+
+The page now renders `Must do` above `Recommended work · Best next move`. Overdue and due-today obligations therefore do not compete visually or computationally with general project recommendations. A provider failure remains visible in the Must do layer and cannot become a successful empty state.
 
 The page fetches `GET /today` and `GET /activity?limit=5` once when it mounts. Only the local clock updates every 30 seconds; provider-derived free blocks, events, recommendations, life areas, and Activity do not auto-refresh or poll.
 
@@ -3741,6 +3745,18 @@ The redacted live review continued to use an exact `gmail.readonly` access token
 
 The live canary gate is complete. The original canary and undo cannot execute again. SID-231 does not authorize archive, mark-read/unread, label creation, another message, a larger batch, broad Inbox/Old Stuff cleanup, or autonomous organization. Those remain future exact approvals despite the provider scope technically permitting some of them.
 
+## 17.37 Protected Today Obligations
+
+SID-234 adds `backend/app/today_obligations.py` as a provider-neutral Must do projection over the normalized work already loaded by Project Brain. It selects only open, executable, non-container, unblocked work whose local due date is overdue or today. Timed due values are converted into the configured local timezone before date classification. Identity deduplication uses provider plus provider record ID, and deterministic ordering places older overdue obligations before due-today work, then uses due time, normalized priority, and stable provider identity tie-breakers.
+
+Today computes Must do before asking the shared Recommendation Service for recommended work. Protected identities are removed from that separate candidate set, so a due obligation cannot be repeated as Best next move. The recommendation service, scoring weights, evidence, alternatives, canonical Project Brain recommendations, Calendar-first preparation rule, and project cards remain intact. In the reported regression fixture, `Blinn payment` is protected as due today while an undated Freelance follow-up remains the distinct shared recommendation with its evidence.
+
+Project Brain now carries structured work-provider read state into Today. The Must do contract exposes available, degraded, or unavailable state plus provider-specific errors. A failed Todoist read therefore cannot render as a successful empty obligation list, even when another provider can still supply known work.
+
+The Today frontend renders the Must do layer above `Recommended work · Best next move`, with separate overdue and due-today labels. Visual verification at a 1440 by 1800 desktop viewport showed one overdue obligation before `Blinn payment`, followed by the distinct Freelance recommendation, with no framework overlay, console error, or page error. A live authenticated read-only route-adapter smoke validated the response contract with five available configured work-provider reads, three current obligations, a separate shared recommendation, and zero provider errors. The reported `Blinn payment` record was no longer present among the current active Todoist tasks at verification time, so the exact historical scenario remains covered by a deterministic regression fixture rather than a false live-data claim.
+
+SID-234 does not change recommendation weights, add provider writes, begin SID-233 or SID-235, add persistence or polling, redesign Today broadly, or alter Todoist, Linear, Calendar, Gmail, or any other external provider state.
+
 ---
 
 # 18. Current Verification History
@@ -3777,6 +3793,7 @@ Recorded development checkpoints include:
 | Local Personal Email importance analysis (authenticated) | 268 tests passing plus bounded redacted live analysis | 21 frontend tests and build passing | Passing |
 | Full Personal Email inventory and advisory organization proposals (authenticated) | 299 tests passing plus complete redacted Inbox and Old Stuff inventory | 24 frontend tests and build passing | Passing |
 | Personal Gmail organization actions and approval UI (credential-free; manual OAuth gate) | 310 tests passing; zero live Gmail calls | 29 frontend tests and build passing | Passing |
+| Protected Today obligations | 325 tests passing plus authenticated read-only Today smoke | 34 frontend tests, visual verification, and build passing | Passing |
 
 The current pre-edit audit for this repair also passed all 86 backend tests and the frontend production build. Its initial `git diff --check` reported only two trailing-whitespace errors in this handoff's metadata; those formatting defects were removed during repair.
 
@@ -6020,6 +6037,7 @@ The current system has overlapping recommendation paths in:
 
 - `planner.py`;
 - Today;
+- protected provider-neutral Must do obligations on Today;
 - Project Brain;
 - Tasks frontend.
 
@@ -9213,6 +9231,8 @@ Implemented systems include:
 - local startup and shutdown scripts.
 
 “Implemented” in this inventory means the subsystem exists; it does not erase the audit limitations documented earlier. In particular, broader conversation context is still process-local, Calendar Intelligence coordination is incomplete, Today provider state does not auto-refresh after mount, Tasks' age signal is disconnected, priority semantics are inconsistent, DDN capture can still be misclassified, Activity coverage is selective, cross-origin Memory/Habits mutations can fail CORS preflight, and deleted seeded defaults reappear after restart.
+
+The SID-234 protected-obligation checkpoint reached 325 backend tests and 34 frontend tests passing, with full Python compilation, the Next.js 15.5.19 production build, `git diff --check`, an authenticated read-only Today route-adapter smoke, and representative desktop visual verification. The live smoke returned structured available state for Todoist and the four mapped Linear reads, three current obligations, a distinct shared recommendation, and zero provider errors. The visual fixture preserved an overdue item before `Blinn payment` and kept the Freelance follow-up in the separate Best next move surface. No external provider mutation was performed.
 
 The SID-231 OAuth-authorized canary-and-undo checkpoint reached 321 backend tests and 32 frontend tests passing, with full Python compilation, the Next.js 15.5.19 production build, `git diff --check`, privacy/scope/forbidden-capability scans, exact isolated Personal Email reauthorization, and an unchanged Calendar grant. Read operations still mint `gmail.readonly`; the narrow executor minted `gmail.modify` only after each exact durable confirmation. An unrelated new Inbox arrival changed the surrounding bounded snapshot during consent, but the preserved ten-card lineage and nine selected target states recomputed to the identical prior seal. The separately confirmed version-1 existing-label-only canary succeeded across exactly nine messages and nine threads with nine retained provider references. Its separately confirmed exact remove-label undo then succeeded across the same nine targets, retained nine provider references, and verified their original labels/read/thread state. Duplicate confirmations returned HTTP 409 without another provider call. Provider mutation calls total exactly two; body reads, full inventory scans, model calls, Memory writes, and all other Gmail or Calendar mutations remain zero. The SID-230 full Personal Email inventory checkpoint reached 299 backend tests and 24 frontend tests passing, with Python compilation, the production build, diff check, privacy/scope/capability scans, and a complete redacted real-account inventory of 15,967 Inbox plus 2,547 Old Stuff messages across 186 provider pages with zero body reads, model calls, Memory writes, or mailbox mutations. The SID-150 durable pending-action checkpoint reached 285 backend tests and 24 frontend tests passing, with Python compilation, the production build, diff check, exact-scope/privacy scans, and a local authenticated recovery/cancellation smoke with zero provider writes. The Personal Email analysis checkpoint reached 268 backend tests and 21 frontend tests passing, with its redacted real-account gate analyzing at most 12 recent records, preserving thread deduplication and uncertainty, reporting only aggregate categories/counts, and performing zero external-model or provider mutation calls. The Personal Gmail provider checkpoint reached 242 backend tests plus its redacted authenticated read; the provider-neutral Email Attention checkpoint reached 226 backend tests. Earlier checkpoints remain recorded as implementation history rather than current feature claims.
 

@@ -33,7 +33,7 @@ from .todoist_tools import (
     life_area_for_todoist_section,
     list_active_tasks,
 )
-from .work_domain import NormalizedWorkItem, WorkStatus
+from .work_domain import NormalizedWorkItem, WorkProviderReadState, WorkStatus
 
 
 BLOCKER_WORDS = ("blocked", "blocking", "waiting", "review", "feedback")
@@ -55,6 +55,7 @@ class ProjectBrainSnapshot:
     projects: tuple[ProjectBrainProjectSnapshot, ...]
     normalized_work: tuple[NormalizedWorkItem, ...]
     warnings: tuple[str, ...] = ()
+    work_provider_states: tuple[WorkProviderReadState, ...] = ()
 
     def project_for_key(self, key: str) -> ProjectBrainProjectSnapshot | None:
         return next(
@@ -112,6 +113,13 @@ class ProjectBrainService:
         activity = list_activity(limit=200)
         project_snapshots: list[ProjectBrainProjectSnapshot] = []
         linear_work: list[NormalizedWorkItem] = []
+        work_provider_states = [
+            WorkProviderReadState(
+                provider="todoist",
+                available=todoist_result.error is None,
+                error=todoist_result.error,
+            )
+        ]
         warnings = [
             error
             for error in (todoist_result.error, calendar_result.error)
@@ -140,12 +148,26 @@ class ProjectBrainService:
             )
             if linear_diagnostic.status not in {"connected", "not_mapped"}:
                 warnings.append(linear_diagnostic.message)
+            if linear_diagnostic.status != "not_mapped":
+                work_provider_states.append(
+                    WorkProviderReadState(
+                        provider="linear",
+                        provider_reference=linear_diagnostic.provider_ref,
+                        available=linear_diagnostic.status == "connected",
+                        error=(
+                            None
+                            if linear_diagnostic.status == "connected"
+                            else linear_diagnostic.message
+                        ),
+                    )
+                )
 
         return ProjectBrainSnapshot(
             now=local_now,
             projects=tuple(project_snapshots),
             normalized_work=tuple([*todoist_tasks, *linear_work]),
             warnings=tuple(dict.fromkeys(warnings)),
+            work_provider_states=tuple(work_provider_states),
         )
 
     def get_project(

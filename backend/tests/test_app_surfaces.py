@@ -434,6 +434,12 @@ class AppSurfaceEndpointTests(unittest.TestCase):
             areas["A&M"]["next_recommendation"],
             "Work next: Submit housing form",
         )
+        self.assertEqual(
+            [item["title"] for item in payload["must_do"]["items"]],
+            ["Submit housing form", "Review headset prototype"],
+        )
+        self.assertEqual(payload["must_do"]["state"], "available")
+        self.assertEqual(payload["recommendation"]["title"], "Send client invoice")
         self.assertIsNone(payload["next_event"])
         self.assertEqual(payload["today_remaining_events"], [])
         self.assertEqual(payload["errors"], [])

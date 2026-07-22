@@ -13,6 +13,7 @@ from .recommendation_service import (
     WorkRecommendation,
     recommendation_service,
 )
+from .today_obligations import TodayObligationProjection, today_obligation_service
 from .work_domain import NormalizedWorkItem, WorkPriority, WorkStatus
 
 
@@ -72,8 +73,21 @@ class TodayProjectionService:
             ),
             minutes_until_upcoming_commitment=calendar_time.minutes_until_next_event,
         )
+        must_do = today_obligation_service.build(
+            project_snapshot.normalized_work,
+            current_time=project_snapshot.now,
+            provider_states=project_snapshot.work_provider_states,
+        )
+        obligation_identities = {
+            (item.provider, item.provider_record_id) for item in must_do.items
+        }
         current_action = recommendation_service.recommend_current_action(
-            list(project_snapshot.normalized_work),
+            [
+                item
+                for item in project_snapshot.normalized_work
+                if (item.provider, item.provider_record_id)
+                not in obligation_identities
+            ],
             context=context,
         )
         errors = tuple(
@@ -102,10 +116,12 @@ class TodayProjectionService:
                 _today_event_payload(event, settings.local_tz)
                 for event in calendar_time.remaining_events
             ],
+            "must_do": must_do.model_dump(mode="json"),
             "recommendation": _today_recommendation(
                 project_snapshot=project_snapshot,
                 calendar_time=calendar_time,
                 current_action=current_action,
+                must_do=must_do,
                 errors=errors,
             ),
             "life_areas": _life_area_projections(project_snapshot),
@@ -118,6 +134,7 @@ def _today_recommendation(
     project_snapshot: ProjectBrainSnapshot,
     calendar_time: CalendarTimeState,
     current_action: WorkRecommendation | None,
+    must_do: TodayObligationProjection,
     errors: tuple[str, ...],
 ) -> dict[str, Any]:
     next_event = calendar_time.next_event
@@ -211,6 +228,16 @@ def _today_recommendation(
             detail=detail,
             reason=detail,
             event=_today_event_payload(next_event, calendar_time.now.tzinfo),
+        )
+
+    if must_do.items:
+        detail = "All remaining executable work due now is already protected in Must do, so it is not repeated as recommended work."
+        return _recommendation_payload(
+            recommendation_type="covered",
+            source="fallback",
+            title="Must do obligations are protected above",
+            detail=detail,
+            reason=detail,
         )
 
     detail = "No executable normalized work or remaining calendar commitment is available."

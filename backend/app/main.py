@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 import requests
@@ -505,6 +505,33 @@ class TodayFreeBlock(BaseModel):
     low_usefulness: bool
 
 
+class TodayWorkProviderState(BaseModel):
+    provider: str
+    provider_reference: str | None = None
+    available: bool
+    error: str | None = None
+
+
+class TodayObligation(BaseModel):
+    provider: str
+    provider_record_id: str
+    canonical_project_id: str | None = None
+    title: str
+    due_date: date
+    due_at: datetime | None = None
+    urgency: Literal["overdue", "due_today"]
+    days_overdue: int
+    priority: int
+    provider_url: str | None = None
+
+
+class TodayMustDo(BaseModel):
+    state: Literal["available", "degraded", "unavailable"]
+    items: list[TodayObligation] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    providers: list[TodayWorkProviderState] = Field(default_factory=list)
+
+
 class TodayRecommendation(BaseModel):
     type: str
     source: Literal["calendar", "shared_recommendation", "fallback"] = "fallback"
@@ -546,6 +573,7 @@ class TodayResponse(BaseModel):
     minutes_until_next_event: int | None = None
     current_free_block: TodayFreeBlock | None = None
     today_remaining_events: list[TodayEvent] = Field(default_factory=list)
+    must_do: TodayMustDo
     recommendation: TodayRecommendation
     life_areas: list[LifeArea]
     errors: list[str] = Field(default_factory=list)

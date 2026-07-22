@@ -176,6 +176,33 @@ export type TodayFreeBlock = {
   low_usefulness: boolean;
 };
 
+export type TodayWorkProviderState = {
+  provider: string;
+  provider_reference?: string | null;
+  available: boolean;
+  error?: string | null;
+};
+
+export type TodayObligation = {
+  provider: string;
+  provider_record_id: string;
+  canonical_project_id?: string | null;
+  title: string;
+  due_date: string;
+  due_at?: string | null;
+  urgency: "overdue" | "due_today";
+  days_overdue: number;
+  priority: number;
+  provider_url?: string | null;
+};
+
+export type TodayMustDo = {
+  state: "available" | "degraded" | "unavailable";
+  items: TodayObligation[];
+  errors: string[];
+  providers: TodayWorkProviderState[];
+};
+
 export type TodayRecommendation = {
   type: string;
   source: "calendar" | "shared_recommendation" | "fallback";
@@ -239,6 +266,7 @@ export type TodayResponse = {
   minutes_until_next_event?: number | null;
   current_free_block?: TodayFreeBlock | null;
   today_remaining_events: TodayEvent[];
+  must_do: TodayMustDo;
   recommendation: TodayRecommendation;
   life_areas: LifeArea[];
   errors: string[];

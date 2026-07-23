@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertTriangle,
   ChevronLeft,
@@ -12,12 +12,12 @@ import {
   Users,
 } from "lucide-react";
 import {
-  apiRequest,
   formatDateTime,
   formatTime,
   type CalendarEvent,
   type CalendarResponse,
 } from "@/lib/api";
+import { useRetainedApiQuery } from "@/lib/use-retained-api-query";
 
 type CalendarView = "agenda" | "day" | "week";
 type ProjectLabel = "A&M" | "XO" | "Nebulo" | "Freelance" | "Personal" | "Misc";
@@ -285,12 +285,13 @@ function EmptyState({ label }: { label: string }) {
 }
 
 export default function CalendarPage() {
-  const [data, setData] = useState<CalendarResponse | null>(null);
+  const query = useRetainedApiQuery<CalendarResponse>("/calendar?days=14");
+  const data = query.data;
   const [view, setView] = useState<CalendarView>("agenda");
   const [anchorDate, setAnchorDate] = useState(() => startOfDay(new Date()));
   const [selectedProjects, setSelectedProjects] = useState<Set<ProjectLabel>>(() => new Set(projectLabels));
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const isLoading = query.isInitialLoading || query.isRefreshing;
+  const error = query.initialError ?? query.refreshError;
 
   const sortedEvents = useMemo(
     () => [...(data?.events ?? [])].sort((first, second) => eventStart(first).getTime() - eventStart(second).getTime()),
@@ -375,18 +376,6 @@ export default function CalendarPage() {
   const totalBlocking = blockingEvents.length;
   const activeFilterCount = selectedProjects.size;
 
-  async function loadCalendar() {
-    setIsLoading(true);
-    setError(null);
-    try {
-      setData(await apiRequest<CalendarResponse>("/calendar?days=14"));
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Unable to load calendar.");
-    } finally {
-      setIsLoading(false);
-    }
-  }
-
   function shiftDate(direction: -1 | 1) {
     setAnchorDate((current) => addDays(current, view === "day" ? direction : direction * 7));
   }
@@ -403,10 +392,6 @@ export default function CalendarPage() {
     });
   }
 
-  useEffect(() => {
-    void loadCalendar();
-  }, []);
-
   return (
     <section className="mx-auto w-[calc(100vw-2rem)] max-w-7xl space-y-5 pb-6 sm:w-full">
       <div className="flex flex-col gap-4 rounded-lg border border-line bg-panel/80 p-4 shadow-card md:flex-row md:items-end md:justify-between">
@@ -420,7 +405,11 @@ export default function CalendarPage() {
               ? "Syncing calendar..."
               : `${totalBlocking} blocking events and ${totalVisible - totalBlocking} informational items from Google Calendar`}
           </p>
-          {error ? <p className="mt-2 text-sm text-coral">{error}</p> : null}
+          {error ? (
+            <p className="mt-2 text-sm text-coral">
+              {query.refreshError ? `Refresh failed; showing retained calendar. ${error}` : error}
+            </p>
+          ) : null}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -469,7 +458,7 @@ export default function CalendarPage() {
 
           <button
             type="button"
-            onClick={() => void loadCalendar()}
+            onClick={() => void query.refresh().catch(() => undefined)}
             aria-label="Refresh calendar"
             className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-line text-stone-400 hover:bg-white/[0.06] hover:text-pearl"
           >

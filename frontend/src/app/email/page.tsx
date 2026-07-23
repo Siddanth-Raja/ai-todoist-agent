@@ -14,6 +14,7 @@ import {
   Tag,
 } from "lucide-react";
 import { apiRequest } from "@/lib/api";
+import { useRetainedApiQuery } from "@/lib/use-retained-api-query";
 import {
   GMAIL_MODIFY_SCOPE,
   GMAIL_READONLY_SCOPE,
@@ -71,13 +72,40 @@ function formatReviewDate(value: string): string {
   return Number.isNaN(parsed.getTime()) ? "Date unavailable" : reviewDateFormatter.format(parsed);
 }
 
+type EmailCoreState = {
+  gate: GmailMutationGateStatus;
+  pending: PendingEmailAction | null;
+  review: GmailReadonlyReviewSurface;
+};
+
 export default function EmailPage() {
-  const [gate, setGate] = useState<GmailMutationGateStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [proposal, setProposal] = useState<EmailOrganizationProposal | null>(null);
+  const loadEmailState = useCallback(async (): Promise<EmailCoreState> => {
+    const [gate, pending, review] = await Promise.all([
+      apiRequest<GmailMutationGateStatus>("/email/organization/gate"),
+      apiRequest<PendingEmailAction | null>(
+        "/pending-actions/current?session_id=email-organization",
+      ),
+      apiRequest<GmailReadonlyReviewSurface>("/email/organization/review"),
+    ]);
+    return { gate, pending, review };
+  }, []);
+  const query = useRetainedApiQuery<EmailCoreState>(
+    "GET /email/organization/gate + /pending-actions/current?session_id=email-organization + /email/organization/review",
+    loadEmailState,
+  );
+  const [gate, setGate] = useState<GmailMutationGateStatus | null>(
+    () => query.data?.gate ?? null,
+  );
+  const [actionError, setError] = useState<string | null>(null);
+  const error = actionError ?? query.initialError ?? query.refreshError;
+  const loading = query.isInitialLoading || query.isRefreshing;
+  const [proposal, setProposal] = useState<EmailOrganizationProposal | null>(
+    () => query.data?.pending?.pending_action ?? null,
+  );
   const [selectedTokens, setSelectedTokens] = useState<string[]>([]);
-  const [review, setReview] = useState<GmailReadonlyReviewSurface | null>(null);
+  const [review, setReview] = useState<GmailReadonlyReviewSurface | null>(
+    () => query.data?.review ?? null,
+  );
   const [selectedLabelToken, setSelectedLabelToken] = useState("");
   const [selectedReviewTokens, setSelectedReviewTokens] = useState<string[]>([]);
   const [sealedReview, setSealedReview] = useState<GmailReadonlySelectionPreview | null>(null);
@@ -85,43 +113,31 @@ export default function EmailPage() {
   const [lastOutcome, setLastOutcome] = useState<EmailExecutionOutcome | null>(null);
 
   const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [gateValue, pendingValue, reviewValue] = await Promise.all([
-        apiRequest<GmailMutationGateStatus>("/email/organization/gate"),
-        apiRequest<PendingEmailAction | null>(
-          "/pending-actions/current?session_id=email-organization",
-        ),
-        apiRequest<GmailReadonlyReviewSurface>("/email/organization/review"),
-      ]);
-      setGate(gateValue);
-      setReview(reviewValue);
-      const nextLabelToken = reviewValue.labels[0]?.label_token ?? "";
+    await query.refresh().catch(() => undefined);
+  }, [query.refresh]);
+
+  useEffect(() => {
+    if (!query.data) {
+      return;
+    }
+      setGate(query.data.gate);
+      setReview(query.data.review);
+      const nextLabelToken = query.data.review.labels[0]?.label_token ?? "";
       setSelectedLabelToken(nextLabelToken);
       setSelectedReviewTokens(
         nextLabelToken
-          ? reviewTargetsForLabel(reviewValue, nextLabelToken).map(
+          ? reviewTargetsForLabel(query.data.review, nextLabelToken).map(
               (target) => target.message_token,
             )
           : [],
       );
       setSealedReview(null);
-      const pending = pendingValue?.pending_action ?? null;
+      const pending = query.data.pending?.pending_action ?? null;
       setProposal(pending);
       setSelectedTokens(
         pending?.details.targets.map((target) => target.message_token) ?? [],
       );
-    } catch (value) {
-      setError(value instanceof Error ? value.message : "Unable to read the local Gmail approval gate.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  }, [query.data]);
 
   const state = gate?.state ?? "manual_oauth_required";
   const selectionChanged = Boolean(
@@ -296,7 +312,7 @@ export default function EmailPage() {
 
         {error ? (
           <p className="mt-4 rounded-xl border border-coral/30 bg-coral/10 px-4 py-3 text-sm text-coral">
-            {error}
+            {query.refreshError ? `Refresh failed; showing retained email state. ${error}` : error}
           </p>
         ) : null}
       </section>

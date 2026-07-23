@@ -19,7 +19,6 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
-  apiRequest,
   formatDateTime,
   type ActivityEntry,
   type LifeArea,
@@ -31,6 +30,7 @@ import {
   todayProjectCardPresentation,
   todayRecommendationBadge,
 } from "@/lib/today-projection-presentation";
+import { useRetainedApiQuery } from "@/lib/use-retained-api-query";
 
 const lifeAreaGradients: Record<string, string> = {
   "A&M": "from-rose-300/20 via-white/[0.055] to-white/[0.035]",
@@ -168,40 +168,19 @@ function SectionTitle({
 
 export default function TodayPage() {
   const [now, setNow] = useState(() => new Date());
-  const [lifeAreas, setLifeAreas] = useState<LifeArea[]>([]);
-  const [isLifeAreasLoading, setIsLifeAreasLoading] = useState(true);
-  const [lifeAreaError, setLifeAreaError] = useState<string | null>(null);
-  const [lifeAreaWarnings, setLifeAreaWarnings] = useState<string[]>([]);
-  const [activityEntries, setActivityEntries] = useState<ActivityEntry[]>([]);
-  const [activityError, setActivityError] = useState<string | null>(null);
-  const [todayData, setTodayData] = useState<TodayResponse | null>(null);
+  const todayQuery = useRetainedApiQuery<TodayResponse>("/today");
+  const activityQuery = useRetainedApiQuery<ActivityEntry[]>("/activity?limit=5");
+  const todayData = todayQuery.data;
+  const lifeAreas: LifeArea[] = todayData?.life_areas ?? [];
+  const lifeAreaWarnings = todayData?.errors ?? [];
+  const lifeAreaError = todayQuery.initialError ?? todayQuery.refreshError;
+  const activityEntries = activityQuery.data ?? [];
+  const activityError = activityQuery.initialError ?? activityQuery.refreshError;
+  const isLifeAreasLoading = todayQuery.isInitialLoading;
 
   useEffect(() => {
     setNow(new Date());
     const timer = window.setInterval(() => setNow(new Date()), 30000);
-
-    apiRequest<TodayResponse>("/today")
-      .then((today) => {
-        setTodayData(today);
-        setLifeAreas(today.life_areas);
-        setLifeAreaWarnings(today.errors);
-        setLifeAreaError(null);
-      })
-      .catch((error) => {
-        setLifeAreaError(error instanceof Error ? error.message : "Unable to load life areas.");
-      })
-      .finally(() => {
-        setIsLifeAreasLoading(false);
-      });
-
-    apiRequest<ActivityEntry[]>("/activity?limit=5")
-      .then((entries) => {
-        setActivityEntries(entries);
-        setActivityError(null);
-      })
-      .catch((error) => {
-        setActivityError(error instanceof Error ? error.message : "Unable to load activity.");
-      });
 
     return () => window.clearInterval(timer);
   }, []);
@@ -505,7 +484,7 @@ export default function TodayPage() {
           <div className="rounded-[1.4rem] border border-coral/25 bg-coral/10 p-4 text-sm text-coral">
             <div className="flex items-center gap-2 font-medium">
               <CircleAlert className="h-4 w-4" aria-hidden="true" />
-              Life areas unavailable
+              {todayData ? "Today refresh failed; showing retained state" : "Life areas unavailable"}
             </div>
             <p className="mt-2 leading-6">{lifeAreaError}</p>
           </div>

@@ -14,7 +14,7 @@ import {
   Layers3,
   RefreshCw,
 } from "lucide-react";
-import { apiRequest, type TaskItem, type TaskSection, type TasksLifeArea, type TasksResponse } from "@/lib/api";
+import { type TaskItem, type TaskSection, type TasksLifeArea, type TasksResponse } from "@/lib/api";
 import { formatTaskDate, taskDateTime, taskDueDateValue } from "@/lib/task-date";
 import {
   presentTaskRecommendations,
@@ -24,6 +24,7 @@ import {
   type RecommendationChange,
   type RecommendationSnapshot,
 } from "@/lib/tasks-projection-presentation";
+import { useRetainedApiQuery } from "@/lib/use-retained-api-query";
 
 type TaskView = "today" | "upcoming" | "life-area";
 type TaskFilter = "all" | "today" | "overdue" | "high";
@@ -466,11 +467,12 @@ function FocusByArea({
 }
 
 export default function TasksPage() {
-  const [data, setData] = useState<TasksResponse | null>(null);
+  const query = useRetainedApiQuery<TasksResponse>("/tasks");
+  const data = query.data;
   const [view, setView] = useState<TaskView>("today");
   const [filter, setFilter] = useState<TaskFilter>("all");
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const isLoading = query.isInitialLoading || query.isRefreshing;
+  const error = query.initialError ?? query.refreshError;
   const [recommendationUpdatedAt, setRecommendationUpdatedAt] = useState<string | null>(null);
   const [recommendationChangeList, setRecommendationChangeList] = useState<RecommendationChange[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -525,33 +527,29 @@ export default function TasksPage() {
   );
 
   const loadTasks = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const nextData = await apiRequest<TasksResponse>("/tasks");
-      const nextSnapshots = recommendationSnapshots(nextData.recommendations);
-      const storedState = readStoredRecommendationState();
-      const previousSnapshots = recommendationSnapshotsRef.current ?? storedState.snapshots;
-      const updatedAt = nextData.computed_at;
-
-      recommendationSnapshotsRef.current = nextSnapshots;
-      setData(nextData);
-      setRecommendationUpdatedAt(updatedAt);
-      setRecommendationChangeList(recommendationChanges(previousSnapshots, nextData.recommendations));
-      writeStoredRecommendationState(updatedAt, nextSnapshots);
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Unable to load tasks.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+    await query.refresh().catch(() => undefined);
+  }, [query.refresh]);
 
   useEffect(() => {
     const storedState = readStoredRecommendationState();
     recommendationSnapshotsRef.current = storedState.snapshots.length ? storedState.snapshots : null;
     setRecommendationUpdatedAt(storedState.updatedAt);
-    void loadTasks();
-  }, [loadTasks]);
+  }, []);
+
+  useEffect(() => {
+    if (!data) {
+      return;
+    }
+    const nextSnapshots = recommendationSnapshots(data.recommendations);
+    const storedState = readStoredRecommendationState();
+    const previousSnapshots = recommendationSnapshotsRef.current ?? storedState.snapshots;
+    const updatedAt = data.computed_at;
+
+    recommendationSnapshotsRef.current = nextSnapshots;
+    setRecommendationUpdatedAt(updatedAt);
+    setRecommendationChangeList(recommendationChanges(previousSnapshots, data.recommendations));
+    writeStoredRecommendationState(updatedAt, nextSnapshots);
+  }, [data]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNowMs(Date.now()), 30_000);
@@ -567,7 +565,11 @@ export default function TasksPage() {
           <p className="mt-2 text-sm text-stone-400">
             {isLoading ? "Syncing tasks..." : `${stats.total} active tasks grouped by real Todoist sections`}
           </p>
-          {error ? <p className="mt-2 text-sm text-coral">{error}</p> : null}
+          {error ? (
+            <p className="mt-2 text-sm text-coral">
+              {query.refreshError ? `Refresh failed; showing retained tasks. ${error}` : error}
+            </p>
+          ) : null}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

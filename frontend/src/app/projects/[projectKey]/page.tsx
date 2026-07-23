@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { ReactNode } from "react";
 import {
   AlertTriangle,
@@ -18,7 +18,6 @@ import {
   UserRound,
 } from "lucide-react";
 import {
-  apiRequest,
   formatDateTime,
   type ActivityEntry,
   type CalendarEvent,
@@ -31,6 +30,7 @@ import {
   type ProjectWorkPackage,
   type TaskItem,
 } from "@/lib/api";
+import { useRetainedApiQuery } from "@/lib/use-retained-api-query";
 import {
   currentDependencyEvidence,
   dependencyEvidencePresentation,
@@ -402,26 +402,10 @@ function DependencyEvidenceRow({ evidence }: { evidence: EvaluatedDependencyEvid
 export default function ProjectDetailPage() {
   const params = useParams<{ projectKey: string }>();
   const projectKey = params.projectKey;
-  const [project, setProject] = useState<ProjectBrain | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!projectKey) {
-      return;
-    }
-
-    setIsLoading(true);
-    apiRequest<ProjectBrain>(`/projects/${projectKey}`)
-      .then((payload) => {
-        setProject(payload);
-        setError(null);
-      })
-      .catch((requestError) => {
-        setError(requestError instanceof Error ? requestError.message : "Unable to load project.");
-      })
-      .finally(() => setIsLoading(false));
-  }, [projectKey]);
+  const query = useRetainedApiQuery<ProjectBrain>(`/projects/${projectKey}`);
+  const project = query.data;
+  const isLoading = query.isInitialLoading;
+  const error = query.initialError;
 
   const heroStats = useMemo(() => {
     if (!project) {
@@ -480,6 +464,16 @@ export default function ProjectDetailPage() {
         <ArrowLeft className="h-4 w-4" aria-hidden="true" />
         Projects
       </Link>
+
+      {query.refreshError ? (
+        <div className="rounded-[1.4rem] border border-coral/25 bg-coral/10 p-4 text-sm text-coral">
+          <div className="flex items-center gap-2 font-medium">
+            <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+            Project refresh failed; showing retained state
+          </div>
+          <p className="mt-2 leading-6">{query.refreshError}</p>
+        </div>
+      ) : null}
 
       <section className="rounded-[2rem] border border-white/10 bg-white/[0.055] p-6 shadow-soft backdrop-blur-2xl md:p-8">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">

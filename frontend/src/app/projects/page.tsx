@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -11,7 +11,8 @@ import {
   ListTodo,
   RefreshCw,
 } from "lucide-react";
-import { apiRequest, type ProjectBrain } from "@/lib/api";
+import { type ProjectBrain } from "@/lib/api";
+import { useRetainedApiQuery } from "@/lib/use-retained-api-query";
 import { projectDependencyMetricLabels } from "@/lib/work-package-presentation";
 
 function statusClass(status: string) {
@@ -37,21 +38,11 @@ function projectMetricLabel(project: ProjectBrain) {
 }
 
 export default function ProjectsPage() {
-  const [projects, setProjects] = useState<ProjectBrain[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    apiRequest<ProjectBrain[]>("/projects")
-      .then((payload) => {
-        setProjects(payload);
-        setError(null);
-      })
-      .catch((requestError) => {
-        setError(requestError instanceof Error ? requestError.message : "Unable to load projects.");
-      })
-      .finally(() => setIsLoading(false));
-  }, []);
+  const query = useRetainedApiQuery<ProjectBrain[]>("/projects");
+  const projects = query.data ?? [];
+  const isLoading = query.isInitialLoading;
+  const error = query.initialError;
+  const refreshError = query.refreshError;
 
   const activeCount = useMemo(
     () => projects.filter((project) => project.status !== "Quiet").length,
@@ -84,13 +75,13 @@ export default function ProjectsPage() {
         </div>
       </section>
 
-      {error ? (
+      {error || refreshError ? (
         <div className="rounded-[1.4rem] border border-coral/25 bg-coral/10 p-4 text-sm text-coral">
           <div className="flex items-center gap-2 font-medium">
             <AlertTriangle className="h-4 w-4" aria-hidden="true" />
-            Projects unavailable
+            {projects.length ? "Project refresh failed; showing retained state" : "Projects unavailable"}
           </div>
-          <p className="mt-2 leading-6">{error}</p>
+          <p className="mt-2 leading-6">{error ?? refreshError}</p>
         </div>
       ) : null}
 

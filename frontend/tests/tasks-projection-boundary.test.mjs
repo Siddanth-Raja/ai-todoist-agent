@@ -22,6 +22,7 @@ test("Tasks page contains no independent recommendation scorer or policy", () =>
 
 
 test("Tasks refresh consumes backend recommendations", () => {
-  assert.match(tasksPage, /nextData\.recommendations/);
+  assert.match(tasksPage, /useRetainedApiQuery<TasksResponse>\("\/tasks"\)/);
+  assert.match(tasksPage, /recommendationSnapshots\(data\.recommendations\)/);
   assert.doesNotMatch(tasksPage, /score\.priority|score\.age|score\.unblocking|score\.momentum|score\.due/);
 });

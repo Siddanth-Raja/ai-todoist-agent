@@ -52,7 +52,7 @@ export default function ProjectsPage() {
   return (
     <div className="mx-auto w-[calc(100vw-2rem)] max-w-6xl space-y-6 pb-6 sm:w-full">
       <section className="rounded-[2rem] border border-white/10 bg-white/[0.055] p-6 shadow-soft backdrop-blur-2xl md:p-8">
-        <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+        <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.28em] text-moss">Project Brain</p>
             <h3 className="mt-3 text-4xl font-semibold tracking-normal text-pearl md:text-6xl">
@@ -62,15 +62,13 @@ export default function ProjectsPage() {
               Project pages collect next move, blockers, tasks, events, people, memory, and recent activity.
             </p>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:min-w-80">
-            <div className="rounded-2xl bg-black/20 p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-stone-500">Active</p>
-              <p className="mt-2 text-3xl font-semibold text-pearl">{activeCount}</p>
-            </div>
-            <div className="rounded-2xl bg-black/20 p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-stone-500">Total</p>
-              <p className="mt-2 text-3xl font-semibold text-pearl">{projects.length || 6}</p>
-            </div>
+          <div className="flex flex-wrap gap-2 text-sm text-stone-400">
+            <span className="rounded-full border border-white/10 bg-black/20 px-3 py-2">
+              <strong className="mr-1.5 text-pearl">{activeCount}</strong> active
+            </span>
+            <span className="rounded-full border border-white/10 bg-black/20 px-3 py-2">
+              <strong className="mr-1.5 text-pearl">{projects.length || 6}</strong> total
+            </span>
           </div>
         </div>
       </section>
@@ -90,7 +88,7 @@ export default function ProjectsPage() {
           ? Array.from({ length: 6 }).map((_, index) => (
               <div
                 key={index}
-                className="min-h-72 animate-pulse rounded-[1.5rem] border border-white/10 bg-white/[0.055] p-5"
+                className="min-h-64 animate-pulse rounded-[1.5rem] border border-white/10 bg-white/[0.055] p-5"
               >
                 <div className="h-8 w-36 rounded-lg bg-white/10" />
                 <div className="mt-5 h-20 rounded-lg bg-white/10" />
@@ -101,29 +99,29 @@ export default function ProjectsPage() {
               <Link
                 key={project.key}
                 href={`/projects/${project.key}`}
-                className="group flex min-h-72 flex-col justify-between rounded-[1.5rem] border border-white/10 bg-white/[0.055] p-5 shadow-card backdrop-blur-2xl transition hover:border-moss/35 hover:bg-white/[0.075]"
+                className="group flex min-h-64 flex-col rounded-[1.5rem] border border-white/10 bg-white/[0.045] p-5 shadow-card backdrop-blur-2xl transition hover:border-moss/35 hover:bg-white/[0.065]"
               >
                 <div>
                   <div className="flex items-start justify-between gap-4">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/[0.07] text-moss">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/[0.07] text-moss">
                       <FolderKanban className="h-5 w-5" aria-hidden="true" />
                     </div>
                     <span className={`rounded-full border px-3 py-1 text-xs font-medium ${statusClass(project.status)}`}>
                       {project.status}
                     </span>
                   </div>
-                  <h4 className="mt-7 text-2xl font-semibold text-pearl">{project.name}</h4>
-                  <p className="mt-3 text-sm leading-6 text-stone-400">{project.description}</p>
-                </div>
-
-                <div className="mt-8 space-y-4">
-                  <div className="rounded-2xl bg-black/20 p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-stone-500">Next move</p>
-                    <p className="mt-2 line-clamp-2 text-sm font-medium leading-5 text-pearl">
+                  <h4 className="mt-5 text-2xl font-semibold text-pearl">{project.name}</h4>
+                  <div className="mt-4 rounded-2xl border border-moss/15 bg-moss/[0.07] p-4">
+                    <p className="text-xs uppercase tracking-[0.18em] text-moss">Next move</p>
+                    <p className="mt-2 line-clamp-3 text-sm font-medium leading-5 text-pearl">
                       {project.next_recommendation}
                     </p>
                   </div>
-                  <div className="flex items-center justify-between gap-3 text-xs text-stone-500">
+                  <p className="mt-4 line-clamp-2 text-sm leading-6 text-stone-500">{project.description}</p>
+                </div>
+
+                <div className="mt-auto pt-5">
+                  <div className="flex items-center justify-between gap-3 border-t border-white/10 pt-4 text-xs text-stone-500">
                     <span className="flex items-center gap-1.5">
                       <ListTodo className="h-3.5 w-3.5" aria-hidden="true" />
                       {projectMetricLabel(project)}

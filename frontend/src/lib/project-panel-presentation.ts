@@ -32,3 +32,34 @@ export function projectCollectionPresentation({
     tabIndex: isBounded ? 0 : undefined,
   };
 }
+
+export function projectCollectionKeyboardScroll({
+  key,
+  current,
+  clientHeight,
+  scrollHeight,
+}: {
+  key: string;
+  current: number;
+  clientHeight: number;
+  scrollHeight: number;
+}): number | null {
+  const maximum = Math.max(0, scrollHeight - clientHeight);
+  const page = Math.max(48, Math.round(clientHeight * 0.85));
+  const next =
+    key === "ArrowDown"
+      ? current + 48
+      : key === "ArrowUp"
+        ? current - 48
+        : key === "PageDown"
+          ? current + page
+          : key === "PageUp"
+            ? current - page
+            : key === "Home"
+              ? 0
+              : key === "End"
+                ? maximum
+                : null;
+
+  return next === null ? null : Math.min(maximum, Math.max(0, next));
+}

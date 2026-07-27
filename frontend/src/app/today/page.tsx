@@ -30,6 +30,10 @@ import {
   todayProjectCardPresentation,
   todayRecommendationBadge,
 } from "@/lib/today-projection-presentation";
+import {
+  LIFE_AREA_GRID_CLASS,
+  todayRecommendationPresentation,
+} from "@/lib/surface-hierarchy-presentation";
 import { useRetainedApiQuery } from "@/lib/use-retained-api-query";
 
 const lifeAreaGradients: Record<string, string> = {
@@ -196,6 +200,7 @@ export default function TodayPage() {
   const mustDoPresentation = mustDo ? todayMustDoPresentation(mustDo) : null;
   const recommendation = todayData?.recommendation ?? null;
   const recommendationBadge = todayRecommendationBadge(recommendation);
+  const recommendationPresentation = todayRecommendationPresentation(recommendation);
   const shouldPrepare = recommendation?.type === "prepare";
   const isTodayLoading = !todayData && isLifeAreasLoading;
   const isTodayUnavailable = !todayData && !isLifeAreasLoading;
@@ -418,25 +423,29 @@ export default function TodayPage() {
         </SoftCard>
       </section>
 
-      <section className="grid min-w-0 gap-4 xl:col-span-2 xl:grid-cols-[minmax(0,1.22fr)_minmax(340px,0.78fr)]">
-        <SoftCard className="relative overflow-hidden p-6 md:p-8">
-          <div className="absolute right-[-6rem] top-[-6rem] h-64 w-64 rounded-full bg-moss/15 blur-3xl" />
+      <section
+        className="grid min-w-0 gap-4 xl:col-span-2 xl:grid-cols-[minmax(0,1.22fr)_minmax(320px,0.78fr)]"
+        data-recommendation-prominence={recommendationPresentation.prominence}
+      >
+        <SoftCard className={`relative overflow-hidden p-6 md:p-8 ${recommendationPresentation.cardClassName}`}>
           <div className="relative">
-            <span className="mb-8 flex h-14 w-14 items-center justify-center rounded-2xl bg-pearl text-ink shadow-card">
+            <span className={`mb-6 flex items-center justify-center rounded-2xl shadow-card ${recommendationPresentation.iconClassName}`}>
               <Target className="h-6 w-6" aria-hidden="true" />
             </span>
-            <p className="text-xs font-medium uppercase tracking-[0.28em] text-moss">Recommended work · Best next move</p>
-            <h3 className="mt-4 max-w-3xl text-4xl font-semibold leading-tight tracking-normal text-pearl md:text-6xl">
+            <p className="text-xs font-medium uppercase tracking-[0.28em] text-moss">
+              {recommendationPresentation.label}
+            </p>
+            <h3 className={`mt-4 max-w-3xl font-semibold leading-tight tracking-normal text-pearl ${recommendationPresentation.headingClassName}`}>
               {recommendation?.title ?? (isTodayUnavailable ? "Today unavailable" : "Loading today")}
             </h3>
-            <p className="mt-5 max-w-2xl text-base leading-7 text-stone-300 md:text-lg">
+            <p className="mt-4 max-w-2xl text-base leading-7 text-stone-300">
               {recommendation?.detail ??
                 (isTodayUnavailable
                   ? "Connect Settings so the backend can read live Calendar and Todoist data."
                   : "Reading live calendar and Todoist context.")}
             </p>
 
-            <div className="mt-8 flex flex-wrap gap-3">
+            <div className="mt-6 flex flex-wrap gap-3">
               <span className="inline-flex min-h-11 items-center rounded-full border border-white/10 bg-white/[0.07] px-4 text-sm text-stone-300">
                 <TimerReset className="mr-2 h-4 w-4 text-moss" aria-hidden="true" />
                 {currentBlock ? `${currentBlock.duration_minutes} min block` : "No work block"}
@@ -496,19 +505,16 @@ export default function TodayPage() {
           </div>
         ) : null}
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <div className={LIFE_AREA_GRID_CLASS} data-life-area-count={lifeAreas.length}>
           {isLifeAreasLoading
-            ? Array.from({ length: 5 }).map((_, index) => (
+            ? Array.from({ length: 6 }).map((_, index) => (
                 <article
                   key={index}
-                  className="min-h-60 animate-pulse rounded-[2rem] border border-white/10 bg-white/[0.055] p-5 shadow-card backdrop-blur-2xl"
+                  className="animate-pulse rounded-[1.5rem] border border-white/10 bg-white/[0.055] p-5 shadow-card backdrop-blur-2xl"
                 >
                   <div className="h-8 w-24 rounded-lg bg-white/10" />
-                  <div className="mt-4 h-16 rounded-lg bg-white/10" />
-                  <div className="mt-8 grid grid-cols-2 gap-3">
-                    <div className="h-24 rounded-2xl bg-black/20" />
-                    <div className="h-24 rounded-2xl bg-black/20" />
-                  </div>
+                  <div className="mt-4 h-12 rounded-lg bg-white/10" />
+                  <div className="mt-5 h-10 rounded-xl bg-black/20" />
                 </article>
               ))
             : lifeAreas.map((area) => {
@@ -517,22 +523,22 @@ export default function TodayPage() {
                   <Link
                     key={area.name}
                     href={projectHrefByLifeArea[area.name] ?? "/projects"}
-                    className={`min-h-60 rounded-[2rem] border border-white/10 bg-gradient-to-br ${gradientForLifeArea(area.name)} p-5 shadow-card backdrop-blur-2xl`}
+                    className={`rounded-[1.5rem] border border-white/10 bg-gradient-to-br ${gradientForLifeArea(area.name)} p-5 shadow-card backdrop-blur-2xl transition hover:border-white/20`}
                   >
-                    <div className="flex h-full flex-col justify-between gap-8">
+                    <div className="flex h-full flex-col justify-between gap-5">
                       <div>
-                        <div className="mb-8 flex items-start justify-between gap-3">
+                        <div className="mb-5 flex items-start justify-between gap-3">
                           <div>
-                            <h4 className="text-3xl font-semibold text-pearl">{area.name}</h4>
-                            <p className="mt-3 text-sm leading-6 text-stone-400">{area.description}</p>
+                            <h4 className="text-2xl font-semibold text-pearl">{area.name}</h4>
+                            <p className="mt-2 text-sm leading-6 text-stone-400">{area.description}</p>
                           </div>
                           <ArrowRight className="h-5 w-5 text-stone-500" aria-hidden="true" />
                         </div>
-                        <p className="rounded-full border border-white/10 bg-black/20 px-3 py-2 text-sm text-stone-300">
+                        <p className="inline-flex rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-xs font-medium text-stone-300">
                           {projection.status}
                         </p>
                         {projection.nextMove ? (
-                          <p className="mt-3 text-sm leading-6 text-stone-300">
+                          <p className="mt-3 line-clamp-2 text-sm font-medium leading-6 text-stone-300">
                             {projection.nextMove}
                           </p>
                         ) : null}
@@ -543,12 +549,12 @@ export default function TodayPage() {
                         ) : null}
                       </div>
 
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="flex flex-wrap gap-x-5 gap-y-2 border-t border-white/10 pt-4">
                         {metricsForLifeArea(area).map((metric) => (
-                          <div key={metric.label} className="rounded-2xl bg-black/20 p-4">
-                            <p className="text-xs uppercase tracking-[0.18em] text-stone-500">{metric.label}</p>
-                            <p className="mt-2 text-3xl font-semibold text-pearl">{metric.value}</p>
-                          </div>
+                          <p key={metric.label} className="text-xs uppercase tracking-[0.16em] text-stone-500">
+                            <span className="mr-1.5 text-base font-semibold tracking-normal text-pearl">{metric.value}</span>
+                            {metric.label}
+                          </p>
                         ))}
                       </div>
                     </div>

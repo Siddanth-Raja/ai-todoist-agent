@@ -39,8 +39,50 @@ textarea {
   background: rgba(158, 214, 183, 0.35);
 }
 
+:focus-visible {
+  outline: 2px solid rgba(167, 232, 196, 0.82);
+  outline-offset: 3px;
+}
+
 .glass-panel {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.105), rgba(255, 255, 255, 0.045));
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.24);
+}
+
+.calendar-day-event {
+  min-height: 0;
+}
+
+@media (min-width: 1024px) {
+  .calendar-day-event {
+    min-height: var(--calendar-day-event-height);
+  }
+}
+
+/*
+ * Content-sized tracks keep sparse Life Area states compact. Incomplete rows
+ * are rebalanced without changing record order or hiding provider data.
+ */
+@media (min-width: 768px) and (max-width: 1279px) {
+  .life-area-grid > :last-child:nth-child(2n + 1):not(:only-child) {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 1280px) {
+  .life-area-grid > :last-child:nth-child(3n + 1):not(:only-child) {
+    grid-column: span 2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

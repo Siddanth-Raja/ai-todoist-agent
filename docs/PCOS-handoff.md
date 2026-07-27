@@ -9372,3 +9372,137 @@ The enduring engineering principle is:
 The next step is not to brainstorm PCOS again.
 
 The next step is to build that model.
+
+---
+
+# 62. SID-227 Visual Hierarchy Closeout and Canonical Project Intelligence Completion
+
+This section supersedes the end-of-section-61 statement that Canonical Project Intelligence is still the next milestone to build.
+
+SID-227, **Sharpen PCOS Visual Hierarchy and Information Density**, is implemented and verified as the final issue in Milestone 1. The work is a bounded presentation and responsive-layout pass. It does not change recommendation scoring, project classification, dependency or blocker semantics, provider mappings, Calendar correctness, retained-query behavior, or external provider state.
+
+## 62.1 Original hierarchy audit
+
+The pre-change application was cohesive, but its major surfaces used too many equally weighted glass panels and large metric cards:
+
+| Surface | Primary decision or action | Secondary context | Supporting evidence | Pre-change hierarchy problem |
+| --- | --- | --- | --- | --- |
+| Today | Protect overdue/due-today obligations, then choose trustworthy recommended work | Current block and next event | Life Area counts and status | The recommendation hero was visually dominant even when its structured state was generic; Life Area cards and metrics were oversized and a fixed grid could leave awkward incomplete rows. |
+| Projects index | Open the project whose next move or attention state matters | Project description and status | Active/total counts and record totals | Header metrics and project cards carried nearly equal visual weight; card height and metadata made the index slower to scan. |
+| Populated project detail | Act on Next move, blockers, dependencies, and tasks | Work packages and operational collections | People, memory, activity, diagnostics, and counts | Nearly every panel shared the same treatment, supporting panels could compete with decisions, and metrics used more space than their usefulness justified. |
+| Life Areas | Open the area needing attention | Status and next move | Task/overdue/high counts | Fixed 2/5-column behavior produced oversized sparse states or stranded final cards for realistic counts. |
+| Calendar | Understand real commitments in Agenda, Day, or Week | Informational items and conflicts | Project-label legend | Empty Day and Week retained calendar-sized scaffolding; supporting side panels were over-prominent; a long event could create a very tall narrow Day card. |
+
+Responsive audit findings were consistent at approximately 1440px, 1024px, 768px, and 390px: desktop could use density more deliberately, while narrow layouts needed to remain single-flow, avoid horizontal overflow, and remove nested scrolling.
+
+## 62.2 Verified implementation
+
+The final surface hierarchy is deliberately three-level:
+
+- **Primary:** concrete obligations, trustworthy next actions, and the project Next move.
+- **Secondary:** operational collections needed to act, including blockers, dependencies, tasks, and work packages.
+- **Supporting:** counts, labels, people, memory, activity, diagnostics, and other evidence that should remain available without competing with decisions.
+
+Specific implementation decisions:
+
+- Today still renders Must do before Recommended work. Recommendation prominence now uses only existing structured recommendation fields and evidence:
+  - Calendar-first, contextual override, or positive executable signals such as due urgency, free-block fit, energy fit, or an upcoming commitment receive primary treatment.
+  - Grounded shared recommendations without that executable evidence receive secondary treatment.
+  - Missing, fallback, or ungrounded recommendations receive supporting treatment.
+  - No frontend text heuristic, score change, or invented confidence field was added.
+- Projects index metrics are compact badges; project cards lead with status and next move, then recede into description and counts.
+- Project detail identifies primary, secondary, and supporting card tones. Next move is primary; dependencies, tasks, and work packages remain operational; attention, events, people, memory, activity, and diagnostics recede.
+- Life Areas use one responsive `auto-fit`/`minmax` grid. Incomplete desktop rows widen the final card only where needed, without reordering, slicing, or hiding records. Card metrics are compact inline evidence instead of large nested tiles.
+- Calendar Day and Week use compact, explanatory empty states. Populated views retain every event and interaction. Agenda support panels and the project-label legend are quieter and denser.
+- A browser-discovered narrow Day regression was corrected: event-height presentation is natural below 1024px and bounded to the visible 6 AM–11 PM timeline at desktop widths. A real 168-hour event remains present with its original duration and link; it no longer creates an approximately 10,900px narrow empty slab.
+- Global `:focus-visible` treatment and reduced-motion overrides provide consistent keyboard focus and suppress nonessential transition/animation duration when reduced motion is requested.
+
+Changed implementation boundaries:
+
+- `frontend/src/app/today/page.tsx`
+- `frontend/src/app/projects/page.tsx`
+- `frontend/src/app/projects/[projectKey]/page.tsx`
+- `frontend/src/app/calendar/page.tsx`
+- `frontend/src/app/globals.css`
+- `frontend/src/lib/surface-hierarchy-presentation.ts`
+- `frontend/src/lib/project-panel-presentation.ts`
+- `frontend/tests/surface-hierarchy-presentation.test.mjs`
+- `frontend/tests/work-package-presentation.test.mjs`
+
+## 62.3 SID-218 and Today reliability preservation
+
+SID-218 remains intact:
+
+- The live PCOS project retained all 53 dependency-evidence records and all 16 classification-diagnostic records.
+- At 1440px the dependency region remained internally scrollable at 544px (`scrollHeight` 11,029px), and diagnostics remained internally scrollable at 672px (`scrollHeight` 1,524px).
+- Bounded regions remain focusable. `Home` followed by `PageDown` moved the live dependency region to `scrollTop` 462 and displayed the visible focus ring.
+- At 390px both collections returned to natural document flow (`overflow-y: visible`, `clientHeight === scrollHeight`), so there is no nested-scroll trap.
+- No collection uses `slice` or `splice`; short and empty collections remain naturally sized.
+
+The complete First-Use Reliability contract also remains intact:
+
+- Live Today showed Must do before Recommended work at every inspected width.
+- The observed Must do item was an overdue Linear obligation; the separate recommendation remained a grounded shared recommendation.
+- After Today had loaded, client-side navigation Today → Projects → Today immediately restored the retained obligation and recommendation with neither the Today nor Calendar blocking loader.
+- Background revalidation remained request-driven and honest; no stale/error message was hidden.
+- The known cold backend/provider aggregation delay remains unchanged and explicitly out of scope.
+
+## 62.4 Responsive, accessibility, and browser evidence
+
+Browser environment: the real local Next.js 15.5.19 production server and FastAPI backend, using the current read-only provider state in the in-app Chromium browser.
+
+Inspected viewports:
+
+- 1440 × 1000
+- 1024 × 900
+- 768 × 900
+- 390 × 844
+
+Verified results:
+
+- Today, Projects index, populated PCOS project detail, Life Areas, and Calendar Agenda/Day/Week all had zero horizontal page or main-content overflow at the inspected widths.
+- Projects resolved from 3 columns at 1440px, to 2 columns at 1024px/768px, to 1 column at 390px.
+- The live six-card Life Area state rendered as a balanced 3 × 2 grid at 1440px.
+- A deterministic fixture using the exact production grid CSS verified counts 1–7 at all four widths. It preserved order and produced no overflow: 1/2/3 cards form natural complete desktop rows, 4 and 7 widen the single final desktop card, 5 leaves a two-card final row, 6 forms a complete 3 × 2 grid, odd 2-column tablet rows widen the final card, and 390px remains a natural single column.
+- Sparse Calendar Day measured 152/264/264/324px at 1440/1024/768/390; sparse Week measured 90px at 1440. Agenda retained the live event; populated Week retained its event; populated Day retained the same live event and its interaction.
+- The populated narrow Day regression retest measured 660px at 768px and 680px at 390px instead of approximately 10,900px.
+- Heading order remained understandable; focus indication was visible; keyboard scrolling reached bounded records; controls remained reachable; the reduced-motion media rule was present; and narrow layouts did not clip or hide provider records.
+- There was no framework error overlay, console warning/error, broken application request, or horizontal overflow in the final pass.
+- Backend request logs for browser verification contained only `OPTIONS` and `GET` calls for Today, Activity, Projects, project detail, and Calendar. No Todoist, Gmail, Google Calendar, Linear, or other external provider mutation occurred.
+
+After-state screenshots were captured outside the repository under the Codex visualization artifact directory. No screenshot or temporary browser fixture is committed.
+
+## 62.5 Automated verification
+
+Final verified gates:
+
+- Backend: 325 tests passed.
+- Frontend: 50 tests passed.
+- TypeScript: `npx tsc --noEmit` passed.
+- Production: Next.js 15.5.19 `npm run build` passed for all routes.
+- Python compilation: passed for the backend and test tree; no Python file changed in SID-227.
+- `git diff --check`: passed.
+- Existing privacy/capability and forbidden-mutation scans: passed with no new provider-write surface.
+
+Focused regression coverage protects:
+
+- structured recommendation prominence without a new confidence model;
+- Must do ordering and distinct treatment;
+- Life Area responsive grid contracts and absence of record slicing;
+- compact sparse Calendar modes and populated content retention;
+- bounded desktop Project Brain collections, natural narrow flow, full-record mapping, and deterministic keyboard scrolling;
+- the multi-day Calendar event-height cap at desktop and natural height below 1024px;
+- focus-visible and reduced-motion CSS contracts.
+
+## 62.6 Canonical Project Intelligence milestone state
+
+SID-227 is the final implementation issue in **Milestone 1 — Canonical Project Intelligence**. With this verified closeout:
+
+- every milestone issue is Done;
+- milestone progress is 100%;
+- the milestone is closed as verified;
+- no subsequent milestone has been started.
+
+The next available milestone is **Freelance Outbound Automation V1**. It remains unstarted.
+
+Publication is the single focused SID-227 commit containing this section and the bounded frontend changes. Because a commit cannot contain its own final SHA without changing that SHA, the exact published commit is recorded in the SID-227 Linear evidence and final release report after the normal fast-forward push. Local HEAD, local `origin/main`, and GitHub `main` must match that exact SHA before SID-227 and the milestone are closed.

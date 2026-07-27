@@ -8,7 +8,10 @@ import {
   projectDependencyMetricLabels,
   workPackageSectionState,
 } from "../src/lib/work-package-presentation.ts";
-import { projectCollectionPresentation } from "../src/lib/project-panel-presentation.ts";
+import {
+  projectCollectionKeyboardScroll,
+  projectCollectionPresentation,
+} from "../src/lib/project-panel-presentation.ts";
 
 test("live SID-226 dependency volumes activate responsive bounded scrolling", () => {
   for (const recordCount of [63, 18, 8, 23]) {
@@ -44,6 +47,45 @@ test("diagnostic collections use the taller responsive bound", () => {
   assert.match(presentation.className, /42rem/);
   assert.match(presentation.className, /scrollbar-gutter:stable/);
   assert.match(presentation.className, /focus-visible:ring-2/);
+});
+
+test("bounded collections expose deterministic keyboard scrolling without hiding records", () => {
+  const dimensions = {
+    clientHeight: 544,
+    scrollHeight: 11029,
+  };
+  assert.equal(
+    projectCollectionKeyboardScroll({
+      key: "PageDown",
+      current: 0,
+      ...dimensions,
+    }),
+    462,
+  );
+  assert.equal(
+    projectCollectionKeyboardScroll({
+      key: "End",
+      current: 462,
+      ...dimensions,
+    }),
+    10485,
+  );
+  assert.equal(
+    projectCollectionKeyboardScroll({
+      key: "Home",
+      current: 10485,
+      ...dimensions,
+    }),
+    0,
+  );
+  assert.equal(
+    projectCollectionKeyboardScroll({
+      key: "Tab",
+      current: 0,
+      ...dimensions,
+    }),
+    null,
+  );
 });
 
 test("project dependency metrics use full evaluated counts and separate review state", () => {

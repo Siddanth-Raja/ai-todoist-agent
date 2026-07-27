@@ -38,6 +38,7 @@ import {
   workPackageSectionState,
 } from "@/lib/work-package-presentation";
 import {
+  projectCollectionKeyboardScroll,
   projectCollectionPresentation,
   type ProjectCollectionDensity,
 } from "@/lib/project-panel-presentation";
@@ -64,14 +65,25 @@ function blockerClass(blocker: ProjectBlocker) {
 function Card({
   title,
   icon,
+  tone = "secondary",
   children,
 }: {
   title: string;
   icon: ReactNode;
+  tone?: "primary" | "secondary" | "supporting";
   children: ReactNode;
 }) {
+  const toneClass =
+    tone === "primary"
+      ? "border-moss/25 bg-white/[0.065]"
+      : tone === "supporting"
+        ? "border-white/[0.08] bg-black/15"
+        : "border-white/10 bg-white/[0.045]";
   return (
-    <section className="h-fit rounded-[1.5rem] border border-white/10 bg-white/[0.055] p-5 shadow-card backdrop-blur-2xl">
+    <section
+      className={`h-fit rounded-[1.5rem] border p-5 shadow-card backdrop-blur-2xl ${toneClass}`}
+      data-surface-tone={tone}
+    >
       <div className="mb-5 flex items-center justify-between gap-4">
         <h4 className="text-lg font-semibold text-pearl">{title}</h4>
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/[0.07] text-moss">
@@ -109,6 +121,24 @@ function ScrollableCollection({
       className={[className, presentation.className].filter(Boolean).join(" ")}
       data-project-collection={label}
       data-scroll-state={presentation.isBounded ? "bounded" : "natural"}
+      onKeyDown={
+        presentation.isBounded
+          ? (event) => {
+              const target = event.currentTarget;
+              const next = projectCollectionKeyboardScroll({
+                key: event.key,
+                current: target.scrollTop,
+                clientHeight: target.clientHeight,
+                scrollHeight: target.scrollHeight,
+              });
+              if (next === null) {
+                return;
+              }
+              event.preventDefault();
+              target.scrollTop = next;
+            }
+          : undefined
+      }
       role={presentation.isBounded ? "region" : undefined}
       tabIndex={presentation.tabIndex}
     >
@@ -489,14 +519,14 @@ export default function ProjectDetailPage() {
             </div>
             <p className="mt-4 max-w-2xl text-sm leading-6 text-stone-400">{project.description}</p>
           </div>
-          <div className="grid grid-cols-2 gap-3 sm:min-w-[26rem] sm:grid-cols-5">
+          <dl className="flex max-w-xl flex-wrap gap-x-5 gap-y-3 border-t border-white/10 pt-4 lg:max-w-[30rem] lg:justify-end lg:border-t-0 lg:pt-0">
             {heroStats.map((stat) => (
-              <div key={stat.label} className="rounded-2xl bg-black/20 p-4">
-                <p className="text-xs uppercase tracking-[0.18em] text-stone-500">{stat.label}</p>
-                <p className="mt-2 text-3xl font-semibold text-pearl">{stat.value}</p>
+              <div key={stat.label}>
+                <dt className="text-[0.68rem] uppercase tracking-[0.16em] text-stone-500">{stat.label}</dt>
+                <dd className="mt-1 text-xl font-semibold text-pearl">{stat.value}</dd>
               </div>
             ))}
-          </div>
+          </dl>
         </div>
       </section>
 
@@ -535,7 +565,7 @@ export default function ProjectDetailPage() {
       ) : null}
 
       <section className="grid items-start gap-4 xl:grid-cols-3">
-        <Card title="Next move" icon={<Target className="h-5 w-5" aria-hidden="true" />}>
+        <Card title="Next move" tone="primary" icon={<Target className="h-5 w-5" aria-hidden="true" />}>
           <div className="rounded-2xl bg-moss/10 p-5">
             <p className="text-xs uppercase tracking-[0.18em] text-moss">Next move</p>
             <p className="mt-3 text-2xl font-semibold leading-tight text-pearl">
@@ -567,7 +597,7 @@ export default function ProjectDetailPage() {
           )}
         </Card>
 
-        <Card title="Attention signals" icon={<AlertTriangle className="h-5 w-5" aria-hidden="true" />}>
+        <Card title="Attention signals" tone="supporting" icon={<AlertTriangle className="h-5 w-5" aria-hidden="true" />}>
           {project.attention_signals.length === 0 ? (
             <EmptyState text="No heuristic attention signals." />
           ) : (
@@ -589,7 +619,7 @@ export default function ProjectDetailPage() {
       </section>
 
       <section className="grid items-start gap-4 xl:grid-cols-2">
-        <Card title="Upcoming events" icon={<CalendarClock className="h-5 w-5" aria-hidden="true" />}>
+        <Card title="Upcoming events" tone="supporting" icon={<CalendarClock className="h-5 w-5" aria-hidden="true" />}>
           {project.upcoming_events.length === 0 ? (
             <EmptyState text="No upcoming events found." />
           ) : (
@@ -649,7 +679,7 @@ export default function ProjectDetailPage() {
       </section>
 
       <section className="grid items-start gap-4 xl:grid-cols-3">
-        <Card title="People" icon={<UserRound className="h-5 w-5" aria-hidden="true" />}>
+        <Card title="People" tone="supporting" icon={<UserRound className="h-5 w-5" aria-hidden="true" />}>
           {project.people.length === 0 ? (
             <EmptyState text="No people attached." />
           ) : (
@@ -668,7 +698,7 @@ export default function ProjectDetailPage() {
           )}
         </Card>
 
-        <Card title="Memory/context" icon={<RefreshCw className="h-5 w-5" aria-hidden="true" />}>
+        <Card title="Memory/context" tone="supporting" icon={<RefreshCw className="h-5 w-5" aria-hidden="true" />}>
           {project.memories.length === 0 ? (
             <EmptyState text="No matching memory entries." />
           ) : (
@@ -685,7 +715,7 @@ export default function ProjectDetailPage() {
           )}
         </Card>
 
-        <Card title="Recent activity" icon={<Clock3 className="h-5 w-5" aria-hidden="true" />}>
+        <Card title="Recent activity" tone="supporting" icon={<Clock3 className="h-5 w-5" aria-hidden="true" />}>
           {project.recent_activity.length === 0 ? (
             <EmptyState text="No recent activity found." />
           ) : (
@@ -704,7 +734,7 @@ export default function ProjectDetailPage() {
       </section>
 
       <section className="grid items-start gap-4 xl:grid-cols-1">
-        <Card title="Classification diagnostics" icon={<ListTodo className="h-5 w-5" aria-hidden="true" />}>
+        <Card title="Classification diagnostics" tone="supporting" icon={<ListTodo className="h-5 w-5" aria-hidden="true" />}>
           {project.classification_diagnostics.length === 0 ? (
             <EmptyState text="No task diagnostics available." />
           ) : (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import {
   AlertTriangle,
   ChevronLeft,
@@ -17,6 +17,11 @@ import {
   type CalendarEvent,
   type CalendarResponse,
 } from "@/lib/api";
+import {
+  calendarDayDensity,
+  calendarDayEventHeightRem,
+  calendarWeekDensity,
+} from "@/lib/surface-hierarchy-presentation";
 import { useRetainedApiQuery } from "@/lib/use-retained-api-query";
 
 type CalendarView = "agenda" | "day" | "week";
@@ -276,10 +281,11 @@ function EventCard({
   );
 }
 
-function EmptyState({ label }: { label: string }) {
+function EmptyState({ label, detail }: { label: string; detail?: string }) {
   return (
-    <div className="rounded-lg border border-line bg-white/[0.04] p-5 text-sm text-stone-400">
-      {label}
+    <div className="rounded-lg border border-line bg-white/[0.035] p-5">
+      <p className="text-sm font-medium text-stone-300">{label}</p>
+      {detail ? <p className="mt-2 max-w-xl text-xs leading-5 text-stone-500">{detail}</p> : null}
     </div>
   );
 }
@@ -336,6 +342,19 @@ export default function CalendarPage() {
         informational: informationalEvents.filter((event) => sameDay(eventStart(event), day)),
       })),
     [blockingEvents, informationalEvents, weekDays],
+  );
+  const dayDensity = calendarDayDensity(dayEvents.length);
+  const weekBlockingCount = weekEventsByDay.reduce(
+    (total, group) => total + group.events.length,
+    0,
+  );
+  const weekInformationalCount = weekEventsByDay.reduce(
+    (total, group) => total + group.informational.length,
+    0,
+  );
+  const weekDensity = calendarWeekDensity(
+    weekBlockingCount,
+    weekInformationalCount,
   );
 
   const agendaGroups = useMemo(() => {
@@ -512,28 +531,44 @@ export default function CalendarPage() {
       {!isLoading || data ? (
         <>
           {view === "day" ? (
-            <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-              <div className="grid gap-4 lg:grid-cols-[5.5rem_minmax(0,1fr)]">
-                <div className="hidden rounded-lg border border-line bg-white/[0.035] p-3 text-xs text-stone-500 lg:block">
-                  {dayHours.map((hour) => (
-                    <div key={hour} className="h-16">
-                      {new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(new Date(2026, 0, 1, hour))}
-                    </div>
-                  ))}
-                </div>
-                <div className="min-h-[32rem] rounded-lg border border-line bg-white/[0.035] p-3">
-                  {dayEvents.length === 0 ? (
-                    <EmptyState label="No blocking events on this day for the selected projects." />
+            <section
+              className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_320px]"
+              data-calendar-density={dayDensity}
+            >
+              <div className={dayDensity === "timeline" ? "grid gap-4 lg:grid-cols-[5.5rem_minmax(0,1fr)]" : ""}>
+                {dayDensity === "timeline" ? (
+                  <div className="hidden rounded-lg border border-line bg-white/[0.035] p-3 text-xs text-stone-500 lg:block">
+                    {dayHours.map((hour) => (
+                      <div key={hour} className="h-16">
+                        {new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(new Date(2026, 0, 1, hour))}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <div className={`rounded-lg border border-line bg-white/[0.035] p-3 ${dayDensity === "timeline" ? "min-h-[32rem]" : ""}`}>
+                  {dayDensity === "compact" ? (
+                    <EmptyState
+                      label="No blocking events on this day."
+                      detail="The selected projects leave this day open. Informational items remain visible alongside the schedule."
+                    />
                   ) : (
                     <div className="space-y-3 lg:relative lg:h-[68rem] lg:space-y-0">
                       {dayEvents.map((event) => {
                         const top = Math.max(0, ((minutesFromDayStart(event) - 6 * 60) / 60) * 4);
-                        const height = Math.max(3, (eventDuration(event) / 60) * 4);
+                        const height = calendarDayEventHeightRem(
+                          minutesFromDayStart(event),
+                          eventDuration(event),
+                        );
                         return (
                           <div
                             key={event.id ?? `${event.title}:${event.start}`}
-                            className="lg:absolute lg:left-0 lg:right-0 lg:px-2"
-                            style={{ top: `${top}rem`, minHeight: `${height}rem` }}
+                            className="calendar-day-event lg:absolute lg:left-0 lg:right-0 lg:px-2"
+                            style={
+                              {
+                                top: `${top}rem`,
+                                "--calendar-day-event-height": `${height}rem`,
+                              } as CSSProperties
+                            }
                           >
                             <EventCard event={event} />
                           </div>
@@ -567,7 +602,15 @@ export default function CalendarPage() {
           ) : null}
 
           {view === "week" ? (
-            <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+            weekDensity === "compact" ? (
+              <section data-calendar-density="compact">
+                <EmptyState
+                  label="No events in this week for the selected projects."
+                  detail={`${shortDate(weekDays[0])} through ${shortDate(weekDays[6])} is clear in the fetched calendar window.`}
+                />
+              </section>
+            ) : (
+            <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-7" data-calendar-density="calendar">
               {weekEventsByDay.map(({ day, events, informational }) => (
                 <div
                   key={day.toISOString()}
@@ -610,6 +653,7 @@ export default function CalendarPage() {
                 </div>
               ))}
             </section>
+            )
           ) : null}
 
           {view === "agenda" ? (
@@ -638,9 +682,9 @@ export default function CalendarPage() {
                 )}
               </div>
 
-              <aside className="space-y-4">
-                <div className="glass-panel rounded-lg p-5">
-                  <h3 className="text-xl font-semibold text-pearl">Informational</h3>
+              <aside className="space-y-3">
+                <div className="rounded-lg border border-white/[0.08] bg-black/15 p-4">
+                  <h3 className="text-base font-semibold text-pearl">Informational</h3>
                   <p className="mt-2 text-sm leading-6 text-stone-400">
                     These are visible for context, but they do not block scheduling.
                   </p>
@@ -657,8 +701,8 @@ export default function CalendarPage() {
                   </div>
                 </div>
 
-                <div className="glass-panel rounded-lg p-5">
-                  <h3 className="text-xl font-semibold text-pearl">Conflicts</h3>
+                <div className="rounded-lg border border-white/[0.08] bg-black/15 p-4">
+                  <h3 className="text-base font-semibold text-pearl">Conflicts</h3>
                   <div className="mt-4 space-y-3">
                     {data?.conflicts.length ? (
                       data.conflicts.map((conflict) => (
@@ -677,13 +721,13 @@ export default function CalendarPage() {
                   </div>
                 </div>
 
-                <div className="glass-panel rounded-lg p-5">
-                  <h3 className="text-xl font-semibold text-pearl">Project Labels</h3>
-                  <div className="mt-4 space-y-2">
+                <div className="rounded-lg border border-white/[0.08] bg-black/15 p-4">
+                  <h3 className="text-sm font-semibold text-stone-300">Project labels</h3>
+                  <div className="mt-3 flex flex-wrap gap-2">
                     {projectLabels.map((project) => (
-                      <div key={project} className="flex items-center justify-between rounded-lg bg-black/20 px-3 py-2">
-                        <span className="text-sm text-stone-300">{project}</span>
+                      <div key={project} className="flex items-center gap-2 rounded-full bg-black/20 px-3 py-1.5">
                         <span className={`h-3 w-3 rounded-full ${projectStyles[project].dot}`} />
+                        <span className="text-xs text-stone-400">{project}</span>
                       </div>
                     ))}
                   </div>

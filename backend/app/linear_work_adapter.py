@@ -8,6 +8,16 @@ from .work_domain import (
     WorkPriority,
     WorkStatus,
 )
+from .provider_changes import (
+    CompletionState,
+    ObservedMilestone,
+    ObservedRelationship,
+    ObservationAvailability,
+    ObservationFreshness,
+    ProviderEvidenceReference,
+    ProviderObservation,
+    RelationshipKind,
+)
 
 
 LINEAR_PROVIDER = "linear"
@@ -52,6 +62,7 @@ class LinearWorkAdapter:
             "relations": list((issue.get("relations") or {}).get("nodes") or []),
             "inverse_relations": list((issue.get("inverseRelations") or {}).get("nodes") or []),
             "completed_at": issue.get("completedAt"),
+            "started_at": issue.get("startedAt"),
             "canceled_at": issue.get("canceledAt"),
             "source": "linear_graphql",
         }
@@ -80,6 +91,126 @@ class LinearWorkAdapter:
             context_requirements=_context_requirements(labels),
             provider_metadata=metadata,
         )
+
+    def change_observation(
+        self,
+        item: NormalizedWorkItem,
+        *,
+        scope_id: str,
+        observed_at: datetime,
+    ) -> ProviderObservation:
+        if item.provider != LINEAR_PROVIDER:
+            raise ValueError("Linear change observations require Linear work")
+        metadata = item.provider_metadata
+        workflow = metadata.get("workflow_state")
+        workflow_type = (
+            str(workflow.get("type") or "").strip().lower()
+            if isinstance(workflow, dict)
+            else None
+        )
+        milestone_raw = metadata.get("project_milestone")
+        milestone = None
+        if isinstance(milestone_raw, dict) and milestone_raw.get("id"):
+            milestone = ObservedMilestone(
+                milestone_id=str(milestone_raw["id"]),
+                name=(
+                    str(milestone_raw["name"]).strip()
+                    if milestone_raw.get("name")
+                    else None
+                ),
+                progress=None,
+                completed=None,
+                updated_at=None,
+            )
+        relationships = _change_relationships(metadata)
+        return ProviderObservation(
+            canonical_project_id=item.canonical_project_id,
+            provider=LINEAR_PROVIDER,
+            scope_id=scope_id,
+            provider_record_type="issue",
+            provider_record_id=item.provider_record_id,
+            provider_revision=(item.updated_at.isoformat() if item.updated_at else None),
+            source_created_at=item.created_at,
+            source_updated_at=item.updated_at,
+            source_started_at=_parse_datetime(metadata.get("started_at")),
+            source_completed_at=_parse_datetime(metadata.get("completed_at")),
+            observed_at=observed_at,
+            normalized_status=workflow_type,
+            completion_state=(
+                CompletionState.COMPLETED
+                if item.status == WorkStatus.COMPLETED
+                else CompletionState.INCOMPLETE
+                if item.status == WorkStatus.OPEN
+                else CompletionState.UNKNOWN
+            ),
+            priority=int(item.priority),
+            relationships=relationships,
+            milestone=milestone,
+            linked_communication=None,
+            freshness=ObservationFreshness.FRESH,
+            availability=ObservationAvailability.AVAILABLE,
+            evidence=ProviderEvidenceReference(
+                provider_reference=item.provider_reference,
+                provider_url=item.provider_url,
+                provider_identifier=str(metadata.get("issue_identifier") or "") or None,
+            ),
+        )
+
+    def milestone_change_observations(
+        self,
+        items: list[NormalizedWorkItem],
+        *,
+        scope_id: str,
+        observed_at: datetime,
+    ) -> tuple[ProviderObservation, ...]:
+        milestones: dict[str, dict[str, Any]] = {}
+        canonical_project_id: str | None = None
+        for item in items:
+            canonical_project_id = canonical_project_id or item.canonical_project_id
+            raw = item.provider_metadata.get("project_milestone")
+            if isinstance(raw, dict) and raw.get("id"):
+                milestones[str(raw["id"])] = raw
+        observations: list[ProviderObservation] = []
+        for milestone_id, raw in sorted(milestones.items()):
+            progress = _parse_float(raw.get("progress"))
+            updated_at = _parse_datetime(raw.get("updatedAt"))
+            observations.append(
+                ProviderObservation(
+                    canonical_project_id=canonical_project_id,
+                    provider=LINEAR_PROVIDER,
+                    scope_id=scope_id,
+                    provider_record_type="milestone",
+                    provider_record_id=milestone_id,
+                    provider_revision=updated_at.isoformat() if updated_at else None,
+                    source_updated_at=updated_at,
+                    observed_at=observed_at,
+                    normalized_status=None,
+                    completion_state=(
+                        CompletionState.COMPLETED
+                        if progress is not None and progress >= 1
+                        else CompletionState.INCOMPLETE
+                        if progress is not None
+                        else CompletionState.UNKNOWN
+                    ),
+                    priority=None,
+                    relationships=None,
+                    milestone=ObservedMilestone(
+                        milestone_id=milestone_id,
+                        name=(str(raw["name"]).strip() if raw.get("name") else None),
+                        progress=progress,
+                        completed=(progress >= 1 if progress is not None else None),
+                        updated_at=updated_at,
+                    ),
+                    linked_communication=None,
+                    freshness=ObservationFreshness.FRESH,
+                    availability=ObservationAvailability.AVAILABLE,
+                    evidence=ProviderEvidenceReference(
+                        provider_reference=scope_id,
+                        provider_identifier=(str(raw["name"]).strip() if raw.get("name") else milestone_id),
+                    ),
+                )
+            )
+        return tuple(observations)
 
     @staticmethod
     def _apply_hierarchy(items: list[NormalizedWorkItem]) -> list[NormalizedWorkItem]:
@@ -180,6 +311,57 @@ def _context_requirements(labels: list[str]) -> tuple[str, ...]:
             if requirement:
                 requirements.append(requirement)
     return tuple(dict.fromkeys(requirements))
+
+
+def _change_relationships(metadata: dict[str, Any]) -> tuple[ObservedRelationship, ...]:
+    relationships: list[ObservedRelationship] = []
+    for relation in metadata.get("relations") or []:
+        related = relation.get("relatedIssue") if isinstance(relation, dict) else None
+        if (
+            isinstance(related, dict)
+            and related.get("id")
+            and str(relation.get("type") or "").lower() == "blocks"
+        ):
+            relationships.append(
+                ObservedRelationship(
+                    kind=RelationshipKind.BLOCKER,
+                    relationship_id=(str(relation["id"]) if relation.get("id") else None),
+                    related_provider_record_id=str(related["id"]),
+                    direction="blocks",
+                )
+            )
+    for relation in metadata.get("inverse_relations") or []:
+        related = relation.get("issue") if isinstance(relation, dict) else None
+        if (
+            isinstance(related, dict)
+            and related.get("id")
+            and str(relation.get("type") or "").lower() == "blocks"
+        ):
+            relationships.append(
+                ObservedRelationship(
+                    kind=RelationshipKind.BLOCKER,
+                    relationship_id=(str(relation["id"]) if relation.get("id") else None),
+                    related_provider_record_id=str(related["id"]),
+                    direction="blocked_by",
+                )
+            )
+    return tuple(
+        sorted(
+            relationships,
+            key=lambda value: (
+                value.direction or "",
+                value.related_provider_record_id,
+                value.relationship_id or "",
+            ),
+        )
+    )
+
+
+def _parse_float(value: Any) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 linear_work_adapter = LinearWorkAdapter()

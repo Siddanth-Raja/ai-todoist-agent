@@ -15,6 +15,12 @@ from app.dependency_evaluator import dependency_evaluator  # noqa: E402
 from app.linear_client import LinearProviderError, LinearReadResult  # noqa: E402
 from app.linear_work_adapter import linear_work_adapter  # noqa: E402
 from app.project_brain import ProjectBrainService  # noqa: E402
+from app.provider_changes import (  # noqa: E402
+    CompletionState,
+    ProviderEvidenceReference,
+    ProviderObservation,
+    provider_change_service,
+)
 from app.project_registry import project_registry_service  # noqa: E402
 from app.recommendation_service import recommendation_service  # noqa: E402
 from app.storage import create_canonical_project, ensure_database  # noqa: E402
@@ -216,6 +222,65 @@ class ProjectBrainServiceTests(unittest.TestCase):
         self.assertTrue(brain["task_groups"][0]["is_container"])
         self.assertEqual(brain["task_groups"][0]["parent_task"]["id"], "parent")
         self.assertEqual(brain["task_groups"][0]["subtasks"][0]["id"], "child")
+
+    def test_project_brain_retrieves_durable_recent_changes_from_shared_service(self):
+        project = self.registry.get_project_definition("pcos")
+        canonical_id = project["canonical_project_id"]
+        observed_at = self.now - timedelta(hours=2)
+        baseline = ProviderObservation(
+            canonical_project_id=canonical_id,
+            provider="linear",
+            scope_id="linear-project",
+            provider_record_type="issue",
+            provider_record_id="issue-139",
+            source_created_at=observed_at - timedelta(days=2),
+            source_updated_at=observed_at - timedelta(minutes=5),
+            observed_at=observed_at,
+            normalized_status="started",
+            completion_state=CompletionState.INCOMPLETE,
+            priority=3,
+            relationships=(),
+            evidence=ProviderEvidenceReference(provider_identifier="SID-139"),
+        )
+        provider_change_service.observe_scope(
+            provider="linear",
+            scope_id="linear-project",
+            canonical_project_id=canonical_id,
+            observations=[baseline],
+            observed_at=observed_at,
+            historical_coverage_start=observed_at - timedelta(days=30),
+        )
+        completed = baseline.model_copy(
+            update={
+                "source_updated_at": self.now - timedelta(hours=1, minutes=5),
+                "source_completed_at": self.now - timedelta(hours=1, minutes=5),
+                "observed_at": self.now - timedelta(hours=1),
+                "normalized_status": "completed",
+                "completion_state": CompletionState.COMPLETED,
+            }
+        )
+        provider_change_service.observe_scope(
+            provider="linear",
+            scope_id="linear-project",
+            canonical_project_id=canonical_id,
+            observations=[completed],
+            observed_at=completed.observed_at,
+            historical_coverage_start=observed_at - timedelta(days=30),
+        )
+        brain = self.service.build_project(
+            project=project,
+            tasks=[],
+            events=[],
+            memories=[],
+            activity=[],
+            now=self.now,
+            registry=self.registry,
+        )
+        self.assertEqual(brain["recent_changes"].total_count, 1)
+        self.assertEqual(
+            brain["recent_changes"].changes[0].category.value,
+            "work_completed",
+        )
 
     def test_build_project_uses_shared_recommendation_service_without_contract_leak(self):
         project = self.registry.get_project_definition("nebulo")

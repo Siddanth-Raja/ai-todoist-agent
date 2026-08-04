@@ -32,6 +32,11 @@ from .project_work_packages import (
     LinearProjectDiagnostic,
     project_work_package_service,
 )
+from .provider_changes import (
+    ObservationAvailability,
+    ObservationFreshness,
+    provider_change_service,
+)
 from .storage import (
     get_latest_project_focus_intent,
     list_activity,
@@ -143,6 +148,7 @@ class ProjectBrainService:
                 project=project,
                 registry=registry,
                 settings=settings,
+                observed_at=local_now,
             )
             linear_work.extend(linear_tasks)
             project_snapshots.append(
@@ -246,6 +252,7 @@ class ProjectBrainService:
             project=project,
             registry=registry,
             settings=settings,
+            observed_at=now,
         )
         return self.build_project(
             project=project,
@@ -400,6 +407,12 @@ class ProjectBrainService:
             explicit_intent=_latest_explicit_intent(canonical_project_id),
             next_step=selected_next_step,
         )
+        recent_changes = provider_change_service.query_changes(
+            canonical_project_id=canonical_project_id,
+            days=30,
+            evaluated_at=now,
+            limit=12,
+        )
 
         summary = {
             "key": project["key"],
@@ -439,6 +452,7 @@ class ProjectBrainService:
             "work_packages": work_packages,
             "linear_diagnostic": linear_diagnostic,
             "activity_focus": activity_focus,
+            "recent_changes": recent_changes,
         }
         return ProjectBrainProjectSnapshot(
             definition=project,
@@ -566,17 +580,29 @@ def _read_mapped_linear_work(
     project: dict[str, Any],
     registry: ProjectRegistrySnapshot,
     settings: Any,
+    observed_at: datetime,
 ) -> tuple[
     list[NormalizedWorkItem],
     tuple[EvaluatedDependencyEvidence, ...],
     LinearProjectDiagnostic,
 ]:
+    canonical_project_id = str(
+        project.get("canonical_project_id") or f"system:{project['key']}"
+    )
     mapping = registry.diagnose_canonical_project_mapping(
         str(project["key"]),
         provider="linear",
         resource_type="project",
     )
     if mapping.status != "mapped" or not mapping.provider_ref:
+        provider_change_service.record_coverage(
+            provider="linear",
+            scope_id=f"canonical:{canonical_project_id}",
+            canonical_project_id=canonical_project_id,
+            availability=ObservationAvailability.NOT_APPLICABLE,
+            observed_at=observed_at,
+            diagnostic="This canonical project has no Linear project mapping.",
+        )
         return [], (), LinearProjectDiagnostic(
             status="not_mapped",
             message="This canonical project has no Linear project mapping.",
@@ -586,17 +612,45 @@ def _read_mapped_linear_work(
     try:
         result = LinearClient(settings).list_issues(project_id=project_id)
     except Exception:
+        provider_change_service.record_coverage(
+            provider="linear",
+            scope_id=project_id,
+            canonical_project_id=canonical_project_id,
+            availability=ObservationAvailability.UNAVAILABLE,
+            observed_at=observed_at,
+            diagnostic="Linear could not be reached.",
+        )
         return [], (), LinearProjectDiagnostic(
             status="provider_failure",
             provider_ref=project_id,
             message="Linear could not be reached; existing Project Brain sources remain available.",
         )
     if result.error:
+        provider_change_service.record_coverage(
+            provider="linear",
+            scope_id=project_id,
+            canonical_project_id=canonical_project_id,
+            availability=(
+                ObservationAvailability.NOT_CONFIGURED
+                if result.error.code == "not_configured"
+                else ObservationAvailability.UNAVAILABLE
+            ),
+            observed_at=observed_at,
+            diagnostic=result.error.message,
+        )
         return [], (), _linear_failure_diagnostic(project_id, result.error)
 
     for record in result.records:
         provider_project = record.get("project") if isinstance(record, dict) else None
         if not isinstance(provider_project, dict) or str(provider_project.get("id") or "") != project_id:
+            provider_change_service.record_coverage(
+                provider="linear",
+                scope_id=project_id,
+                canonical_project_id=canonical_project_id,
+                availability=ObservationAvailability.UNAVAILABLE,
+                observed_at=observed_at,
+                diagnostic="Linear returned an issue outside the mapped project boundary.",
+            )
             return [], (), LinearProjectDiagnostic(
                 status="malformed_response",
                 provider_ref=project_id,
@@ -605,24 +659,74 @@ def _read_mapped_linear_work(
     try:
         adapted = linear_work_adapter.adapt_many(result.records)
     except (TypeError, ValueError):
+        provider_change_service.record_coverage(
+            provider="linear",
+            scope_id=project_id,
+            canonical_project_id=canonical_project_id,
+            availability=ObservationAvailability.UNAVAILABLE,
+            observed_at=observed_at,
+            diagnostic="Linear returned issue data that could not be normalized.",
+        )
         return [], (), LinearProjectDiagnostic(
             status="malformed_response",
             provider_ref=project_id,
             message="Linear returned issue data that could not be normalized.",
         )
 
-    canonical_project_id = str(project["canonical_project_id"])
     mapped_items = [
         item.model_copy(update={"canonical_project_id": canonical_project_id})
         for item in adapted
     ]
     if len(mapped_items) != len(result.records):
+        provider_change_service.record_coverage(
+            provider="linear",
+            scope_id=project_id,
+            canonical_project_id=canonical_project_id,
+            availability=ObservationAvailability.UNAVAILABLE,
+            observed_at=observed_at,
+            diagnostic="Linear returned incomplete issue data for the mapped project.",
+        )
         return [], (), LinearProjectDiagnostic(
             status="malformed_response",
             provider_ref=project_id,
             message="Linear returned incomplete issue data for the mapped project.",
         )
     evaluated = dependency_evaluator.evaluate(mapped_items, registry=registry)
+    try:
+        issue_observations = tuple(
+            linear_work_adapter.change_observation(
+                item,
+                scope_id=project_id,
+                observed_at=observed_at,
+            )
+            for item in mapped_items
+        )
+        milestone_observations = linear_work_adapter.milestone_change_observations(
+            mapped_items,
+            scope_id=project_id,
+            observed_at=observed_at,
+        )
+        provider_change_service.observe_scope(
+            provider="linear",
+            scope_id=project_id,
+            canonical_project_id=canonical_project_id,
+            observations=(*issue_observations, *milestone_observations),
+            observed_at=observed_at,
+            # Linear exposes current state here, not a revision log. Comparison
+            # coverage therefore begins with PCOS's first successful observation.
+            historical_coverage_start=observed_at,
+            freshness=ObservationFreshness.FRESH,
+            diagnostic="Mapped Linear comparison state loaded successfully.",
+        )
+    except (TypeError, ValueError) as exc:
+        provider_change_service.record_coverage(
+            provider="linear",
+            scope_id=project_id,
+            canonical_project_id=canonical_project_id,
+            availability=ObservationAvailability.UNAVAILABLE,
+            observed_at=observed_at,
+            diagnostic=f"Linear comparison state could not be normalized: {exc}",
+        )
     return list(evaluated.work_items), evaluated.evidence, LinearProjectDiagnostic(
         status="connected",
         provider_ref=project_id,

@@ -418,6 +418,85 @@ def ensure_database() -> None:
                 CREATE INDEX IF NOT EXISTS idx_project_focus_intents_project_time
                     ON project_focus_intents(canonical_project_id, confirmed_at DESC);
 
+                CREATE TABLE IF NOT EXISTS provider_change_scopes (
+                    provider TEXT NOT NULL,
+                    scope_id TEXT NOT NULL,
+                    canonical_project_id TEXT,
+                    coverage_state TEXT NOT NULL,
+                    diagnostic TEXT,
+                    historical_coverage_start TEXT,
+                    retained_from TEXT,
+                    last_success_at TEXT,
+                    observed_at TEXT NOT NULL,
+                    observation_count INTEGER NOT NULL DEFAULT 0,
+                    schema_version INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (provider, scope_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS provider_record_checkpoints (
+                    provider TEXT NOT NULL,
+                    scope_id TEXT NOT NULL,
+                    provider_record_type TEXT NOT NULL,
+                    provider_record_id TEXT NOT NULL,
+                    canonical_project_id TEXT,
+                    source_revision TEXT,
+                    source_updated_at TEXT,
+                    observed_at TEXT NOT NULL,
+                    state_hash TEXT NOT NULL,
+                    state_json TEXT NOT NULL,
+                    schema_version INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (
+                        provider, scope_id, provider_record_type, provider_record_id
+                    )
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_provider_record_checkpoints_project
+                    ON provider_record_checkpoints(canonical_project_id, provider, scope_id);
+
+                CREATE TABLE IF NOT EXISTS provider_change_events (
+                    event_position INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id TEXT NOT NULL UNIQUE,
+                    deduplication_key TEXT NOT NULL UNIQUE,
+                    transition_category TEXT NOT NULL,
+                    canonical_project_id TEXT,
+                    provider TEXT NOT NULL,
+                    scope_id TEXT NOT NULL,
+                    provider_record_type TEXT NOT NULL,
+                    provider_record_id TEXT NOT NULL,
+                    source_event_at TEXT,
+                    source_updated_at TEXT,
+                    observed_at TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    time_basis TEXT NOT NULL,
+                    before_json TEXT,
+                    after_json TEXT,
+                    evidence_json TEXT NOT NULL,
+                    activity_id TEXT NOT NULL UNIQUE,
+                    schema_version INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_provider_change_events_project_time
+                    ON provider_change_events(canonical_project_id, effective_at DESC, event_position DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_provider_change_events_scope_time
+                    ON provider_change_events(provider, scope_id, effective_at DESC, event_position DESC);
+
+                CREATE TABLE IF NOT EXISTS provider_change_consumers (
+                    consumer_id TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    scope_id TEXT NOT NULL,
+                    acknowledged_effective_at TEXT NOT NULL,
+                    acknowledged_event_position INTEGER NOT NULL,
+                    acknowledged_at TEXT NOT NULL,
+                    schema_version INTEGER NOT NULL,
+                    PRIMARY KEY (consumer_id, provider, scope_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS canonical_projects (
                     id TEXT PRIMARY KEY,
                     key TEXT NOT NULL UNIQUE,

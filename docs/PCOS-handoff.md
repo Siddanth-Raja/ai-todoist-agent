@@ -9666,3 +9666,129 @@ Known limitations are intentional milestone boundaries:
 - No Morning State Synthesis, provider reconciliation, repository ingestion, background execution, or provider mutation was added.
 
 Publication is the single focused SID-138 commit containing this section and the bounded shared-intelligence implementation. A commit cannot contain its own final SHA without changing that SHA; therefore the exact published SHA is recorded in the SID-138 Linear evidence and final release report after the normal fast-forward push. Local HEAD, local `origin/main`, and GitHub `main` must match that exact SHA before SID-138 is marked Done. SID-139 remains To Do and must not begin during this closeout.
+
+---
+
+# 64. SID-139 Provider Change Detection Foundation
+
+SID-139, **Build Provider Change Detection Foundation**, adds the temporal evidence layer beneath shared PCOS intelligence. It is intentionally limited to observing provider state, comparing it with durable PCOS-owned history, recording meaningful transitions, and exposing those transitions through Project Brain. It does not implement SID-243 reconciliation/actionability, SID-244 Morning State Synthesis, correction controls, background polling, scheduling, or provider writes.
+
+The single preserved pipeline is:
+
+```text
+read-only provider records
+          ↓
+canonical provider observations
+          ↓
+provider-neutral comparison engine
+          ↓
+durable deduplicated change evidence
+          ↓
+SID-138 meaningful Activity
+          ↓
+Project Brain recent changes
+```
+
+`backend/app/provider_changes.py` owns comparison, persistence, retention, deduplication, coverage, time-window, cursor, and acknowledgement semantics. Linear-specific code only creates normalized observations. Routes and frontend components do not diff provider responses or infer what a transition means to the user.
+
+## 64.1 Bounded storage and compatibility
+
+Database initialization additively creates four idempotent tables without rewriting existing Activity history:
+
+- `provider_change_scopes` stores one bounded coverage/checkpoint summary per provider scope, including canonical project, comparison state, observation counts, historical coverage start, retained boundary, last success/poll times, and a bounded diagnostic.
+- `provider_record_checkpoints` stores only the latest schema-versioned, comparison-relevant normalized state for each stable provider record. The serialized state is capped at 30 KB and excludes raw responses, secrets, tokens, email bodies, descriptions, and unrelated metadata.
+- `provider_change_events` stores durable meaningful transitions with provider/record/project identity, before/after values limited to the compared field, source/update/observation/effective timestamps, time basis, deterministic deduplication key, evidence reference, and resulting Activity ID.
+- `provider_change_consumers` stores an optional explicit per-consumer acknowledged event position and timestamp. Ordinary reads never advance it.
+
+Checkpoint retention is constant per stable provider record: a successful in-order observation replaces the previous latest state. Change events are retained for 365 days and capped at the newest 10,000 events per provider scope; pruning advances the explicit retained boundary so an older query becomes `incomplete_history` instead of falsely claiming no change. SID-138 Activity is not destructively pruned by this mechanism. Existing databases upgrade through the repository's additive `CREATE TABLE/INDEX IF NOT EXISTS` initialization convention.
+
+## 64.2 Provider-neutral observation and transition contracts
+
+The frozen, extra-forbidden version-1 `ProviderObservation` contract preserves canonical project identity; provider and scope identity; provider record type and stable ID; optional provider revision; source creation, start, update, and completion times; observation time; normalized status; tri-state completion; priority; blocker/waiting relations; milestone identity/progress/completion; optional linked-communication outcome; freshness; availability/diagnostic state; bounded attributable evidence; and schema version. All timestamps must be timezone-aware. Unsupported fields remain absent and completion may remain `unknown`; missing values are never converted into negative evidence.
+
+The stable meaningful transition taxonomy is:
+
+- `record_created`
+- `work_started`
+- `status_changed`
+- `work_completed`
+- `work_reopened`
+- `priority_changed`
+- `blocker_added`, `blocker_changed`, `blocker_removed`
+- `waiting_started`, `waiting_changed`, `waiting_resolved`
+- `milestone_progressed`, `milestone_completed`
+- `linked_communication_changed`
+
+First observation establishes a baseline and emits no transition. A later newly observed record emits `record_created` only when its trustworthy source creation time falls after the scope's established comparison boundary. Identical state, ordering changes, polling, health checks, reads, UI activity, irrelevant metadata, future scheduled work, and stale/unknown observations emit nothing. Linked communication changes are supported by the shared contract but Linear does not fabricate them because it does not currently provide trustworthy communication-outcome evidence.
+
+## 64.3 Deduplication, atomic Activity, and time semantics
+
+Each transition has a SHA-256 identity over provider, stable record, category, relevant canonical before/after state, and the strongest source-time anchor. It does not use poll time. This suppresses repeated reads, duplicate source rows, retries, and recovery after restart while allowing a genuinely separate transition back to a prior value at a different source time. Out-of-order revisions are ignored conservatively; equal/limited-precision timestamps can still advance when the normalized state differs, and the transition identity prevents retry duplication.
+
+The change event, its deterministic UUIDv5 SID-138 Activity record, and the new record checkpoint are written in one SQLite transaction with unique constraints and `INSERT OR IGNORE` recovery. Meaningful Activity maps the new transition categories additively while retaining all legacy Activity behavior. Each Activity points back to `provider_change:<event-id>` and preserves canonical project, source provider, stable provider record, transition category, effective source time, observed time, time basis, and bounded before/after evidence. Unchanged observations, failed reads, and checkpoint maintenance never create Activity.
+
+Time placement prefers a trustworthy transition/completion/start time, then source record update time, and finally labels observation time as `observed_fallback`. Future source timestamps beyond a conservative five-minute skew do not poison ordering and use the explicit observed fallback. Retrieval accepts an injected timezone-aware `evaluated_at`, either an explicit `since` cursor time or exactly 7, 14, or 30 days, and stable event-position pagination. Source timestamps determine window placement when available; database insertion order does not.
+
+## 64.4 Coverage, failure, and “since last check” behavior
+
+Coverage is explicit as `complete_with_changes`, `complete_no_changes`, `baseline_established`, `stale_history`, `incomplete_history`, `provider_unavailable`, `provider_not_configured`, or `provider_not_applicable`. A successful first observation starts PCOS comparison coverage at observation time; an older provider record creation date does not manufacture historical coverage. A checkpoint becomes stale after 24 hours without a successful observation. Stale or unknown freshness cannot update comparison checkpoints.
+
+Provider failure or absence is never an empty successful result. Failure preserves previously recorded events for reading but the current conclusion remains unavailable/incomplete, so callers cannot say “nothing changed.” The same is true for missing or pruned history. Only sufficient successful coverage over the requested interval permits `complete_no_changes`.
+
+`ProviderChangeService.query_changes` reads durable events, groups them through canonical project attribution, returns complete totals before the presentation bound, orders by effective time/event position, and exposes a stable next cursor. Reads do not mark events seen. `acknowledge` is a separate bounded PCOS-owned service operation that validates an actual event position; no Morning Brief correction UI or route is added in SID-139.
+
+## 64.5 Linear adapter and Project Brain integration
+
+The existing Linear normalization path is extended rather than forked. Issue observations reuse canonical project/scope mapping and normalized work identity, including `startedAt`, status, completion timestamps, priority, inverse/forward blocker relations, and milestone identity. Milestone observations are separately deduplicated by stable milestone ID so a single milestone transition is not emitted once per issue; they compare progress and completion state. Linear queries remain GraphQL reads.
+
+On a successful mapped Linear read, Project Brain passes the complete issue and milestone observation set to the shared service before querying the additive typed `recent_changes` response. Provider failure, not-configured, not-applicable, and malformed-observation states are recorded honestly without hiding otherwise valid normalized work. Project Brain reads 30 days with a 12-event presentation bound, while totals and conclusions are computed from all eligible durable events first. Existing `/activity`, `/projects`, `/projects/{project_key}`, SID-138 `activity_focus`, normalized work, blockers, dependencies, recommendations, people, memories, events, diagnostics, classifications, and bounded collection behavior remain compatible. No frontend or route-specific change intelligence was added.
+
+Changed files for the focused implementation are:
+
+- `backend/app/provider_changes.py`
+- `backend/app/activity_domain.py`
+- `backend/app/storage.py`
+- `backend/app/linear_client.py`
+- `backend/app/linear_work_adapter.py`
+- `backend/app/project_brain.py`
+- `backend/app/main.py`
+- `backend/tests/test_provider_changes.py`
+- `backend/tests/test_linear_provider.py`
+- `backend/tests/test_project_brain_service.py`
+- `docs/PCOS-handoff.md`
+
+## 64.6 Representative deterministic and live verification
+
+Deterministic fixtures prove:
+
+- a PCOS-style completion/milestone transition is recorded once, remains canonically attributable, appears in the correct 7/14/30-day windows, and is not duplicated by repeated reads;
+- a Freelance-style Linear completion produces one observed completion without claiming Gmail independently confirmed sending and without reconciliation or a Linear write;
+- reliable unchanged XO-style history produces no fabricated transition and may report complete/no-change coverage without explaining pause, neglect, blockage, or VR dependence;
+- first observation explicitly establishes comparison history without creation/status/completion events;
+- provider failure preserves readable prior history but prevents a no-change conclusion;
+- duplicate observation/retry produces one durable event and one meaningful Activity;
+- start, status, completion, reopen, priority, blocker/waiting add/change/remove, milestone progress/completion, linked-communication seam, trustworthy new-record creation, out-of-order delivery, limited timestamp precision, return-to-prior-value transitions, future/missing timestamps, stale/unknown history, missing checkpoints, 7/14/30-day windows, pagination totals, explicit acknowledgement, and provider availability states behave deterministically.
+
+The real local FastAPI application started cleanly with an isolated database and no provider credentials. Authenticated `/health`, `/activity`, `/projects`, and repeated populated PCOS Project Brain detail reads returned HTTP 200. Existing Activity/focus contracts serialized; `recent_changes` serialized as `provider_not_configured`/`provider_not_applicable` with zero durable checkpoints and events, and repeated reads created no duplicates. Because this runtime had no Linear, Todoist, Calendar, Gmail, or other provider credentials, it honestly established no live provider transition and made no claim about current PCOS, Freelance, XO, or Nebulo movement. Representative transitions are therefore proven by fixtures rather than manufactured provider edits.
+
+No frontend file or presentation changed. The complete frontend regression suite and production build remain the UI compatibility gates; Chromium automation was not required for an unchanged presentation. The environment's browser sandbox also prohibited Chromium's local IPC socket during an attempted extra check, so no browser-only result is claimed.
+
+## 64.7 Final gates, limitations, and publication
+
+Final verified gates before publication:
+
+- Backend: 377 tests passed, plus 76 subtests.
+- Frontend: 50 tests passed.
+- TypeScript: `npx tsc --noEmit` passed.
+- Production: Next.js 15.5.19 `npm run build` passed.
+- Python compilation: `python -m compileall -q backend/app backend/tests` passed.
+- `git diff --check`: passed.
+- Privacy/secret scan: no credential, token, private key, raw provider payload, email body, or unrelated personal data added.
+- Forbidden-provider-mutation scan: no Linear or other provider write operation added; runtime provider access remained read-only.
+- Project/provider-hard-coding scan: no PCOS, Freelance, XO, Nebulo, VR, or person-specific transition rule in the shared engine.
+- Capability/slicing review: comparison consumes complete observation sets and query totals are calculated before the response bound; existing unrelated presentation bounds remain unchanged.
+- Database compatibility review: additive idempotent initialization preserved existing Activity rows and required no destructive migration.
+
+Intentional limitations remain: no scheduler/background poller; only Linear is a complete adapter; current Linear graph responses cannot reconstruct every intermediate transition that occurred between polls; linked communication awaits a trustworthy provider adapter; events older than retention become explicitly incomplete history; no reconciliation, temporal actionability, Morning State Synthesis, correction UI, provider mutation, or automatic seen-state behavior exists. These belong to SID-243, SID-244, or later work and were not started.
+
+Publication is one focused SID-139 commit containing this section and the implementation. A commit cannot contain its own final SHA without changing that SHA, so the exact published SHA is recorded in SID-139 Linear evidence and the final release report after the normal fast-forward push. Local HEAD, local `origin/main`, and GitHub `main` must match it before SID-139 is marked Done. SID-243 may become unblocked but must remain To Do; the Personal Reality Loop milestone remains active.

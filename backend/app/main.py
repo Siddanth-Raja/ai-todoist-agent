@@ -30,6 +30,7 @@ from .gmail_review import (
 )
 from .project_brain import project_brain_service
 from .project_activity_focus import ProjectActivityFocus
+from .provider_changes import ChangeQueryResult
 from .project_work_packages import LinearProjectDiagnostic, ProjectWorkPackage
 from .storage import (
     create_habit,
@@ -641,6 +642,7 @@ class ProjectBrain(BaseModel):
     work_packages: list[ProjectWorkPackage] = Field(default_factory=list)
     linear_diagnostic: LinearProjectDiagnostic | None = None
     activity_focus: ProjectActivityFocus
+    recent_changes: ChangeQueryResult
 
 
 @app.get("/health")

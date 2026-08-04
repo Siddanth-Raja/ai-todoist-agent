@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 import unittest
@@ -232,6 +233,34 @@ class LinearWorkAdapterTests(unittest.TestCase):
         for linear_priority, normalized in expected.items():
             self.assertEqual(normalize_linear_priority(linear_priority), normalized)
         self.assertEqual(normalize_linear_priority(99), WorkPriority.NONE)
+
+    def test_change_observation_preserves_provider_and_canonical_identity(self):
+        source = issue()
+        source["projectMilestone"] = {
+            "id": "milestone-uuid",
+            "name": "Reality Loop",
+            "targetDate": None,
+            "progress": 0.5,
+            "updatedAt": "2026-07-12T00:00:00Z",
+        }
+        item = linear_work_adapter.adapt_issue(source).model_copy(
+            update={"canonical_project_id": "project-pcos"}
+        )
+        observed_at = datetime(2026, 7, 13, tzinfo=timezone.utc)
+        observed = linear_work_adapter.change_observation(
+            item, scope_id="provider-project", observed_at=observed_at
+        )
+        self.assertEqual(observed.provider, "linear")
+        self.assertEqual(observed.provider_record_id, source["id"])
+        self.assertEqual(observed.canonical_project_id, "project-pcos")
+        self.assertEqual(observed.milestone.milestone_id, "milestone-uuid")
+        self.assertIsNone(observed.milestone.progress)
+        self.assertEqual(observed.observed_at, observed_at)
+        milestone_observations = linear_work_adapter.milestone_change_observations(
+            [item], scope_id="provider-project", observed_at=observed_at
+        )
+        self.assertEqual(len(milestone_observations), 1)
+        self.assertEqual(milestone_observations[0].milestone.progress, 0.5)
 
     def test_workflow_status_normalization_uses_state_type(self):
         self.assertEqual(normalize_linear_status("started"), WorkStatus.OPEN)

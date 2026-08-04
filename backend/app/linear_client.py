@@ -71,6 +71,7 @@ query PcosLinearIssues(
       priorityLabel
       createdAt
       updatedAt
+      startedAt
       completedAt
       canceledAt
       dueDate
@@ -78,7 +79,7 @@ query PcosLinearIssues(
       state { id name type }
       project { id name }
       parent { id identifier }
-      projectMilestone { id name targetDate }
+      projectMilestone { id name targetDate progress updatedAt }
       assignee { id name email }
       team { id key name }
       labels { nodes { id name } }

@@ -21,6 +21,7 @@ from app.calendar_tools import (  # noqa: E402
     find_busy_conflict,
     infer_event_category,
 )
+from app.activity_domain import MeaningfulActivityEvent  # noqa: E402
 from app.storage import DEFAULT_MEMORIES, ensure_database  # noqa: E402
 from app.project_work_packages import LinearProjectDiagnostic  # noqa: E402
 from app.todoist_tools import TodoistReadResult  # noqa: E402
@@ -112,6 +113,40 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                 session_id="test-session",
                 pending_action={"type": "resolve_calendar_conflict"},
             )
+
+    def test_activity_endpoint_preserves_legacy_rows_and_serializes_typed_evidence(self):
+        observed_at = datetime(2026, 8, 4, 12, 0, tzinfo=ZoneInfo("America/Chicago"))
+        typed = main.activity_create(
+            request=main.ActivityCreate(
+                meaningful_event=MeaningfulActivityEvent(
+                    category="work_completed",
+                    canonical_project_id="project-pcos-ai-todoist-agent",
+                    source_provider="linear",
+                    provider_record_type="issue",
+                    provider_record_id="issue-138",
+                    source_timestamp=observed_at,
+                    observed_at=observed_at,
+                    evidence_key="linear:issue-138:completed:v1",
+                    summary="Completed SID-138",
+                    attributable_payload={"provider_identifier": "SID-138"},
+                )
+            ),
+            authorization=self.authorization,
+        )
+        legacy = main.activity_create(
+            request=main.ActivityCreate(
+                type="legacy_event",
+                title="Legacy event remains available",
+            ),
+            authorization=self.authorization,
+        )
+        listed = main.activity_index(limit=10, authorization=self.authorization)
+
+        self.assertEqual(typed["meaningful_event"]["provider_record_id"], "issue-138")
+        self.assertFalse(typed["legacy_unstructured"])
+        self.assertIsNone(legacy["meaningful_event"])
+        self.assertTrue(legacy["legacy_unstructured"])
+        self.assertEqual([item["id"] for item in listed[:2]], [legacy["id"], typed["id"]])
 
     def test_email_organization_gate_is_local_locked_and_credential_free(self):
         status = main.email_organization_gate(authorization=self.authorization)

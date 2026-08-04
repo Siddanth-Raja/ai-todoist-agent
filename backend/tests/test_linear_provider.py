@@ -18,7 +18,7 @@ from app.linear_work_adapter import (  # noqa: E402
     normalize_linear_priority,
     normalize_linear_status,
 )
-from app.work_domain import WorkPriority, WorkStatus  # noqa: E402
+from app.work_domain import WorkEffortSize, WorkPriority, WorkStatus  # noqa: E402
 
 
 def settings(linear_api_key="linear-secret"):
@@ -58,6 +58,7 @@ def issue(**overrides):
         "identifier": "SID-133",
         "title": "Implement Linear adapter",
         "description": "Read-only integration",
+        "estimate": None,
         "priority": 2,
         "priorityLabel": "High",
         "createdAt": "2026-07-01T10:00:00.000Z",
@@ -72,6 +73,7 @@ def issue(**overrides):
         "projectMilestone": {"id": "milestone-uuid", "name": "Milestone 3", "targetDate": "2026-07-31"},
         "assignee": {"id": "user-uuid", "name": "Siddanth", "email": "s@example.com"},
         "team": {"id": "team-uuid", "key": "SID", "name": "Siddanth"},
+        "labels": connection([]),
         "relations": connection([]),
         "inverseRelations": connection([]),
     }
@@ -261,6 +263,32 @@ class LinearWorkAdapterTests(unittest.TestCase):
         self.assertFalse(completed.is_executable)
         self.assertEqual(canceled.status, WorkStatus.CANCELED)
         self.assertFalse(canceled.is_executable)
+
+    def test_structured_estimate_and_context_labels_feed_provider_neutral_fields(self):
+        structured = linear_work_adapter.adapt_issue(
+            issue(
+                estimate=5,
+                labels=connection(
+                    [
+                        {"id": "one", "name": "context:VR headset"},
+                        {"id": "two", "name": "environment:dedicated workspace"},
+                        {"id": "three", "name": "ordinary-label"},
+                    ]
+                ),
+            )
+        )
+        unknown = linear_work_adapter.adapt_issue(
+            issue(id="unknown", identifier="SID-999", estimate=None, labels=connection([]))
+        )
+
+        self.assertEqual(structured.effort_size, WorkEffortSize.LARGE)
+        self.assertEqual(
+            structured.context_requirements,
+            ("VR headset", "dedicated workspace"),
+        )
+        self.assertEqual(structured.provider_metadata["estimate"], 5)
+        self.assertIsNone(unknown.effort_size)
+        self.assertEqual(unknown.context_requirements, ())
 
     def test_parent_child_hierarchy_uses_canonical_container_rules(self):
         parent = issue(id="parent", identifier="SID-100", title="Parent")

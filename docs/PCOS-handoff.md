@@ -9506,3 +9506,163 @@ SID-227 is the final implementation issue in **Milestone 1 — Canonical Project
 The next available milestone is **Freelance Outbound Automation V1**. It remains unstarted.
 
 Publication is the single focused SID-227 commit containing this section and the bounded frontend changes. Because a commit cannot contain its own final SHA without changing that SHA, the exact published commit is recorded in the SID-227 Linear evidence and final release report after the normal fast-forward push. Local HEAD, local `origin/main`, and GitHub `main` must match that exact SHA before SID-227 and the milestone are closed.
+
+---
+
+# 63. SID-138 Shared Project Activity and Focus Model
+
+SID-138, **Define the Shared Project Activity and Focus Model**, is implemented and verified as the first implementation issue in **Personal Reality Loop V1 — Morning State Synthesis**. The implementation extends canonical Project Brain intelligence. It does not create a Morning Brief engine, provider checkpointing, change detection, reconciliation, correction controls, background workers, repository ingestion, provider mutations, or surface-specific inference.
+
+The preserved dependency direction is:
+
+```text
+provider records + canonical mappings + PCOS-owned activity/intent
+                              ↓
+                  normalized attributable evidence
+                              ↓
+             shared Project Activity and Focus Model
+                              ↓
+                        Project Brain
+```
+
+`backend/app/project_activity_focus.py` owns the interpretation rules. Route handlers and frontend components only validate or consume the additive contract.
+
+## 63.1 Meaningful Activity contract
+
+Typed Activity is a frozen, extra-forbidden version-1 event stored additively inside the existing Activity payload under `activity_event`. Supported categories are:
+
+- `approved_action`
+- `work_created`, `work_started`, `work_updated`, `work_completed`
+- `milestone_progress`, `milestone_completed`
+- `blocker_added`, `blocker_changed`, `blocker_removed`
+- `waiting_external`
+- `project_state_reviewed`, `focus_decision_reviewed`
+- `project_paused`, `project_resumed`
+- `repository_catch_up`
+- `communication_linked`, `communication_outcome`
+- `memory_context_reviewed`
+
+Each typed event carries an optional canonical project ID; source/provider identity; atomic provider record type and stable ID; timezone-aware source and observed timestamps; freshness; a stable evidence key; a bounded human-readable summary; and a bounded attributable payload. The payload is capped at 20 KB and rejects credential/token/authorization/password/secret fields, raw provider payloads, and email bodies. The enum intentionally excludes GET requests, provider polls, health checks, page views, UI clicks, refreshes, and other low-level reads.
+
+Existing Activity rows are not rewritten or deleted. `/activity` continues to return the legacy fields and adds:
+
+- `meaningful_event`, populated only when the version-1 payload validates;
+- `activity_schema_version`;
+- `legacy_unstructured`.
+
+Legacy, malformed, and unknown-future-version rows remain readable as unstructured Activity. They do not fabricate project identity, provider-record identity, source time, observed time, or freshness that the historical row never stored. The public Activity list retains its existing 200-row bound; Project Brain performs an unbounded internal Activity read so interpretation is computed from the complete eligible set before its existing recent-activity presentation slice.
+
+## 63.2 Shared Project Activity and Focus contract
+
+The shared contract exposes one conservative primary state from this stable vocabulary:
+
+- `active_momentum`
+- `waiting_external`
+- `intentionally_paused`
+- `dedicated_session_needed`
+- `quiet_possible_drift`
+- `recently_completed`
+- `insufficient_evidence`
+
+It also exposes compatible supporting states, conflicting states, ordered attributable evidence, total and returned evidence counts, the response evidence limit, 7/14/30-day windows, confidence, overall freshness, provider coverage, confirmed-versus-inferred status, the complete current explicit-intent record when present, and an optional confirmation question/reason.
+
+Interpretation precedence is conservative:
+
+1. An active reviewed intent is primary and cannot be silently replaced by inference.
+2. Strong evidence at or after confirmation is retained as a conflict and requests review; it does not mutate the intent.
+3. Without active explicit intent, recent execution momentum outranks compatible waiting/completion signals, followed by a current external wait, a structured dedicated-session requirement, and meaningful recent completion.
+4. `quiet_possible_drift` requires trustworthy applicable provider history covering at least 30 days, older evidence, and no eligible evidence in the last 30 days. It remains a possibility requiring confirmation.
+5. Missing, stale, unavailable, not-configured, unknown, or historically incomplete coverage prevents a confident drift conclusion and falls back to `insufficient_evidence` when no stronger current signal exists.
+
+Explicit intent is a small PCOS-owned `project_focus_intents` table keyed to canonical project identity. It stores confirmed state, reason, confirmation time, optional expiry, optional review time, and an optional review trigger. An explicit pause is invalid unless it has expiry or review semantics. Expired intent no longer overrides inference, remains projected for review context, and requests confirmation. No provider metadata or fake Linear work stores user intent, and SID-138 adds no correction UI.
+
+## 63.3 Time, evidence, and freshness behavior
+
+Evaluation accepts an injected timezone-aware `evaluated_at`. Source timestamps are used ahead of observed or insertion time. The 7-, 14-, and 30-day boundaries are deterministic and inclusive. Future source timestamps do not enter a window or produce momentum; they are retained as unknown-freshness evidence for review. Due dates and scheduled future work do not create activity.
+
+Evidence deduplication uses provider, category, stable provider-record identity, and source time. A normalized work item and typed Activity record describing the same provider event count once. Interpretation uses the full deduplicated set before returning the ordered 12-record supporting subset, with complete totals and window counts preserved.
+
+Current dependency records support external waiting. Typed blocker/waiting records are evaluated by stable provider-record identity, and a newer `blocker_removed` event clears the older waiting signal. Old historical waits do not remain current indefinitely. A structured next step can support `dedicated_session_needed` through provider-neutral `effort_size` and `context_requirements`. Linear estimates and `context:`/`environment:` labels populate those fields; Todoist duration and the same label prefixes populate them. No project key, issue title, person, `VR`, or other arbitrary title keyword controls inference.
+
+Provider coverage distinguishes `fresh`, `stale`, `unavailable`, `not_configured`, `not_applicable`, `missing_history`, and `unknown`. Provider absence is never converted into an empty project result. The current Todoist active-task read is honestly `missing_history` because it lacks completed-work history; mapped Linear reads are fresh only when connected and attributable timestamps exist. Provider reads and polling are never momentum.
+
+## 63.4 Project Brain integration and compatibility
+
+Project Brain now computes `activity_focus` inside its service boundary after canonical project resolution, Todoist/Linear normalization, dependency evaluation, and shared recommendation selection. Both `/projects` and `/projects/{project_key}` expose the additive typed result. Existing canonical registry semantics, provider identity, hierarchy and parent-container behavior, recommendations/evidence, blockers, dependency totals, diagnostics, events, people, memories, legacy Activity reachability, and Needs Classification remain intact.
+
+The frontend API type layer understands the additive Activity and Project Activity/Focus contracts, including explicit intent and provider coverage. No new Project Brain UI, Morning Brief UI, Today logic, Chat logic, recommendation scoring, or frontend intelligence was added.
+
+Changed files for the focused implementation are:
+
+- `backend/app/activity_domain.py`
+- `backend/app/project_activity_focus.py`
+- `backend/app/work_domain.py`
+- `backend/app/linear_client.py`
+- `backend/app/linear_work_adapter.py`
+- `backend/app/todoist_work_adapter.py`
+- `backend/app/storage.py`
+- `backend/app/project_brain.py`
+- `backend/app/main.py`
+- `backend/tests/test_activity_domain.py`
+- `backend/tests/test_project_activity_focus.py`
+- `backend/tests/test_app_surfaces.py`
+- `backend/tests/test_linear_provider.py`
+- `backend/tests/test_project_brain_service.py`
+- `frontend/src/lib/api.ts`
+- `docs/PCOS-handoff.md`
+
+## 63.5 Representative deterministic evidence
+
+Credential-free fixtures prove general behavior rather than assigning states by project name:
+
+- A quiet-history fixture with reliable 30-day coverage and a large next executable step requiring a structured headset/workspace context returns `dedicated_session_needed`, retains quiet as supporting context, requests confirmation, and never emits abandoned, neglected, or failed language. The same structured input produces the same state for unrelated project keys.
+- Recent attributable started/updated work returns `active_momentum`; recent meaningful work or milestone completion returns `recently_completed` without implying total project completion. Exact 7/14/30-day boundary placement is covered.
+- A current external dependency returns `waiting_external` and prevents drift. A newer blocker-removal event clears the older typed wait.
+- Explicit pause plus newer completed work preserves `intentionally_paused` as primary, exposes `recently_completed` as conflicting, retains the intent reason/review time, and requests review. Expired intent no longer overrides current inference.
+- Stale blocker coverage, provider failure, missing history, and no evidence return conservative uncertainty. Drift is unavailable without reliable 30-day history.
+- Duplicate typed records and normalized-work/Activity aliases are counted once. Twenty eligible records still compute momentum and full window totals before the ordered five-record test projection.
+
+## 63.6 Live read-only runtime and browser verification
+
+The real local FastAPI service started cleanly and returned authenticated HTTP 200 for health, `/activity`, `/projects`, and populated Project Brain detail. Fifty existing Activity rows loaded; all fifty are correctly identified as legacy/unstructured, with no destructive migration.
+
+Current read-only provider evidence was inspected for PCOS, Freelance, XO, and Nebulo. The observed snapshot was:
+
+| Project | Primary state | Supporting state | Evidence | Honesty boundary |
+| --- | --- | --- | ---: | --- |
+| PCOS | `active_momentum` | `waiting_external` | 146 | Low confidence/unknown overall freshness because Todoist history is incomplete. |
+| Freelance | `waiting_external` | `recently_completed` | 50 | Low confidence/unknown overall freshness. |
+| XO | `waiting_external` | none | 56 | Current data does not provide the structured size/context needed to claim a dedicated-session state. |
+| Nebulo | `waiting_external` | none | 20 | The state comes from current general dependency evidence, not a hard-coded person or project rule. |
+
+Every returned supporting reference carried canonical project and provider identity. All four mapped Linear reads were connected/fresh; Todoist coverage remained explicitly `missing_history`. These observations describe only the inspected live snapshot; unavailable representative states are proven by deterministic fixtures.
+
+The existing Projects index and populated PCOS detail rendered in the real local Next.js application at the browser's 1280 × 720 viewport with all seven project links, full project heading/data, no failed application request, no console warning/error, no framework error dialog, and no horizontal page overflow. The two SID-218 bounded collections retained all live content and vertical scrolling without horizontal overflow. The unchanged responsive presentation tests separately preserved natural narrow-flow behavior. A temporary same-origin local rewrite used only to bridge the in-app browser's localhost-origin restriction was removed before final diff and build verification.
+
+Only authenticated `GET`/read operations were used. No Todoist, Linear, Gmail, Google Calendar, or other external provider mutation occurred.
+
+## 63.7 Final automated gates and limitations
+
+Final verified gates before publication:
+
+- Backend: 355 tests passed.
+- Frontend: 50 tests passed.
+- TypeScript: `./node_modules/.bin/tsc --noEmit` passed.
+- Production: Next.js 15.5.19 `npm run build` passed for all routes.
+- Python compilation: `python -m compileall -q backend/app backend/tests` passed.
+- `git diff --check`: passed.
+- Privacy/secret scan: no added credential, OAuth value, private key, personal email address, or token literal.
+- Forbidden-provider-mutation scan: no provider write call or new mutation capability.
+- Project-specific inference scan: no PCOS, Freelance, XO, Nebulo, VR/headset, abandonment, neglect, or failure rule in the shared model.
+- Record-slicing review: Project Brain reads all Activity and focus interpretation computes from all deduplicated eligible evidence before its documented bounded response projection; existing unrelated presentation bounds remain unchanged.
+
+Known limitations are intentional milestone boundaries:
+
+- SID-138 does not implement SID-139 checkpoints, provider change detection, or “since my last check.”
+- Todoist's current active-task adapter cannot establish completed-work history, so it reports `missing_history` and reduces confidence.
+- Existing live records may lack structured estimate/context labels, so the model remains insufficient or chooses another supported state instead of guessing a dedicated-session requirement from titles.
+- No correction/confirmation UI exists yet; explicit intent has a durable backend contract and storage boundary only.
+- Legacy Activity remains attributable only to fields actually present in the historical payload.
+- No Morning State Synthesis, provider reconciliation, repository ingestion, background execution, or provider mutation was added.
+
+Publication is the single focused SID-138 commit containing this section and the bounded shared-intelligence implementation. A commit cannot contain its own final SHA without changing that SHA; therefore the exact published SHA is recorded in the SID-138 Linear evidence and final release report after the normal fast-forward push. Local HEAD, local `origin/main`, and GitHub `main` must match that exact SHA before SID-138 is marked Done. SID-139 remains To Do and must not begin during this closeout.

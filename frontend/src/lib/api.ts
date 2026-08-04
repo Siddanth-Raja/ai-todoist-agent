@@ -241,6 +241,45 @@ export type ActivityEntry = {
   metadata: Record<string, unknown> | null;
   payload: Record<string, unknown> | null;
   created_at: string;
+  meaningful_event: MeaningfulActivityEvent | null;
+  activity_schema_version: number | null;
+  legacy_unstructured: boolean;
+};
+
+export type MeaningfulActivityCategory =
+  | "approved_action"
+  | "work_created"
+  | "work_started"
+  | "work_updated"
+  | "work_completed"
+  | "milestone_progress"
+  | "milestone_completed"
+  | "blocker_added"
+  | "blocker_changed"
+  | "blocker_removed"
+  | "waiting_external"
+  | "project_state_reviewed"
+  | "focus_decision_reviewed"
+  | "project_paused"
+  | "project_resumed"
+  | "repository_catch_up"
+  | "communication_linked"
+  | "communication_outcome"
+  | "memory_context_reviewed";
+
+export type MeaningfulActivityEvent = {
+  schema_version: number;
+  category: MeaningfulActivityCategory;
+  canonical_project_id: string | null;
+  source_provider: string;
+  provider_record_type: string | null;
+  provider_record_id: string | null;
+  source_timestamp: string;
+  observed_at: string;
+  freshness: "fresh" | "stale" | "unavailable" | "unknown";
+  evidence_key: string;
+  summary: string;
+  attributable_payload: Record<string, unknown>;
 };
 
 export type LifeArea = {
@@ -399,6 +438,80 @@ export type DependencySummary = {
   resolved_dependency_count: number;
 };
 
+export type ProjectFocusState =
+  | "active_momentum"
+  | "waiting_external"
+  | "intentionally_paused"
+  | "dedicated_session_needed"
+  | "quiet_possible_drift"
+  | "recently_completed"
+  | "insufficient_evidence";
+
+export type ProjectActivityFocus = {
+  canonical_project_id: string;
+  canonical_project_key: string;
+  evaluated_at: string;
+  primary_state: ProjectFocusState;
+  supporting_states: ProjectFocusState[];
+  conflicting_states: ProjectFocusState[];
+  evidence: Array<{
+    evidence_key: string;
+    category: string;
+    canonical_project_id: string;
+    source_kind: string;
+    provider: string;
+    provider_record_type: string | null;
+    provider_record_id: string | null;
+    source_timestamp: string | null;
+    observed_at: string;
+    freshness: "fresh" | "stale" | "unavailable" | "unknown";
+    summary: string;
+    metadata: Record<string, unknown>;
+  }>;
+  evidence_total_count: number;
+  evidence_returned_count: number;
+  evidence_limit: number;
+  evaluated_windows: Array<{
+    days: 7 | 14 | 30;
+    starts_at: string;
+    ends_at: string;
+    evidence_count: number;
+    categories: string[];
+  }>;
+  confidence: "low" | "medium" | "high";
+  freshness: "fresh" | "stale" | "unavailable" | "unknown";
+  provider_coverage: Array<{
+    provider: string;
+    provider_reference: string | null;
+    state:
+      | "fresh"
+      | "stale"
+      | "unavailable"
+      | "not_configured"
+      | "not_applicable"
+      | "missing_history"
+      | "unknown";
+    observed_at: string;
+    historical_coverage_start: string | null;
+    detail: string | null;
+  }>;
+  explicit_intent: {
+    id: string;
+    canonical_project_id: string;
+    confirmed_state: ProjectFocusState;
+    reason: string | null;
+    confirmed_at: string;
+    expires_at: string | null;
+    review_after: string | null;
+    review_trigger: string | null;
+  } | null;
+  explicitly_confirmed: boolean;
+  inferred: boolean;
+  user_confirmation_recommended: boolean;
+  confirmation_question: string | null;
+  confirmation_reason: string | null;
+};
+
 export type ProjectBrain = {
   key: string;
   name: string;
@@ -419,6 +532,7 @@ export type ProjectBrain = {
   recent_activity: ActivityEntry[];
   work_packages: ProjectWorkPackage[];
   linear_diagnostic: LinearProjectDiagnostic | null;
+  activity_focus: ProjectActivityFocus;
 };
 
 export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {

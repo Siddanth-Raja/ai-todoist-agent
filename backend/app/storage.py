@@ -10,6 +10,11 @@ import threading
 import uuid
 from typing import Any
 
+from .activity_domain import (
+    MeaningfulActivityEvent,
+    activity_contract_projection,
+    activity_event_payload,
+)
 from .config import BACKEND_DIR
 
 
@@ -392,6 +397,27 @@ def ensure_database() -> None:
                     created_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS project_focus_intents (
+                    id TEXT PRIMARY KEY,
+                    canonical_project_id TEXT NOT NULL,
+                    confirmed_state TEXT NOT NULL CHECK(confirmed_state IN (
+                        'active_momentum', 'waiting_external', 'intentionally_paused',
+                        'dedicated_session_needed', 'quiet_possible_drift',
+                        'recently_completed', 'insufficient_evidence'
+                    )),
+                    reason TEXT,
+                    confirmed_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    review_after TEXT,
+                    review_trigger TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (canonical_project_id) REFERENCES canonical_projects(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_project_focus_intents_project_time
+                    ON project_focus_intents(canonical_project_id, confirmed_at DESC);
+
                 CREATE TABLE IF NOT EXISTS canonical_projects (
                     id TEXT PRIMARY KEY,
                     key TEXT NOT NULL UNIQUE,
@@ -636,7 +662,11 @@ def _activity_from_row(row: sqlite3.Row) -> dict[str, Any]:
     item["type"] = action_type
     item["description"] = detail
     item["source"] = source
-    return item
+    return activity_contract_projection(item)
+
+
+def _focus_intent_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    return dict(row)
 
 
 def _ensure_activity_columns(connection: sqlite3.Connection) -> None:
@@ -983,18 +1013,27 @@ def create_habit_checkin(
     return dict(row)
 
 
-def list_activity(limit: int = 30) -> list[dict[str, Any]]:
+def list_activity(limit: int | None = 30) -> list[dict[str, Any]]:
     ensure_database()
     with _connect() as connection:
-        rows = connection.execute(
-            """
-            SELECT id, action_type, title, detail, payload, source, created_at
-            FROM activity_logs
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        if limit is None:
+            rows = connection.execute(
+                """
+                SELECT id, action_type, title, detail, payload, source, created_at
+                FROM activity_logs
+                ORDER BY created_at DESC
+                """
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                """
+                SELECT id, action_type, title, detail, payload, source, created_at
+                FROM activity_logs
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
     return [_activity_from_row(row) for row in rows]
 
 
@@ -1037,6 +1076,87 @@ def log_activity(
             (activity_id,),
         ).fetchone()
     return _activity_from_row(row)
+
+
+def log_meaningful_activity(event: MeaningfulActivityEvent) -> dict[str, Any]:
+    return log_activity(
+        action_type=event.category.value,
+        title=event.summary,
+        detail=None,
+        source=event.source_provider,
+        payload=activity_event_payload(event),
+        created_at=event.observed_at.isoformat(),
+    )
+
+
+def save_project_focus_intent(
+    *,
+    canonical_project_id: str,
+    confirmed_state: str,
+    reason: str | None,
+    confirmed_at: datetime,
+    expires_at: datetime | None = None,
+    review_after: datetime | None = None,
+    review_trigger: str | None = None,
+) -> dict[str, Any]:
+    from .project_activity_focus import ExplicitProjectIntent
+
+    ensure_database()
+    intent_id = str(uuid.uuid4())
+    validated = ExplicitProjectIntent(
+        id=intent_id,
+        canonical_project_id=canonical_project_id,
+        confirmed_state=confirmed_state,
+        reason=reason,
+        confirmed_at=confirmed_at,
+        expires_at=expires_at,
+        review_after=review_after,
+        review_trigger=review_trigger,
+    )
+    now = _utc_now()
+    with _connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO project_focus_intents
+                (id, canonical_project_id, confirmed_state, reason, confirmed_at,
+                 expires_at, review_after, review_trigger, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                validated.id,
+                validated.canonical_project_id,
+                validated.confirmed_state.value,
+                validated.reason,
+                validated.confirmed_at.isoformat(),
+                validated.expires_at.isoformat() if validated.expires_at else None,
+                validated.review_after.isoformat() if validated.review_after else None,
+                validated.review_trigger,
+                now,
+                now,
+            ),
+        )
+        row = connection.execute(
+            "SELECT * FROM project_focus_intents WHERE id = ?",
+            (intent_id,),
+        ).fetchone()
+    return _focus_intent_from_row(row)
+
+
+def get_latest_project_focus_intent(
+    canonical_project_id: str,
+) -> dict[str, Any] | None:
+    ensure_database()
+    with _connect() as connection:
+        row = connection.execute(
+            """
+            SELECT * FROM project_focus_intents
+            WHERE canonical_project_id = ?
+            ORDER BY confirmed_at DESC, created_at DESC
+            LIMIT 1
+            """,
+            (canonical_project_id,),
+        ).fetchone()
+    return _focus_intent_from_row(row) if row else None
 
 
 def list_canonical_projects(*, include_disabled: bool = False) -> list[dict[str, Any]]:

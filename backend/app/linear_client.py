@@ -66,6 +66,7 @@ query PcosLinearIssues(
       identifier
       title
       description
+      estimate
       priority
       priorityLabel
       createdAt
@@ -80,6 +81,7 @@ query PcosLinearIssues(
       projectMilestone { id name targetDate }
       assignee { id name email }
       team { id key name }
+      labels { nodes { id name } }
       relations(first: $relationFirst) {
         nodes {
           id

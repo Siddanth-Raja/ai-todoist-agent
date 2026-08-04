@@ -3,6 +3,7 @@ from datetime import datetime
 import re
 from typing import Any
 
+from .activity_domain import activity_event_from_record
 from .calendar_tools import list_upcoming_events
 from .dependency_evaluator import (
     DependencyEvaluationState,
@@ -21,11 +22,21 @@ from .project_registry import (
     ProjectRegistrySnapshot,
     project_registry_service,
 )
+from .project_activity_focus import (
+    ExplicitProjectIntent,
+    ProviderCoverage,
+    ProviderCoverageState,
+    project_activity_focus_service,
+)
 from .project_work_packages import (
     LinearProjectDiagnostic,
     project_work_package_service,
 )
-from .storage import list_activity, list_memory_entries
+from .storage import (
+    get_latest_project_focus_intent,
+    list_activity,
+    list_memory_entries,
+)
 from .todoist_work_adapter import todoist_work_adapter
 from .todoist_tools import (
     LIFE_AREA_TO_TODOIST_SECTION,
@@ -110,7 +121,8 @@ class ProjectBrainService:
         calendar_result = list_upcoming_events(settings, now=current_time, days=14)
         events = _future_events(calendar_result.events, local_now)
         memories = [memory for memory in list_memory_entries() if memory.get("enabled")]
-        activity = list_activity(limit=200)
+        activity = list_activity(limit=None)
+        todoist_coverage = _todoist_coverage(todoist_result.error, local_now)
         project_snapshots: list[ProjectBrainProjectSnapshot] = []
         linear_work: list[NormalizedWorkItem] = []
         work_provider_states = [
@@ -144,6 +156,10 @@ class ProjectBrainService:
                     registry=registry,
                     linear_diagnostic=linear_diagnostic,
                     dependency_evidence=dependency_evidence,
+                    provider_coverage=(
+                        todoist_coverage,
+                        _linear_coverage(linear_diagnostic, linear_tasks, local_now),
+                    ),
                 )
             )
             if linear_diagnostic.status not in {"connected", "not_mapped"}:
@@ -189,7 +205,8 @@ class ProjectBrainService:
         calendar_result = list_upcoming_events(settings, now=current_time, days=14)
         events = _future_events(calendar_result.events, local_now)
         memories = [memory for memory in list_memory_entries() if memory.get("enabled")]
-        activity = list_activity(limit=200)
+        activity = list_activity(limit=None)
+        todoist_coverage = _todoist_coverage(todoist_result.error, local_now)
         return next(
             (
                 self._build_project_with_linear(
@@ -201,6 +218,7 @@ class ProjectBrainService:
                     now=local_now,
                     registry=registry,
                     settings=settings,
+                    todoist_coverage=todoist_coverage,
                 )
                 for project in registry.projects
                 if project["key"] == canonical_key
@@ -222,6 +240,7 @@ class ProjectBrainService:
         now: datetime,
         registry: ProjectRegistrySnapshot,
         settings: Any,
+        todoist_coverage: ProviderCoverage,
     ) -> dict[str, Any]:
         linear_tasks, dependency_evidence, linear_diagnostic = _read_mapped_linear_work(
             project=project,
@@ -238,6 +257,10 @@ class ProjectBrainService:
             registry=registry,
             linear_diagnostic=linear_diagnostic,
             dependency_evidence=dependency_evidence,
+            provider_coverage=(
+                todoist_coverage,
+                _linear_coverage(linear_diagnostic, linear_tasks, now),
+            ),
         )
 
     def build_project(
@@ -252,6 +275,7 @@ class ProjectBrainService:
         registry: ProjectRegistrySnapshot | None = None,
         linear_diagnostic: LinearProjectDiagnostic | None = None,
         dependency_evidence: tuple[EvaluatedDependencyEvidence, ...] = (),
+        provider_coverage: tuple[ProviderCoverage, ...] = (),
     ) -> dict[str, Any]:
         return self.build_project_snapshot(
             project=project,
@@ -263,6 +287,7 @@ class ProjectBrainService:
             registry=registry,
             linear_diagnostic=linear_diagnostic,
             dependency_evidence=dependency_evidence,
+            provider_coverage=provider_coverage,
         ).summary
 
     def build_project_snapshot(
@@ -277,6 +302,7 @@ class ProjectBrainService:
         registry: ProjectRegistrySnapshot | None = None,
         linear_diagnostic: LinearProjectDiagnostic | None = None,
         dependency_evidence: tuple[EvaluatedDependencyEvidence, ...] = (),
+        provider_coverage: tuple[ProviderCoverage, ...] = (),
     ) -> ProjectBrainProjectSnapshot:
         registry = registry or self.registry_service.snapshot()
         todoist_tasks = [task for task in tasks if task.provider == "todoist"]
@@ -359,6 +385,21 @@ class ProjectBrainService:
             recommendation
             and recommendation.action == RecommendationAction.DO_WORK
         )
+        selected_next_step = _selected_work_item(recommendation, recommendation_candidates)
+        canonical_project_id = str(
+            project.get("canonical_project_id") or f"system:{project['key']}"
+        )
+        activity_focus = project_activity_focus_service.evaluate(
+            canonical_project_id=canonical_project_id,
+            canonical_project_key=str(project["key"]),
+            work_items=project_work,
+            activity_records=project_activity,
+            dependency_evidence=project_dependency_evidence,
+            provider_coverage=provider_coverage,
+            evaluated_at=now,
+            explicit_intent=_latest_explicit_intent(canonical_project_id),
+            next_step=selected_next_step,
+        )
 
         summary = {
             "key": project["key"],
@@ -397,6 +438,7 @@ class ProjectBrainService:
             "recent_activity": project_activity[:8],
             "work_packages": work_packages,
             "linear_diagnostic": linear_diagnostic,
+            "activity_focus": activity_focus,
         }
         return ProjectBrainProjectSnapshot(
             definition=project,
@@ -408,6 +450,115 @@ class ProjectBrainService:
 
 
 project_brain_service = ProjectBrainService()
+
+
+def _selected_work_item(
+    recommendation: WorkRecommendation | None,
+    candidates: list[NormalizedWorkItem],
+) -> NormalizedWorkItem | None:
+    if recommendation is None:
+        return None
+    identity = (
+        recommendation.selected_work.provider,
+        recommendation.selected_work.provider_record_id,
+    )
+    return next(
+        (
+            item
+            for item in candidates
+            if (item.provider, item.provider_record_id) == identity
+        ),
+        None,
+    )
+
+
+def _todoist_coverage(error: str | None, observed_at: datetime) -> ProviderCoverage:
+    if error is None:
+        return ProviderCoverage(
+            provider="todoist",
+            state=ProviderCoverageState.MISSING_HISTORY,
+            observed_at=observed_at,
+            detail="Todoist active-task data is current, but completed-work history is not available through this read path.",
+        )
+    state = (
+        ProviderCoverageState.NOT_CONFIGURED
+        if "missing" in error.lower()
+        else ProviderCoverageState.UNAVAILABLE
+    )
+    return ProviderCoverage(
+        provider="todoist",
+        state=state,
+        observed_at=observed_at,
+        detail=error,
+    )
+
+
+def _linear_coverage(
+    diagnostic: LinearProjectDiagnostic,
+    work_items: list[NormalizedWorkItem],
+    observed_at: datetime,
+) -> ProviderCoverage:
+    state_map = {
+        "not_mapped": ProviderCoverageState.NOT_APPLICABLE,
+        "not_configured": ProviderCoverageState.NOT_CONFIGURED,
+        "authentication_failure": ProviderCoverageState.UNAVAILABLE,
+        "provider_failure": ProviderCoverageState.UNAVAILABLE,
+        "malformed_response": ProviderCoverageState.UNAVAILABLE,
+    }
+    if diagnostic.status != "connected":
+        return ProviderCoverage(
+            provider="linear",
+            provider_reference=diagnostic.provider_ref,
+            state=state_map.get(diagnostic.status, ProviderCoverageState.UNKNOWN),
+            observed_at=observed_at,
+            detail=diagnostic.message,
+        )
+    history_start = min(
+        (
+            timestamp
+            for item in work_items
+            for timestamp in (item.created_at, item.updated_at)
+            if timestamp is not None
+            and timestamp.tzinfo is not None
+            and timestamp.utcoffset() is not None
+        ),
+        default=None,
+    )
+    return ProviderCoverage(
+        provider="linear",
+        provider_reference=diagnostic.provider_ref,
+        state=(
+            ProviderCoverageState.FRESH
+            if history_start is not None
+            else ProviderCoverageState.MISSING_HISTORY
+        ),
+        observed_at=observed_at,
+        historical_coverage_start=history_start,
+        detail=diagnostic.message,
+    )
+
+
+def _latest_explicit_intent(
+    canonical_project_id: str,
+) -> ExplicitProjectIntent | None:
+    raw = get_latest_project_focus_intent(canonical_project_id)
+    if raw is None:
+        return None
+    return ExplicitProjectIntent.model_validate(
+        {
+            key: raw.get(key)
+            for key in (
+                "id",
+                "canonical_project_id",
+                "confirmed_state",
+                "reason",
+                "confirmed_at",
+                "expires_at",
+                "review_after",
+                "review_trigger",
+            )
+        }
+    )
 
 
 def _read_mapped_linear_work(
@@ -570,6 +721,9 @@ def _activity_matches_project(
     project: dict[str, Any],
     registry: ProjectRegistrySnapshot,
 ) -> bool:
+    event = activity_event_from_record(entry)
+    if event is not None and event.canonical_project_id:
+        return event.canonical_project_id == project.get("canonical_project_id")
     payload = entry.get("payload") or entry.get("metadata") or {}
     if isinstance(payload, dict):
         payload_project = payload.get("resolved_project") or payload.get("project") or payload.get("project_key") or payload.get("project_context")

@@ -5,8 +5,9 @@ import requests
 from fastapi import FastAPI
 from fastapi import Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from .activity_domain import MeaningfulActivityEvent
 from .agent import MODE, confirm_pending_action, handle_chat
 from .action_executors import ActionExecutionContext
 from .pending_actions import PendingActionError, pending_action_service
@@ -28,6 +29,7 @@ from .gmail_review import (
     GmailReadonlySelectionRequest,
 )
 from .project_brain import project_brain_service
+from .project_activity_focus import ProjectActivityFocus
 from .project_work_packages import LinearProjectDiagnostic, ProjectWorkPackage
 from .storage import (
     create_habit,
@@ -41,6 +43,7 @@ from .storage import (
     list_habits,
     list_memory_entries,
     log_activity,
+    log_meaningful_activity,
     update_habit,
     update_memory_entry,
 )
@@ -166,12 +169,23 @@ class HabitCheckIn(BaseModel):
 class ActivityCreate(BaseModel):
     type: str | None = Field(default=None, min_length=1, max_length=80)
     action_type: str | None = Field(default=None, min_length=1, max_length=80)
-    title: str = Field(..., min_length=1, max_length=160)
+    title: str | None = Field(default=None, min_length=1, max_length=160)
     description: str | None = Field(default=None, max_length=1000)
     detail: str | None = Field(default=None, max_length=1000)
     source: str = Field(default="manual", min_length=1, max_length=80)
     metadata: dict[str, Any] | None = None
     payload: dict[str, Any] | None = None
+    meaningful_event: MeaningfulActivityEvent | None = None
+
+    @model_validator(mode="after")
+    def validate_contract(self) -> "ActivityCreate":
+        if self.meaningful_event is not None:
+            return self
+        if not (self.action_type or self.type) or not self.title:
+            raise ValueError(
+                "legacy Activity requires a type/action_type and title; typed Activity requires meaningful_event"
+            )
+        return self
 
 
 class ActivityEntry(BaseModel):
@@ -185,6 +199,9 @@ class ActivityEntry(BaseModel):
     metadata: dict[str, Any] | None
     payload: dict[str, Any] | None
     created_at: datetime
+    meaningful_event: MeaningfulActivityEvent | None = None
+    activity_schema_version: int | None = None
+    legacy_unstructured: bool = True
 
 
 class ConfirmCancelRequest(BaseModel):
@@ -623,6 +640,7 @@ class ProjectBrain(BaseModel):
     recent_activity: list[ActivityEntry] = Field(default_factory=list)
     work_packages: list[ProjectWorkPackage] = Field(default_factory=list)
     linear_diagnostic: LinearProjectDiagnostic | None = None
+    activity_focus: ProjectActivityFocus
 
 
 @app.get("/health")
@@ -1116,9 +1134,11 @@ def activity_create(
 ) -> dict[str, Any]:
     require_agent_api_key(authorization)
     payload = _model_dump(request)
+    if request.meaningful_event is not None:
+        return log_meaningful_activity(request.meaningful_event)
     return log_activity(
         action_type=payload.get("action_type") or payload.get("type"),
-        title=payload["title"],
+        title=payload.get("title") or "Activity",
         detail=payload.get("detail") or payload.get("description"),
         source=payload.get("source") or "manual",
         payload=payload.get("payload") or payload.get("metadata"),

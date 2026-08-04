@@ -1,7 +1,13 @@
 from datetime import date, datetime
 from typing import Any
 
-from .work_domain import NormalizedWorkItem, WorkDependency, WorkPriority, WorkStatus
+from .work_domain import (
+    NormalizedWorkItem,
+    WorkDependency,
+    WorkEffortSize,
+    WorkPriority,
+    WorkStatus,
+)
 
 
 LINEAR_PROVIDER = "linear"
@@ -30,6 +36,7 @@ class LinearWorkAdapter:
         milestone = issue.get("projectMilestone") if isinstance(issue.get("projectMilestone"), dict) else None
         assignee = issue.get("assignee") if isinstance(issue.get("assignee"), dict) else None
         team = issue.get("team") if isinstance(issue.get("team"), dict) else None
+        labels = _label_names(issue.get("labels"))
         metadata = {
             "issue_identifier": str(issue["identifier"]),
             "provider_project_id": str(project["id"]) if project and project.get("id") else None,
@@ -40,6 +47,8 @@ class LinearWorkAdapter:
             "project_milestone": dict(milestone) if milestone else None,
             "assignee": dict(assignee) if assignee else None,
             "team": dict(team) if team else None,
+            "labels": labels,
+            "estimate": issue.get("estimate"),
             "relations": list((issue.get("relations") or {}).get("nodes") or []),
             "inverse_relations": list((issue.get("inverseRelations") or {}).get("nodes") or []),
             "completed_at": issue.get("completedAt"),
@@ -67,6 +76,8 @@ class LinearWorkAdapter:
             updated_at=_parse_datetime(issue.get("updatedAt")),
             provider_url=str(issue["url"]) if issue.get("url") else None,
             provider_reference=str(project["id"]) if project and project.get("id") else None,
+            effort_size=_linear_effort_size(issue.get("estimate")),
+            context_requirements=_context_requirements(labels),
             provider_metadata=metadata,
         )
 
@@ -134,6 +145,41 @@ def _parse_datetime(value: Any) -> datetime | None:
         return datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None
     except ValueError:
         return None
+
+
+def _label_names(value: Any) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    return [
+        str(node["name"]).strip()
+        for node in value.get("nodes") or []
+        if isinstance(node, dict) and str(node.get("name") or "").strip()
+    ]
+
+
+def _linear_effort_size(value: Any) -> WorkEffortSize | None:
+    try:
+        estimate = float(value)
+    except (TypeError, ValueError):
+        return None
+    if estimate >= 5:
+        return WorkEffortSize.LARGE
+    if estimate >= 3:
+        return WorkEffortSize.MEDIUM
+    if estimate > 0:
+        return WorkEffortSize.SMALL
+    return None
+
+
+def _context_requirements(labels: list[str]) -> tuple[str, ...]:
+    requirements: list[str] = []
+    for label in labels:
+        prefix, separator, value = label.partition(":")
+        if separator and prefix.strip().lower() in {"context", "environment"}:
+            requirement = value.strip()
+            if requirement:
+                requirements.append(requirement)
+    return tuple(dict.fromkeys(requirements))
 
 
 linear_work_adapter = LinearWorkAdapter()

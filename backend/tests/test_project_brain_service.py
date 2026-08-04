@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from pathlib import Path
 import sys
@@ -956,6 +956,70 @@ class ProjectBrainServiceTests(unittest.TestCase):
         self.assertEqual(len(projects), 8)
         self.assertEqual(future["key"], "future-project")
         self.assertEqual(future["tasks"][0]["id"], "future-task")
+
+    def test_project_brain_additively_projects_shared_activity_focus_contract(self):
+        from app.main import ProjectBrain
+        from app.project_activity_focus import (
+            ProjectFocusState,
+            ProviderCoverage,
+            ProviderCoverageState,
+        )
+        from app.project_work_packages import LinearProjectDiagnostic
+
+        project = self.registry.get_project_definition("pcos")
+        canonical_id = project["canonical_project_id"]
+        completed_at = self.now - timedelta(days=2)
+        completed = normalized_linear_item(
+            canonical_id,
+            "completed-issue",
+            "SID-138",
+            "Define shared project activity and focus",
+            status=WorkStatus.COMPLETED,
+        ).model_copy(
+            update={
+                "updated_at": completed_at,
+                "provider_metadata": {
+                    "issue_identifier": "SID-138",
+                    "provider_project_id": "provider-project",
+                    "project_milestone": None,
+                    "inverse_relations": [],
+                    "completed_at": completed_at.isoformat(),
+                },
+            }
+        )
+        result = self.service.build_project(
+            project=project,
+            tasks=[completed],
+            events=[],
+            memories=[],
+            activity=[],
+            now=self.now,
+            registry=self.registry,
+            linear_diagnostic=LinearProjectDiagnostic(
+                status="connected",
+                provider_ref="provider-project",
+                issue_count=1,
+                message="Linear project data is available.",
+            ),
+            provider_coverage=(
+                ProviderCoverage(
+                    provider="linear",
+                    provider_reference="provider-project",
+                    state=ProviderCoverageState.FRESH,
+                    observed_at=self.now,
+                    historical_coverage_start=self.now - timedelta(days=90),
+                ),
+            ),
+        )
+
+        self.assertEqual(
+            result["activity_focus"].primary_state,
+            ProjectFocusState.RECENTLY_COMPLETED,
+        )
+        self.assertEqual(result["activity_focus"].evidence_total_count, 1)
+        payload = ProjectBrain.model_validate(result).model_dump(mode="json")
+        self.assertEqual(payload["activity_focus"]["primary_state"], "recently_completed")
+        self.assertEqual(payload["key"], "pcos-ai-todoist-agent")
 
 
 if __name__ == "__main__":

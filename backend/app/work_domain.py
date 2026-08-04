@@ -25,6 +25,12 @@ class WorkEnergy(StrEnum):
     HIGH = "high"
 
 
+class WorkEffortSize(StrEnum):
+    SMALL = "small"
+    MEDIUM = "medium"
+    LARGE = "large"
+
+
 class WorkProviderReadState(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -68,6 +74,8 @@ class NormalizedWorkItem(BaseModel):
     provider_reference: str | None = None
     estimated_duration_minutes: int | None = Field(default=None, ge=1)
     energy_requirement: WorkEnergy | None = None
+    effort_size: WorkEffortSize | None = None
+    context_requirements: tuple[str, ...] = ()
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")

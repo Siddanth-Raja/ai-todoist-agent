@@ -3,7 +3,13 @@ from typing import Any
 
 from .planner import enrich_task
 from .project_registry import ProjectRegistrySnapshot
-from .work_domain import NormalizedWorkItem, WorkEnergy, WorkPriority, WorkStatus
+from .work_domain import (
+    NormalizedWorkItem,
+    WorkEffortSize,
+    WorkEnergy,
+    WorkPriority,
+    WorkStatus,
+)
 
 
 TODOIST_PROVIDER = "todoist"
@@ -98,6 +104,8 @@ class TodoistWorkAdapter:
                 enriched.get("estimated_duration")
             ),
             energy_requirement=_work_energy(enriched.get("energy_level")),
+            effort_size=_effort_size(enriched),
+            context_requirements=_context_requirements(enriched.get("labels") or []),
             provider_metadata=enriched,
         )
 
@@ -176,6 +184,29 @@ def _due_values(task: dict[str, Any]) -> tuple[date | None, datetime | None]:
         except ValueError:
             pass
     return None, None
+
+
+def _effort_size(task: dict[str, Any]) -> WorkEffortSize | None:
+    duration = _positive_int(task.get("estimated_duration"))
+    if duration is None:
+        return None
+    if duration >= 90:
+        return WorkEffortSize.LARGE
+    if duration >= 30:
+        return WorkEffortSize.MEDIUM
+    return WorkEffortSize.SMALL
+
+
+def _context_requirements(labels: list[Any]) -> tuple[str, ...]:
+    requirements: list[str] = []
+    for raw_label in labels:
+        label = str(raw_label).strip()
+        prefix, separator, value = label.partition(":")
+        if separator and prefix.strip().lower() in {"context", "environment"}:
+            requirement = value.strip()
+            if requirement:
+                requirements.append(requirement)
+    return tuple(dict.fromkeys(requirements))
 
 
 def _parse_datetime(value: Any) -> datetime | None:

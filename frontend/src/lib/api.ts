@@ -512,6 +512,104 @@ export type ProjectActivityFocus = {
   confirmation_reason: string | null;
 };
 
+export type RealityClassification =
+  | "needs_action"
+  | "potential_mismatch"
+  | "waiting"
+  | "already_handled"
+  | "upcoming_not_actionable"
+  | "no_meaningful_change"
+  | "unknown";
+
+export type RealityWorkIdentity = {
+  provider: string;
+  provider_record_id: string;
+};
+
+export type RealityEvidence = {
+  schema_version: 1;
+  evidence_id: string;
+  evidence_type:
+    | "work_state"
+    | "communication_outcome"
+    | "provider_change"
+    | "waiting_state"
+    | "user_confirmation"
+    | "temporal_boundary"
+    | "provider_coverage";
+  canonical_project_id: string | null;
+  normalized_work_identity: RealityWorkIdentity | null;
+  provider_identity: {
+    provider: string;
+    provider_record_type: string;
+    provider_record_id: string;
+    provider_reference: string | null;
+    provider_url: string | null;
+  };
+  linked_work_identity: RealityWorkIdentity | null;
+  claim: string | null;
+  observed_state: string | null;
+  source_timestamp: string | null;
+  observed_at: string;
+  freshness: "fresh" | "stale" | "unknown";
+  availability: "available" | "unavailable" | "not_configured" | "not_applicable";
+  trustworthy: boolean;
+  summary: string;
+  metadata: Record<string, unknown>;
+};
+
+export type RealityTemporalActionability = {
+  due_date: string | null;
+  due_at: string | null;
+  earliest_useful_action_at: string | null;
+  waiting_until: string | null;
+  preparation_window_start: string | null;
+  hard_deadline: string | null;
+  action_possible_now: boolean | null;
+  action_useful_now: boolean | null;
+};
+
+export type RealityItem = {
+  schema_version: 1;
+  reality_item_id: string;
+  reconciliation_id: string;
+  canonical_project_id: string;
+  canonical_project_key: string;
+  normalized_work_identity: RealityWorkIdentity | null;
+  provider_identity: RealityEvidence["provider_identity"] | null;
+  title: string | null;
+  classification: RealityClassification;
+  classification_reason: string;
+  temporal: RealityTemporalActionability;
+  identity_state: "exact" | "ambiguous" | "unsupported";
+  ambiguity_candidates: RealityWorkIdentity[];
+  confidence: "high" | "medium" | "low" | "unknown";
+  evidence: RealityEvidence[];
+  evidence_version: string;
+  proposed_safe_resolution: {
+    code: string;
+    summary: string;
+    target_work_identity: RealityWorkIdentity | null;
+    requires_user_confirmation: boolean;
+    performs_provider_mutation: false;
+  } | null;
+};
+
+export type RealityProjection = {
+  schema_version: 1;
+  canonical_project_id: string;
+  canonical_project_key: string;
+  evaluated_at: string;
+  overall_classification: RealityClassification;
+  items: RealityItem[];
+  total_count: number;
+  returned_count: number;
+  item_limit: number;
+  classification_counts: Record<string, number>;
+  complete_evidence: boolean;
+  provider_diagnostics: string[];
+};
+
 export type ProjectBrain = {
   key: string;
   name: string;
@@ -533,6 +631,7 @@ export type ProjectBrain = {
   work_packages: ProjectWorkPackage[];
   linear_diagnostic: LinearProjectDiagnostic | null;
   activity_focus: ProjectActivityFocus;
+  reality: RealityProjection;
 };
 
 export async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {

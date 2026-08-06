@@ -37,6 +37,7 @@ from .provider_changes import (
     ObservationFreshness,
     provider_change_service,
 )
+from .reality_reconciliation import reality_reconciliation_service
 from .storage import (
     get_latest_project_focus_intent,
     list_activity,
@@ -413,6 +414,21 @@ class ProjectBrainService:
             evaluated_at=now,
             limit=12,
         )
+        complete_reality_changes = _complete_change_evidence(
+            recent_changes,
+            canonical_project_id=canonical_project_id,
+            evaluated_at=now,
+        )
+        reality = reality_reconciliation_service.project_from_work(
+            canonical_project_id=canonical_project_id,
+            canonical_project_key=str(project["key"]),
+            work_items=project_work,
+            dependency_evidence=project_dependency_evidence,
+            provider_coverage=provider_coverage,
+            recent_changes=complete_reality_changes,
+            evaluated_at=now,
+            item_limit=12,
+        )
 
         summary = {
             "key": project["key"],
@@ -453,6 +469,7 @@ class ProjectBrainService:
             "linear_diagnostic": linear_diagnostic,
             "activity_focus": activity_focus,
             "recent_changes": recent_changes,
+            "reality": reality,
         }
         return ProjectBrainProjectSnapshot(
             definition=project,
@@ -464,6 +481,36 @@ class ProjectBrainService:
 
 
 project_brain_service = ProjectBrainService()
+
+
+def _complete_change_evidence(
+    first_page,
+    *,
+    canonical_project_id: str,
+    evaluated_at: datetime,
+):
+    if first_page.next_cursor is None:
+        return first_page
+    changes = list(first_page.changes)
+    cursor = first_page.next_cursor
+    while cursor is not None:
+        page = provider_change_service.query_changes(
+            canonical_project_id=canonical_project_id,
+            days=30,
+            evaluated_at=evaluated_at,
+            limit=500,
+            cursor=cursor,
+        )
+        changes.extend(page.changes)
+        cursor = page.next_cursor
+    return first_page.model_copy(
+        update={
+            "changes": tuple(changes),
+            "returned_count": len(changes),
+            "limit": max(1, len(changes)),
+            "next_cursor": None,
+        }
+    )
 
 
 def _selected_work_item(

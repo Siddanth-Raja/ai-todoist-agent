@@ -31,6 +31,7 @@ from .gmail_review import (
 from .project_brain import project_brain_service
 from .project_activity_focus import ProjectActivityFocus
 from .provider_changes import ChangeQueryResult
+from .reality_reconciliation import RealityProjection
 from .project_work_packages import LinearProjectDiagnostic, ProjectWorkPackage
 from .storage import (
     create_habit,
@@ -643,6 +644,7 @@ class ProjectBrain(BaseModel):
     linear_diagnostic: LinearProjectDiagnostic | None = None
     activity_focus: ProjectActivityFocus
     recent_changes: ChangeQueryResult
+    reality: RealityProjection
 
 
 @app.get("/health")

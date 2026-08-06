@@ -497,6 +497,28 @@ def ensure_database() -> None:
                     PRIMARY KEY (consumer_id, provider, scope_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS reality_confirmations (
+                    id TEXT PRIMARY KEY,
+                    reconciliation_id TEXT NOT NULL,
+                    canonical_project_id TEXT NOT NULL,
+                    selected_resolution_code TEXT NOT NULL,
+                    outcome TEXT NOT NULL CHECK(outcome IN (
+                        'handled', 'not_handled', 'waiting', 'review_only'
+                    )),
+                    confirming_actor TEXT NOT NULL,
+                    confirmed_at TEXT NOT NULL,
+                    evidence_references_json TEXT NOT NULL,
+                    evidence_version TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    schema_version INTEGER NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_reality_confirmations_reconciliation
+                    ON reality_confirmations(
+                        canonical_project_id, reconciliation_id, confirmed_at DESC
+                    );
+
                 CREATE TABLE IF NOT EXISTS canonical_projects (
                     id TEXT PRIMARY KEY,
                     key TEXT NOT NULL UNIQUE,

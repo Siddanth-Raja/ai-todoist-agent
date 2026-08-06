@@ -9792,3 +9792,132 @@ Final verified gates before publication:
 Intentional limitations remain: no scheduler/background poller; only Linear is a complete adapter; current Linear graph responses cannot reconstruct every intermediate transition that occurred between polls; linked communication awaits a trustworthy provider adapter; events older than retention become explicitly incomplete history; no reconciliation, temporal actionability, Morning State Synthesis, correction UI, provider mutation, or automatic seen-state behavior exists. These belong to SID-243, SID-244, or later work and were not started.
 
 Publication is one focused SID-139 commit containing this section and the implementation. A commit cannot contain its own final SHA without changing that SHA, so the exact published SHA is recorded in SID-139 Linear evidence and the final release report after the normal fast-forward push. Local HEAD, local `origin/main`, and GitHub `main` must match it before SID-139 is marked Done. SID-243 may become unblocked but must remain To Do; the Personal Reality Loop milestone remains active.
+
+---
+
+# 65. SID-243 Personal Reality Reconciliation and Temporal Actionability
+
+SID-243, **Build Personal Reality Reconciliation and Temporal Actionability**, adds the provider-neutral intelligence seam between SID-139 change evidence and the still-unstarted SID-244 Morning State Synthesis. It determines current evidence conflicts, present actionability, waiting, handled work, protected future work, honest no-action states, and uncertainty without adding a Morning State UI, correction controls, background work, or provider mutation.
+
+The additive pipeline is:
+
+```text
+canonical normalized work + dependency evidence + provider coverage
+                           + complete SID-139 change evidence
+                                      ↓
+              shared reality reconciliation service
+                                      ↓
+       typed classifications + temporal actionability + safe review proposal
+                                      ↓
+                 canonical Project Brain `reality`
+```
+
+Routes, frontend components, and provider adapters do not recompute the classification. Existing Activity/focus, recent changes, normalized work, dependency, recommendation, Today, Chat, and Projects presentation behavior remains in place.
+
+## 65.1 Versioned reality and evidence contracts
+
+The frozen, extra-forbidden version-1 contract uses stable reconciliation/reality identities derived from canonical project, provider, and stable provider-record identity. Each result preserves canonical project ID/key, linked normalized work identity, provider record identity, classification and reason, ambiguity/confidence, attributable evidence, evidence version, the complete temporal-actionability object, and an optional safe resolution whose `performs_provider_mutation` value is structurally fixed to `false`.
+
+Evidence is independently versioned and preserves evidence type, canonical and linked work identity, provider source identity, claim/observed state, source and observation timestamps, freshness, availability, trustworthiness, a bounded summary, and safe comparison metadata. Metadata rejects credential, token, email-body, and raw-payload fields. Unknown or unsupported values remain absent or explicitly unknown. All contract timestamps require timezone information; naive provider times fail conservatively instead of being repaired or guessed.
+
+The stable classification taxonomy is:
+
+- `needs_action`: an executable overdue/due-today obligation, or work inside an explicit preparation window, is useful now.
+- `potential_mismatch`: trustworthy, current, exactly linked evidence preserves both handled and open claims from different providers for review.
+- `waiting`: a trustworthy wait or future waiting boundary applies and no independent actionable condition overrides it.
+- `already_handled`: current provider evidence or an evidence-version-matched attributable user confirmation says the work is handled.
+- `upcoming_not_actionable`: an explicit earliest-useful-action or preparation boundary is still in the future.
+- `no_meaningful_change`: complete trustworthy evidence establishes that action is neither possible nor useful now; incomplete project coverage can never promote this to the overall conclusion.
+- `unknown`: identity, time, freshness, availability, trust, clock, or coverage evidence is insufficient or ambiguous.
+
+Classification totals are computed across the complete candidate set before deterministic priority/time/identity ordering and the 12-item Project Brain presentation bound. `total_count`, `returned_count`, `item_limit`, full classification counts, coverage completeness, and provider diagnostics remain visible.
+
+## 65.2 Identity, reconciliation, and uncertainty rules
+
+Automatic reconciliation requires exact canonical project and normalized work identity plus an explicit cross-provider link. Similar titles or free text are never compared. Ambiguous, unsupported, inconsistently attributed, or unlinked cross-provider evidence returns an `unknown` review candidate with an explicit identity-review proposal.
+
+An exact sent-but-open case retains the trustworthy communication `sent` claim and timestamp beside the linked Linear `in_progress` claim and timestamp, classifies `potential_mismatch`, and proposes a separate user-reviewed “mark work handled” resolution. It neither gives one provider silent precedence nor executes that resolution. Historical SID-139 transitions remain attributable evidence but are excluded from unquestionable current-state claims.
+
+Unavailable, stale, untrustworthy, malformed-time, or future-skewed required evidence reduces the affected conclusion to `unknown`. A project-level provider gap remains explicit through `complete_evidence=false` and provider diagnostics. In particular, the active Todoist read continues to report `missing_history`; the engine cannot turn that limitation into “nothing needs attention.” Legitimate future action/deadline boundaries are retained as temporal evidence rather than mistaken for clock skew.
+
+## 65.3 Temporal actionability
+
+The contract keeps due date, due timestamp, earliest useful action, waiting-until, preparation-window start, hard deadline, action-possible-now, and action-useful-now as separate fields. Evaluation accepts an injected timezone-aware `evaluated_at` for deterministic boundaries.
+
+An explicit future useful-action boundary protects tomorrow-only work from competing today and does not invent preparation. A preparation window beginning now can produce `needs_action` while retaining the later hard deadline as a different fact. A future waiting boundary or trustworthy waiting evidence produces `waiting`; once the boundary passes, the same inputs deterministically reevaluate. An overdue executable unblocked obligation remains `needs_action`, preserving the existing Today Must do policy instead of creating a second recommendation system. Missing dates/actionability remain unknown.
+
+## 65.4 Durable attributable confirmation
+
+SQLite initialization additively creates `reality_confirmations` plus its project/reconciliation/time index. Each row stores a deterministic confirmation ID, reconciliation and canonical project identity, selected resolution code, bounded outcome, stable non-email actor identity, timezone-aware confirmation time, evidence references/version, idempotency key, schema version, and creation time. No existing table or row is rewritten.
+
+The bounded PCOS-owned repository operation returns the existing identical record for an idempotent retry and rejects conflicting reuse of the same key. Ordinary reconciliation reads only list existing confirmations and create no row. A confirmation applies only to the evidence version it reviewed, remains attributable as `user_confirmation` evidence, and never invokes an external provider. No correction UI or confirmation route was added in SID-243.
+
+## 65.5 Project Brain integration and compatibility
+
+Project Brain calls the shared reality service after canonical project resolution, normalized Todoist/Linear work collection, dependency evaluation, provider coverage, Activity/focus, and SID-139 querying. The existing `recent_changes` response remains bounded at 12; when more change evidence exists, the service follows the existing stable cursor to collect the complete eligible set for reconciliation before applying the separate reality bound. Existing project identity, hierarchy, blockers, recommendations, work packages, people, memories, events, Activity/focus, recent changes, diagnostics, and route shapes remain compatible.
+
+Both `/projects` and `/projects/{project_key}` serialize the additive `reality` result through the typed FastAPI model. The frontend type layer was extended only for compatibility; no component, layout, route behavior, or presentation changed, so a new browser presentation smoke was not required.
+
+Changed files for the focused SID-243 implementation are:
+
+- `backend/app/reality_reconciliation.py`
+- `backend/app/storage.py`
+- `backend/app/project_brain.py`
+- `backend/app/main.py`
+- `backend/tests/test_reality_reconciliation.py`
+- `frontend/src/lib/api.ts`
+- `docs/PCOS-handoff.md`
+
+## 65.6 Representative deterministic evidence
+
+Thirty-two focused tests prove the shared contract and representative behavior:
+
+- exactly linked trustworthy `sent` communication plus open Linear work returns `potential_mismatch`, preserves both claims/timestamps, returns a safe non-mutating proposal, and does not use title matching;
+- tomorrow-only work returns `upcoming_not_actionable`; an explicit preparation window beginning now returns `needs_action` while retaining its distinct future deadline;
+- waiting evidence and a future waiting boundary prevent false action, while a passed boundary plus an independently overdue executable obligation deterministically returns `needs_action`;
+- completed evidence and a current attributable confirmation return `already_handled`; ordinary reads create no confirmations and idempotent confirmation retry leaves exactly one durable row;
+- complete explicit no-action evidence supports `no_meaningful_change`, while missing, stale, failed, untrustworthy, naive-time, or future-skewed evidence remains `unknown`;
+- ambiguous, mismatched, and unlinked cross-provider identities remain review candidates even when titles match;
+- all seven classifications serialize through the strict schema, full-set totals are computed before deterministic bounding, and Project Brain consumes every SID-139 cursor page before its own bound;
+- additive database initialization preserves a legacy Activity row and the contract rejects raw sensitive payload metadata and raw-email actor identity.
+
+The complete backend regression suite also preserves existing `/activity`, `/projects`, project-detail, SID-138/SID-139, recommendation, dependency, and Today behavior. The unchanged frontend suite specifically keeps Must do ahead of and distinct from Recommended work and preserves overdue/due-today obligation labeling.
+
+## 65.7 Live read-only runtime verification
+
+The real local application started successfully and `/health` returned `{"status":"ok","mode":"ai_agent"}`. Authenticated `GET /activity?limit=3` returned three compatible typed records. Authenticated `GET /projects` returned all seven projects with existing SID-138 `activity_focus`, SID-139 `recent_changes`, and the additive SID-243 `reality` serialized together.
+
+Current read-only Project Brain observations for the requested representative projects were:
+
+| Project | SID-138 focus | Reality overall | Complete evidence | Total / returned | Live honesty boundary |
+| --- | --- | --- | --- | ---: | --- |
+| PCOS | `active_momentum` | `waiting` | false | 86 / 12 | 40 handled, 29 waiting, 17 unknown across the full set. |
+| Freelance | `waiting_external` | `waiting` | false | 38 / 12 | 18 handled, 12 waiting, 6 unknown, 2 no-action across the full set. |
+| XO | `waiting_external` | `waiting` | false | 36 / 12 | 21 handled, 8 waiting, 7 unknown across the full set. |
+| Nebulo | `waiting_external` | `waiting` | false | 12 / 12 | 7 waiting and 5 unknown across the full set. |
+
+All four reality projections explicitly reported `todoist: missing_history`; none claimed complete evidence. Current PCOS Linear SID-139 coverage serialized as `complete_no_changes` with zero recent changes in the inspected 30-day result. These values describe only the inspected snapshot and do not prove the deterministic sent/open mismatch or other unavailable representative cases.
+
+The durable confirmation table contained zero rows before two repeated authenticated project reads and zero afterward. Runtime access used only authenticated GET/read operations. No Todoist, Linear, Gmail, Calendar, or other external provider data was mutated.
+
+## 65.8 Final gates, limitations, and publication
+
+Final verified gates before publication:
+
+- Baseline before editing: 377 backend tests and 50 frontend tests passed at required SHA `7c4e4dfbc701771c5da64f85fdfce57ed680bc52` with a clean worktree and matching local HEAD, `origin/main`, and GitHub `main`.
+- Backend: 409 tests passed in 2.889 seconds, including 32 focused SID-243 tests.
+- Frontend: 50 tests passed.
+- TypeScript: `./node_modules/.bin/tsc --noEmit` passed.
+- Production: Next.js 15.5.19 `npm run build` passed for all routes.
+- Python compilation: `python -m compileall -q backend/app backend/scripts backend/tests` passed.
+- `git diff --check`: passed.
+- Privacy/secret review: no credential, OAuth value, token, private key, personal email, email body, full raw provider payload, or unrelated personal data is retained; sensitive metadata keys and raw-email actor identities are rejected by the contract.
+- Forbidden-provider-mutation review: no provider client write, automatic resolution, or external mutation operation exists; the safe-resolution contract fixes `performs_provider_mutation` to `false`.
+- Project-hard-coding review: the shared engine contains no Freelance, XO, Nebulo, VR/headset, person, abandonment, neglect, or emotional-state rule; PCOS appears only as the owner of confirmation/reconciliation identities.
+- Title-only review: title is carried only for display/context and is never part of identity, matching, evidence-version, classification, or ordering logic.
+- Complete-set/bounding review: all candidates and all eligible SID-139 cursor pages are classified before deterministic response slicing, with full totals/counts retained.
+- Migration/compatibility review: additive idempotent table/index creation preserved legacy Activity and required no destructive migration; complete regressions preserved Today Must do and existing Project Brain surfaces.
+
+Intentional milestone boundaries remain: no SID-244 Morning State Synthesis or Good Morning UI; no correction UI/route; no background polling or scheduler; no automatic provider resolution; no new provider adapter; and no replacement of Activity/focus, SID-139 change detection, or recommendation policy. Current Todoist reads lack completed-history coverage, so live project projections remain incomplete and honestly retain unknown items. Exact linked cross-provider communication reconciliation is supported by the shared contract and fixtures but cannot be claimed from the inspected live snapshot without trustworthy linked communication evidence.
+
+Publication is one focused SID-243 commit containing this section and the bounded shared implementation. A commit cannot contain its own final SHA without changing that SHA, so the exact published SHA is recorded in SID-243 Linear evidence and the final release report after the normal fast-forward push. Local HEAD, local `origin/main`, and GitHub `main` must match it before SID-243 is marked Done. SID-244 must remain To Do; the Personal Reality Loop milestone must remain active.

@@ -13,6 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.activity_domain import ActivityFreshness  # noqa: E402
 from app.calendar_time import normalize_calendar_time  # noqa: E402
 from app.calendar_tools import CalendarReadResult  # noqa: E402
+from app.morning_corrections import (  # noqa: E402
+    MorningCorrectionRequest,
+    MorningCorrectionService,
+    MorningCorrectionType,
+)
 from app.morning_state import (  # noqa: E402
     MORNING_STATE_SCHEMA_VERSION,
     MorningAvailability,
@@ -277,6 +282,17 @@ def calendar(events=(), error=None):
 
 
 class MorningStateTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.env = patch.dict(
+            os.environ,
+            {"APP_DB_PATH": os.path.join(self.tempdir.name, "morning-state.sqlite3")},
+        )
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        ensure_database()
+
     def synthesize(
         self,
         projects,
@@ -495,6 +511,49 @@ class MorningStateTests(unittest.TestCase):
             result.handled_paused_waiting.statements[0].classification,
             RealityClassification.UPCOMING_NOT_ACTIONABLE,
         )
+
+    def test_wrong_context_correction_stays_reviewable_without_becoming_urgent(self):
+        mismatch = reality_item(
+            "project-pcos",
+            "pcos",
+            "disputed-context",
+            RealityClassification.POTENTIAL_MISMATCH,
+        )
+        projects = [
+            project(
+                "project-pcos",
+                "pcos",
+                "PCOS",
+                ProjectFocusState.ACTIVE_MOMENTUM,
+                (mismatch,),
+            )
+        ]
+        initial = self.synthesize(projects)
+        statement = initial.attention_today.statements[0]
+        MorningCorrectionService().create(
+            MorningCorrectionRequest(
+                synthesis_id=initial.synthesis_id,
+                evaluated_at=initial.evaluated_at,
+                statement_id=statement.statement_id,
+                evidence_version=statement.evidence_version,
+                correction_type=MorningCorrectionType.WRONG_CONTEXT,
+                correcting_actor="user-primary",
+                idempotency_key="wrong-context-visible",
+            ),
+            synthesis=initial,
+            created_at=NOW,
+        )
+
+        corrected = self.synthesize(projects)
+        visible = next(
+            item
+            for item in corrected.attention_today.statements
+            if item.linked_work_identity
+            and item.linked_work_identity.provider_record_id == "disputed-context"
+        )
+        self.assertEqual(visible.classification, RealityClassification.UNKNOWN)
+        self.assertIn("explicitly disputed", visible.reason)
+        self.assertEqual(corrected.urgent_attention_count, 0)
 
     def test_waiting_and_handled_reassure_without_becoming_attention(self):
         items = (

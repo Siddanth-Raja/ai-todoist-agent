@@ -16,6 +16,7 @@ from .calendar_time import (
     normalize_calendar_time,
 )
 from .calendar_tools import CalendarReadResult, list_remaining_today_events
+from .morning_corrections import morning_correction_service
 from .project_activity_focus import (
     ProjectActivityFocus,
     ProjectFocusState,
@@ -109,6 +110,9 @@ class MorningStatement(BaseModel):
 
     schema_version: Literal[1] = MORNING_STATE_SCHEMA_VERSION
     statement_id: str = Field(..., min_length=1, max_length=240)
+    source_reconciliation_id: str | None = Field(default=None, max_length=240)
+    source_reality_item_id: str | None = Field(default=None, max_length=240)
+    evidence_version: str | None = Field(default=None, max_length=128)
     section: MorningSectionId
     classification: RealityClassification
     status: str = Field(..., min_length=1, max_length=120)
@@ -245,10 +249,12 @@ class MorningStateService:
         project_service=project_brain_service,
         change_service=provider_change_service,
         calendar_reader=list_remaining_today_events,
+        correction_service=morning_correction_service,
     ):
         self.project_service = project_service
         self.change_service = change_service
         self.calendar_reader = calendar_reader
+        self.correction_service = correction_service
 
     def build(
         self,
@@ -304,10 +310,14 @@ class MorningStateService:
             evaluated_at=evaluated_at,
         )
 
-        all_reality_items = tuple(
+        base_reality_items = tuple(
             item for project in project_states for item in project.reality_items
         )
-        attention_items = tuple(
+        all_reality_items = self.correction_service.apply_to_reality_items(
+            base_reality_items,
+            evaluated_at=evaluated_at,
+        )
+        urgent_attention_items = tuple(
             item
             for item in all_reality_items
             if item.classification
@@ -316,6 +326,13 @@ class MorningStateService:
                 RealityClassification.POTENTIAL_MISMATCH,
             }
         )
+        correction_review_items = tuple(
+            item
+            for item in all_reality_items
+            if item.classification == RealityClassification.UNKNOWN
+            and _has_morning_correction_evidence(item)
+        )
+        attention_items = (*urgent_attention_items, *correction_review_items)
         reality_complete = bool(project_states) and all(
             item.reality_complete for item in project_states
         )
@@ -371,7 +388,7 @@ class MorningStateService:
             evaluated_at=evaluated_at,
         )
 
-        urgent_count = len(attention_items)
+        urgent_count = len(urgent_attention_items)
         complete = (
             reality_complete
             and change_window.checkpoint.coverage_complete
@@ -379,11 +396,13 @@ class MorningStateService:
         )
         if any(
             item.classification == RealityClassification.NEEDS_ACTION
-            for item in attention_items
+            for item in urgent_attention_items
         ):
             overall = RealityClassification.NEEDS_ACTION
-        elif attention_items:
+        elif urgent_attention_items:
             overall = RealityClassification.POTENTIAL_MISMATCH
+        elif correction_review_items:
+            overall = RealityClassification.UNKNOWN
         elif not complete:
             overall = RealityClassification.UNKNOWN
         else:
@@ -764,6 +783,14 @@ def _statement_from_change(
     )
 
 
+def _has_morning_correction_evidence(item: RealityItem) -> bool:
+    return any(
+        evidence.provider_identity.provider == "pcos"
+        and evidence.provider_identity.provider_record_type == "morning_correction"
+        for evidence in item.evidence
+    )
+
+
 def _statement_from_reality(
     item: RealityItem,
     *,
@@ -804,6 +831,9 @@ def _statement_from_reality(
         uncertainty.append("Canonical work identity is not exact.")
     return MorningStatement(
         statement_id=_stable_id(section.value, item.reality_item_id),
+        source_reconciliation_id=item.reconciliation_id,
+        source_reality_item_id=item.reality_item_id,
+        evidence_version=item.evidence_version,
         section=section,
         classification=item.classification,
         status=item.classification.value,

@@ -620,6 +620,9 @@ export type MorningSectionId =
 export type MorningStatement = {
   schema_version: 1;
   statement_id: string;
+  source_reconciliation_id: string | null;
+  source_reality_item_id: string | null;
+  evidence_version: string | null;
   section: MorningSectionId;
   classification: RealityClassification;
   status: string;
@@ -698,6 +701,84 @@ export type MorningStateSynthesis = {
   realistic_day_shape: MorningSection;
   checkpoint: MorningCheckpointSelection;
   provider_diagnostics: string[];
+};
+
+export type MorningCorrectionType =
+  | "already_done"
+  | "not_today"
+  | "wrong_context"
+  | "waiting_on_someone"
+  | "snooze";
+
+export type MorningCorrection = {
+  schema_version: 1;
+  correction_id: string;
+  correction_type: MorningCorrectionType;
+  statement_id: string;
+  reconciliation_id: string | null;
+  reality_item_id: string | null;
+  synthesis_id: string;
+  canonical_project_id: string | null;
+  canonical_project_key: string | null;
+  work_provider: string | null;
+  work_provider_record_id: string | null;
+  source_provider: string | null;
+  source_provider_record_type: string | null;
+  source_provider_record_id: string | null;
+  evidence_references: string[];
+  evidence_version: string;
+  prior_classification: RealityClassification;
+  parameters: {
+    note: string | null;
+    effective_at: string | null;
+    expires_at: string | null;
+    review_at: string | null;
+    waiting_until: string | null;
+    snooze_until: string | null;
+    disputed_context: string | null;
+  };
+  correcting_actor: string;
+  attribution: "morning_brief_user_correction";
+  created_at: string;
+  effective_at: string;
+  expires_at: string | null;
+  review_at: string | null;
+  status: "active" | "superseded" | "reversed";
+  supersedes_correction_id: string | null;
+  reversed_at: string | null;
+  reversed_by_actor: string | null;
+  idempotency_key: string;
+};
+
+export type ProviderMutationPreview = {
+  schema_version: 1;
+  preview_id: string;
+  statement_id: string;
+  synthesis_id: string;
+  evidence_version: string;
+  provider: string;
+  provider_record_type: string;
+  provider_record_id: string;
+  field_name: string;
+  previous_value: unknown;
+  proposed_value: unknown;
+  provider_revision: string | null;
+  requested_by_actor: string;
+  created_at: string;
+  expires_at: string;
+  status:
+    | "ready"
+    | "unsupported"
+    | "confirmed"
+    | "stale"
+    | "succeeded"
+    | "failed"
+    | "uncertain";
+  diagnostic: string | null;
+  confirmed_by_actor: string | null;
+  confirmed_at: string | null;
+  result_reference: string | null;
+  request_idempotency_key: string;
 };
 
 export type ProjectBrain = {

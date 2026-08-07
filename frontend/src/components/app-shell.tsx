@@ -12,6 +12,7 @@ import {
   Repeat,
   Settings,
   Sparkles,
+  SunMedium,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -21,6 +22,7 @@ const navItems: Array<{
   description: string;
   icon: LucideIcon;
 }> = [
+  { href: "/morning", label: "Morning", description: "Evidence-backed brief", icon: SunMedium },
   { href: "/today", label: "Today", description: "Personal operating view", icon: Sparkles },
   { href: "/projects", label: "Projects", description: "Project Brain", icon: FolderKanban },
   { href: "/chat", label: "Chat", description: "Assistant tool", icon: MessageCircle },
@@ -120,7 +122,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <nav className="fixed inset-x-0 bottom-0 z-30 px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] xl:hidden">
-        <div className="mx-auto grid max-w-xl grid-cols-9 gap-1 rounded-[1.6rem] border border-white/10 bg-black/55 p-2 shadow-soft backdrop-blur-2xl">
+        <div className="mx-auto flex max-w-xl gap-1 overflow-x-auto rounded-[1.6rem] border border-white/10 bg-black/55 p-2 shadow-soft backdrop-blur-2xl">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = pathname === item.href;
@@ -130,7 +132,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 key={item.href}
                 href={item.href}
                 aria-label={item.label}
-                className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-[1.1rem] text-[11px] font-medium transition ${
+                className={`flex min-h-14 min-w-16 flex-1 flex-col items-center justify-center gap-1 rounded-[1.1rem] text-[11px] font-medium transition ${
                   isActive ? "bg-pearl text-ink shadow-card" : "text-stone-500 hover:bg-white/10 hover:text-pearl"
                 }`}
               >

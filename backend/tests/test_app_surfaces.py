@@ -610,6 +610,8 @@ class AppSurfaceEndpointTests(unittest.TestCase):
                     for table in (
                         "provider_change_consumers",
                         "reality_confirmations",
+                        "morning_corrections",
+                        "morning_provider_previews",
                     )
                 }
             first = main.morning_state_index(

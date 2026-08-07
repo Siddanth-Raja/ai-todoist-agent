@@ -10074,3 +10074,139 @@ Final verified gates before publication:
 Intentional milestone boundaries remain: no Good Morning UI or rendering; no durable correction control or confirmation route; no SID-246 Today/Project Brain/Chat projection work; no new recommendation policy; no background polling or scheduler; no automatic provider correction; no new broad adapter; and no Freelance automation. The default no-acknowledgement fallback is intentionally bounded to 30 days and remains incomplete when retained/provider history cannot cover it. Current Todoist reads lack completed history, and live communication evidence remains unavailable unless a trustworthy exactly linked provider source supplies it.
 
 Publication is one focused SID-244 commit containing this section and the bounded implementation. A commit cannot contain its own final SHA without changing that SHA, so the exact published SHA is recorded in SID-244 Linear evidence and the final release report after the normal fast-forward push. Local `HEAD`, local `origin/main`, and GitHub `main` must match before SID-244 is marked Done. SID-245 and SID-246 may become unblocked but must remain To Do with `startedAt=null`; the Personal Reality Loop V1 milestone remains active.
+
+---
+
+# 67. SID-245 Good Morning Brief and Durable Correction Controls
+
+SID-245, **Build the Good Morning Brief and Durable Correction Controls**, adds the natural `/morning` entry point above the typed SID-244 synthesis and a provider-neutral, durable correction seam. It does not begin SID-246 projections, SID-247 milestone verification, Freelance automation, a second planner/recommender, background scheduling, title-based reconciliation, or a broad provider-write adapter.
+
+The dependency direction remains one-way:
+
+```text
+SID-138 Activity / focus
+SID-139 provider changes
+SID-243 reality + confirmations
+SID-244 Morning State Synthesis
+          ↓
+  SID-245 correction seam → next shared synthesis read
+          ↓
+    /morning presentation
+```
+
+The frontend renders `GET /morning-state` through the existing retained-state/background-revalidation hook. It maps typed classifications and fact types only to presentation labels, colors, and progressive disclosures; it does not score, rank, infer, classify, reconcile, or recompute Morning intelligence.
+
+## 67.1 Good Morning route and hierarchy
+
+`/` now enters `/morning`, and the existing shell adds Morning as one bounded navigation item without redesigning unrelated surfaces. The page renders the exact SID-244 order:
+
+1. Changes
+2. Attention today
+3. Handled, paused, and waiting
+4. Project pulse
+5. Realistic day shape
+
+Concrete `needs_action` statements receive the distinct **Must do** treatment. Potential mismatch, waiting, already handled, upcoming/not actionable, no meaningful change, and unknown/incomplete states retain separate text and visual treatments. Free Calendar capacity remains context and never becomes a recommendation. A complete `no_urgent_attention` synthesis produces an affirmative under-control message while retaining project pulse and day shape; partial coverage instead states that absence of a supported urgent item is not proof that everything is handled.
+
+Every statement keeps its canonical classification, fact type, confidence, freshness, availability, project/life-area identity, linked stable work identity, provider-record identities and URLs where supplied, evidence summaries/references, relevant timestamps, temporal fields, uncertainty, explanation, and safe suggested action reachable through a native disclosure. Evidence is never hover-only. Provider diagnostics remain a separate limitations section and do not destroy usable sections.
+
+## 67.2 Durable correction persistence and shared-intelligence seam
+
+SQLite initialization additively creates three history-preserving structures and indexes without altering or deleting an existing table:
+
+- `morning_corrections` stores deterministic correction ID, one of `already_done`, `not_today`, `wrong_context`, `waiting_on_someone`, or `snooze`, statement/reconciliation/reality identity, synthesis ID, canonical project/work/provider identity, evidence references/version, prior classification, structured parameters, stable non-email actor, creation/effective/review/expiration times, attribution, active/superseded/reversed state, reversal data, idempotency key, and schema version.
+- `reality_confirmation_reversals` preserves an additive reversal for an SID-243 confirmation; existing confirmation evidence is never deleted.
+- `morning_provider_previews` preserves the exact provider, record, field, previous/proposed value, provider revision, evidence version, requesting actor, preview/expiration time, confirmation actor/time, idempotency identities, result reference, status, and bounded diagnostic. Sensitive keys and raw email actors are rejected.
+
+Retries compare request-bound identity and parameters rather than server-generated timestamps, so a later retry returns the original durable record and conflicting key reuse fails closed. A new correction supersedes the prior active correction for the same reconciliation. If it supersedes `already_done`, the former SID-243 confirmation is additively reversed so it cannot reappear after the replacement expires. Ordinary Morning reads only query correction state and create no correction, confirmation, reversal, preview, or consumer acknowledgement.
+
+The shared synthesis service applies active, evidence-version-matched corrections to the complete SID-243 reality set before SID-244 section selection and bounds. An explicitly corrected `unknown` item remains reviewable in Attention without increasing `urgent_attention_count`; this preserves the correction in the five-section response without promoting it to Must do.
+
+## 67.3 Correction semantics, review, and undo
+
+- **Already done** creates an attributable, evidence-version-bound SID-243 handled confirmation and a durable Morning correction. It does not touch Linear, Todoist, or another provider. Original provider evidence remains visible, including an open provider claim when one still conflicts. Undo additively reverses both the Morning correction and its generated SID-243 confirmation.
+- **Not today** stores an explicit temporal choice. If no boundary is supplied, it derives the next local midnight from the timezone-aware effective time. It classifies the item as protected upcoming work only until that boundary, then deterministically returns the original shared classification.
+- **Wrong context** marks the presented association/interpretation disputed, preserves every original evidence record, adds attributable PCOS correction evidence, leaves the result unknown/reviewable, and invents no replacement identity.
+- **Waiting on someone** records a PCOS waiting state without a provider write or invented deadline. A supplied timezone-aware waiting/review boundary expires deterministically; omission intentionally means no invented deadline.
+- **Snooze** requires a future timezone-aware wake time, suppresses the statement temporarily without changing its underlying classification/evidence, and returns it at the wake boundary.
+
+Corrections are progressively disclosed, explain their PCOS-only outcome before submission, disable concurrent submissions, announce pending/success/failure state through an accessible live region, and are reviewable both beside a visible statement and in the global Morning correction ledger. The global ledger keeps snoozed or otherwise temporarily absent statements undoable. Only active PCOS-owned corrections show Undo; the UI never implies that an external provider write has a safe inverse.
+
+## 67.4 Exact provider preview and confirmation gate
+
+“Mark complete / reconcile provider” is a separate two-step service:
+
+1. Preview resolves only the statement's exactly linked provider/work identity and fixed `status: previous → completed` field transition, records the evidence version and provider revision, and performs no mutation.
+2. Confirmation must repeat the exact preview ID, evidence version, provider, record type/ID, field, previous value, and proposed value. The service re-reads the same target and rejects an expired preview, changed value, or changed revision before calling an injected adapter.
+
+Returned success is post-read and compared with the exact proposed value. Explicit failures remain failed. A transport exception before mutation is failed; an exception during mutation or unverifiable post-state is uncertain, never success. Confirmation retry is idempotent and altered reuse of the key is rejected. Request, preview, confirmation actor/time, result/failure, and result reference remain attributable.
+
+There was no existing narrow Linear/Todoist completion writer safe to register for SID-245. The production service therefore intentionally starts with an empty adapter registry. Live UI preview identifies the exact Linear record and field, records an `unsupported` preview, exposes that completion is not registered, and offers no Confirm button. Deterministic injected adapters prove exact success, failure, stale-preview, exception, idempotency, and post-verification behavior without granting a broad production write capability.
+
+## 67.5 Retained state, accessibility, and responsive evidence
+
+The page retains the last successful synthesis during background refresh and shows “Morning Brief refresh failed; showing retained state” when revalidation fails. It neither clears the prior brief nor starts polling. The initial no-retained-state failure remains a bounded full-page error with an explicit retry.
+
+Browser verification used the real app and isolated SQLite at 1440×1000, 1024×900, 768×900, and 390×844. At every width `documentElement.scrollWidth == clientWidth`; there was no framework overlay or clipped page content. At 390px, visible buttons were at least 44px high and mobile navigation links measured 64×56px inside the contained horizontal navigation flow. The existing SID-218 page-scrolling behavior remained intact. Durable screenshots were captured as `sid245-morning-1440.png`, `sid245-morning-1024.png`, `sid245-morning-768.png`, and `sid245-morning-390.png`, plus no-action, retained-503, and exact-preview states in the Codex visualization artifact directory for this release task.
+
+DOM/keyboard verification confirmed semantic main/regions/headings, native evidence and history disclosures, accessible button names, visible text for confidence/uncertainty/errors, and provider evidence reachable without hover. Opening the exact-provider dialog focused its named Close button, Tab stayed within the one-control unsupported dialog, Escape closed it, and focus returned to the triggering preview button. Global `:focus-visible` and reduced-motion rules remain active. A clean live tab had no console warnings/errors, no overlay, meaningful content, and the backend recorded HTTP 200 for `/morning-state`.
+
+## 67.6 Deterministic scenarios and live runtime observations
+
+Focused deterministic tests prove:
+
+- complete trustworthy no-action retains project/day context and manufactures no recommendation;
+- Must do remains distinct from inference/incomplete context; tomorrow-only work remains upcoming and cannot be elevated by free time;
+- an exactly linked sent/open mismatch preserves both claims, creates only a PCOS confirmation from Already done, and requires a separate exact provider preview;
+- waiting with and without a supplied review boundary, snooze-and-return, wrong-context evidence retention, active/superseded/reversed history, and safe undo;
+- stable identities, evidence/synthesis version binding, timezone-aware boundaries, idempotent retries at different server times, sensitive-field rejection, ordinary-read side-effect freedom, SID-243 confirmation integration, and SID-244 next-read integration;
+- preview-only non-mutation, exact-field confirmation, changed-state rejection, provider failure/exception handling, post-state verification, success attribution, duplicate protection, no title-only reconciliation, and no registered broad production mutation;
+- all five frontend sections, semantic attention distinctions, fact/conclusion/inference labels, evidence and uncertainty disclosure, honest no-action/partial-provider/retained states, payload binding, two-step dialog behavior, stale/success/failure/pending copy, history/undo, keyboard/focus behavior, narrow navigation, and absence of frontend synthesis recomputation.
+
+Live read-only provider-backed `GET /morning-state` returned HTTP 200 with section counts `[1, 1, 12, 7, 1]`, `complete_evidence=false`, `no_urgent_attention=false`, and nine provider diagnostics. Todoist `missing_history` remained explicit; usable Linear, project, and Calendar portions remained visible. A fresh isolated database established the existing SID-139 provider-record baseline of 195 checkpoints on the first provider ingestion. Two subsequent authenticated Morning reads left all counts unchanged: 195 provider-record checkpoints, zero consumer acknowledgements, zero corrections, zero reality confirmations/reversals, and zero provider previews.
+
+The controlled local browser flow then created one `wrong_context` correction, showed its attributable active ledger state, reflected the disputed item as non-urgent unknown on the next synthesis, and safely reversed it. The final isolated database retained one reversed correction. An exact preview retained one `unsupported` record and no confirmation because production has no write adapter. No live external provider mutation occurred.
+
+A separate deterministic browser fixture showed a complete calm no-action result with project/day context and no provider limitations. A controlled HTTP 503 on refresh preserved that successful brief and displayed the retained-state warning. The real live partial-provider state and deterministic complete/failed fixtures are intentionally reported separately.
+
+## 67.7 Files, final gates, limitations, and publication
+
+Focused SID-245 files are:
+
+- `backend/app/morning_corrections.py`
+- `backend/app/main.py`
+- `backend/app/morning_state.py`
+- `backend/app/reality_reconciliation.py`
+- `backend/app/storage.py`
+- `backend/tests/test_morning_corrections.py`
+- `backend/tests/test_morning_state.py`
+- `backend/tests/test_app_surfaces.py`
+- `frontend/src/app/morning/page.tsx`
+- `frontend/src/app/page.tsx`
+- `frontend/src/components/app-shell.tsx`
+- `frontend/src/lib/api.ts`
+- `frontend/src/lib/morning-brief.ts`
+- `frontend/tests/morning-brief.test.mjs`
+- `docs/PCOS-handoff.md`
+
+Verified gates before publication:
+
+- Required untouched baseline `f39389471a4d4f5b57a960603764f2b8fdf8cd85`: local HEAD, fetched `origin/main`, and GitHub `main` matched; worktree was clean; normal fast-forward publication was possible; 430 backend and 50 frontend tests passed.
+- Backend after SID-245: 447 tests passed in 4.564 seconds.
+- Frontend after SID-245: 62 tests passed.
+- TypeScript: serial `npx tsc --noEmit` passed. A prior concurrent invocation raced with `next build` regenerating `.next/types`; the build's own type check passed and the required standalone check passed immediately afterward against stable output.
+- Production: Next.js 15.5.19 `npm run build` passed and generated `/morning` with all existing routes.
+- Python: `python -m compileall -q backend/app backend/tests` passed.
+- `git diff --check`: passed.
+- Privacy/secret scan: no credential/token/private-key literal, raw email body, raw provider payload, or unrelated personal datum was added; only the explicit sensitive-key denylist matched retention terminology.
+- Forbidden-provider-mutation scan: no Todoist/Linear/provider client write was added. The only new `.mutate()` call is behind exact preview, exact confirmation, state revalidation, an injected provider-neutral adapter, and post-state verification; the production registry is empty.
+- Migration/compatibility review: table/index creation is additive and idempotent; no `DROP`, `DELETE`, or `ALTER` was added; the complete regression suite preserves existing endpoints and Today/Projects/Project Brain/Chat behavior.
+- Project hard-coding scan: no Freelance, Nebulo, XO, or A&M production rule appears in the new correction or Morning presentation code. PCOS names ownership/attribution only.
+- Title-only matching scan: no added line links, reconciles, or mutates by title. Exact stable provider/work identity is required and a same-title/different-ID confirmation fixture fails closed.
+- Generated/debug scan: no debug statement, TODO/FIXME, tracked build artifact, or unrelated file was added.
+- Frontend intelligence scan: no ranking, scoring, actionability, classification, provider-conflict, momentum, freshness, confidence, or change-detection computation was added to the Morning client.
+- Correction idempotency, ordinary-read side-effect, evidence-version, exact-confirmation, stale-preview, failure/uncertain-result, no-broad-adapter, SID-243 integration, and SID-244 integration checks all pass in focused and full suites.
+
+Honest limitations: current Todoist reads still lack completed-history coverage, so the live brief remains partial. Production external completion remains deliberately unavailable until a separate, exact, safely supported provider adapter exists; SID-245 does not broaden provider authority to manufacture one. The frontend's built-in Snooze affordance uses a clear one-hour timezone-aware wake time, while the backend accepts other explicit safe boundaries. No SID-246 surface projection or SID-247 milestone-closeout work is included.
+
+Publication is one focused SID-245 commit containing this section and the bounded implementation. A commit cannot contain its own final SHA without changing that SHA, so the exact published SHA is recorded in SID-245 Linear completion evidence and the final release report after the normal fast-forward push. Local HEAD, local `origin/main`, and GitHub `main` must match before SID-245 is marked Done. SID-246 must remain To Do with `startedAt=null`; SID-247 must remain To Do and blocked by SID-246; Personal Reality Loop V1 remains active.

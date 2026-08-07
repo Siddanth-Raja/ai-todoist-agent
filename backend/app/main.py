@@ -29,6 +29,17 @@ from .gmail_review import (
     GmailReadonlySelectionRequest,
 )
 from .morning_state import MorningStateSynthesis, morning_state_service
+from .morning_corrections import (
+    MorningCorrection,
+    MorningCorrectionRequest,
+    MorningCorrectionUndoRequest,
+    ProviderMutationPreview,
+    ProviderPreviewConfirmationRequest,
+    ProviderPreviewRequest,
+    morning_correction_repository,
+    morning_correction_service,
+    morning_provider_reconciliation_service,
+)
 from .project_brain import project_brain_service
 from .project_activity_focus import ProjectActivityFocus
 from .provider_changes import ChangeQueryResult
@@ -1104,6 +1115,113 @@ def morning_state_index(
             status_code=400,
             detail="current_time must include an explicit timezone offset",
         ) from exc
+
+
+@app.get("/morning-corrections", response_model=list[MorningCorrection])
+def morning_correction_history(
+    statement_id: str | None = None,
+    canonical_project_id: str | None = None,
+    authorization: str | None = Header(default=None),
+) -> tuple[MorningCorrection, ...]:
+    require_agent_api_key(authorization)
+    return morning_correction_repository.list(
+        statement_id=statement_id,
+        canonical_project_id=canonical_project_id,
+    )
+
+
+@app.post("/morning-corrections", response_model=MorningCorrection)
+def create_morning_correction(
+    request: MorningCorrectionRequest,
+    authorization: str | None = Header(default=None),
+) -> MorningCorrection:
+    require_agent_api_key(authorization)
+    settings = get_settings()
+    synthesis = morning_state_service.build(
+        settings=settings,
+        current_time=request.evaluated_at,
+    )
+    try:
+        return morning_correction_service.create(
+            request,
+            synthesis=synthesis,
+            created_at=datetime.now(settings.local_tz),
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status = 409 if any(
+            token in message
+            for token in ("changed", "idempotency", "already", "superseded")
+        ) else 400
+        raise HTTPException(status_code=status, detail=message) from exc
+
+
+@app.post(
+    "/morning-corrections/{correction_id}/undo",
+    response_model=MorningCorrection,
+)
+def undo_morning_correction(
+    correction_id: str,
+    request: MorningCorrectionUndoRequest,
+    authorization: str | None = Header(default=None),
+) -> MorningCorrection:
+    require_agent_api_key(authorization)
+    try:
+        return morning_correction_repository.reverse(
+            correction_id,
+            request,
+            reversed_at=datetime.now(get_settings().local_tz),
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status = 404 if "not found" in message else 409
+        raise HTTPException(status_code=status, detail=message) from exc
+
+
+@app.post(
+    "/morning-provider-reconciliation/preview",
+    response_model=ProviderMutationPreview,
+)
+def preview_morning_provider_reconciliation(
+    request: ProviderPreviewRequest,
+    authorization: str | None = Header(default=None),
+) -> ProviderMutationPreview:
+    require_agent_api_key(authorization)
+    settings = get_settings()
+    synthesis = morning_state_service.build(
+        settings=settings,
+        current_time=request.evaluated_at,
+    )
+    try:
+        return morning_provider_reconciliation_service.preview(
+            request,
+            synthesis=synthesis,
+            created_at=datetime.now(settings.local_tz),
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status = 409 if "changed" in message or "idempotency" in message else 400
+        raise HTTPException(status_code=status, detail=message) from exc
+
+
+@app.post(
+    "/morning-provider-reconciliation/confirm",
+    response_model=ProviderMutationPreview,
+)
+def confirm_morning_provider_reconciliation(
+    request: ProviderPreviewConfirmationRequest,
+    authorization: str | None = Header(default=None),
+) -> ProviderMutationPreview:
+    require_agent_api_key(authorization)
+    try:
+        return morning_provider_reconciliation_service.confirm(
+            request,
+            confirmed_at=datetime.now(get_settings().local_tz),
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status = 404 if "not found" in message else 409
+        raise HTTPException(status_code=status, detail=message) from exc
 
 
 @app.get("/projects", response_model=list[ProjectBrain])

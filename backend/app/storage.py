@@ -519,6 +519,88 @@ def ensure_database() -> None:
                         canonical_project_id, reconciliation_id, confirmed_at DESC
                     );
 
+                CREATE TABLE IF NOT EXISTS reality_confirmation_reversals (
+                    confirmation_id TEXT PRIMARY KEY,
+                    reversed_at TEXT NOT NULL,
+                    reversed_by_actor TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    schema_version INTEGER NOT NULL,
+                    FOREIGN KEY (confirmation_id) REFERENCES reality_confirmations(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS morning_corrections (
+                    id TEXT PRIMARY KEY,
+                    correction_type TEXT NOT NULL CHECK(correction_type IN (
+                        'already_done', 'not_today', 'wrong_context',
+                        'waiting_on_someone', 'snooze'
+                    )),
+                    statement_id TEXT NOT NULL,
+                    reconciliation_id TEXT,
+                    reality_item_id TEXT,
+                    synthesis_id TEXT NOT NULL,
+                    canonical_project_id TEXT,
+                    canonical_project_key TEXT,
+                    work_provider TEXT,
+                    work_provider_record_id TEXT,
+                    source_provider TEXT,
+                    source_provider_record_type TEXT,
+                    source_provider_record_id TEXT,
+                    evidence_references_json TEXT NOT NULL,
+                    evidence_version TEXT NOT NULL,
+                    prior_classification TEXT NOT NULL,
+                    parameters_json TEXT NOT NULL,
+                    correcting_actor TEXT NOT NULL,
+                    attribution TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    effective_at TEXT NOT NULL,
+                    expires_at TEXT,
+                    review_at TEXT,
+                    status TEXT NOT NULL CHECK(status IN ('active', 'superseded', 'reversed')),
+                    supersedes_correction_id TEXT,
+                    reversed_at TEXT,
+                    reversed_by_actor TEXT,
+                    reversal_idempotency_key TEXT UNIQUE,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    schema_version INTEGER NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_morning_corrections_statement_time
+                    ON morning_corrections(statement_id, created_at DESC, id ASC);
+
+                CREATE INDEX IF NOT EXISTS idx_morning_corrections_reconciliation_time
+                    ON morning_corrections(reconciliation_id, created_at DESC, id ASC);
+
+                CREATE TABLE IF NOT EXISTS morning_provider_previews (
+                    id TEXT PRIMARY KEY,
+                    statement_id TEXT NOT NULL,
+                    synthesis_id TEXT NOT NULL,
+                    evidence_version TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    provider_record_type TEXT NOT NULL,
+                    provider_record_id TEXT NOT NULL,
+                    field_name TEXT NOT NULL,
+                    previous_value_json TEXT,
+                    proposed_value_json TEXT NOT NULL,
+                    provider_revision TEXT,
+                    requested_by_actor TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN (
+                        'ready', 'unsupported', 'confirmed', 'stale',
+                        'succeeded', 'failed', 'uncertain'
+                    )),
+                    diagnostic TEXT,
+                    confirmation_idempotency_key TEXT UNIQUE,
+                    confirmed_by_actor TEXT,
+                    confirmed_at TEXT,
+                    result_reference TEXT,
+                    request_idempotency_key TEXT NOT NULL UNIQUE,
+                    schema_version INTEGER NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_morning_provider_previews_statement_time
+                    ON morning_provider_previews(statement_id, created_at DESC, id ASC);
+
                 CREATE TABLE IF NOT EXISTS canonical_projects (
                     id TEXT PRIMARY KEY,
                     key TEXT NOT NULL UNIQUE,

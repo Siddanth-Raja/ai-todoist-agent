@@ -328,13 +328,67 @@ class RealityConfirmationRepository:
         with database_connection() as connection:
             rows = connection.execute(
                 """
-                SELECT * FROM reality_confirmations
-                WHERE canonical_project_id = ?
-                ORDER BY confirmed_at DESC, id ASC
+                SELECT confirmations.* FROM reality_confirmations AS confirmations
+                LEFT JOIN reality_confirmation_reversals AS reversals
+                    ON reversals.confirmation_id = confirmations.id
+                WHERE confirmations.canonical_project_id = ?
+                  AND reversals.confirmation_id IS NULL
+                ORDER BY confirmations.confirmed_at DESC, confirmations.id ASC
                 """,
                 (canonical_project_id,),
             ).fetchall()
         return tuple(_confirmation_from_row(row) for row in rows)
+
+    def reverse(
+        self,
+        *,
+        confirmation_id: str,
+        reversed_at: datetime,
+        reversed_by_actor: str,
+        idempotency_key: str,
+    ) -> None:
+        _require_aware(reversed_at, "reversed_at")
+        if "@" in reversed_by_actor:
+            raise ValueError("reversed_by_actor must be a stable actor identity, not a raw email")
+        with database_connection() as connection:
+            existing = connection.execute(
+                """
+                SELECT confirmation_id, reversed_at, reversed_by_actor, idempotency_key
+                FROM reality_confirmation_reversals
+                WHERE confirmation_id = ? OR idempotency_key = ?
+                """,
+                (confirmation_id, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["confirmation_id"] != confirmation_id
+                    or existing["reversed_at"] != reversed_at.isoformat()
+                    or existing["reversed_by_actor"] != reversed_by_actor
+                    or existing["idempotency_key"] != idempotency_key
+                ):
+                    raise ValueError("reversal identity already belongs to another confirmation")
+                return
+            confirmation = connection.execute(
+                "SELECT id FROM reality_confirmations WHERE id = ?",
+                (confirmation_id,),
+            ).fetchone()
+            if confirmation is None:
+                raise ValueError("reality confirmation not found")
+            connection.execute(
+                """
+                INSERT INTO reality_confirmation_reversals
+                    (confirmation_id, reversed_at, reversed_by_actor,
+                     idempotency_key, schema_version)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    confirmation_id,
+                    reversed_at.isoformat(),
+                    reversed_by_actor,
+                    idempotency_key,
+                    REALITY_SCHEMA_VERSION,
+                ),
+            )
 
 
 class RealityReconciliationService:

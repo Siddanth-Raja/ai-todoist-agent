@@ -22,7 +22,7 @@ from app.calendar_tools import (  # noqa: E402
     infer_event_category,
 )
 from app.activity_domain import MeaningfulActivityEvent  # noqa: E402
-from app.storage import DEFAULT_MEMORIES, ensure_database  # noqa: E402
+from app.storage import DEFAULT_MEMORIES, database_connection, ensure_database  # noqa: E402
 from app.project_work_packages import LinearProjectDiagnostic  # noqa: E402
 from app.todoist_tools import TodoistReadResult  # noqa: E402
 
@@ -591,6 +591,70 @@ class AppSurfaceEndpointTests(unittest.TestCase):
         self.assertEqual(payload["now"], "2026-06-05T17:45:00-05:00")
         self.assertIn("5:45 PM", payload["now_display"])
         self.assertEqual(payload["minutes_until_next_event"], 45)
+
+    def test_morning_state_endpoint_is_additive_typed_and_read_only(self):
+        now = datetime(2026, 8, 7, 9, 0, tzinfo=ZoneInfo("America/Chicago"))
+        with patch(
+            "app.project_brain.list_active_tasks",
+            return_value=TodoistReadResult(tasks=[]),
+        ), patch.object(
+            main.morning_state_service,
+            "calendar_reader",
+            return_value=CalendarReadResult(events=[]),
+        ):
+            with database_connection() as connection:
+                before = {
+                    table: connection.execute(
+                        f"SELECT COUNT(*) FROM {table}"
+                    ).fetchone()[0]
+                    for table in (
+                        "provider_change_consumers",
+                        "reality_confirmations",
+                    )
+                }
+            first = main.morning_state_index(
+                current_time=now,
+                consumer_id="morning-state",
+                authorization=self.authorization,
+            )
+            second = main.morning_state_index(
+                current_time=now,
+                consumer_id="morning-state",
+                authorization=self.authorization,
+            )
+            with database_connection() as connection:
+                after = {
+                    table: connection.execute(
+                        f"SELECT COUNT(*) FROM {table}"
+                    ).fetchone()[0]
+                    for table in before
+                }
+
+        self.assertEqual(first.schema_version, 1)
+        self.assertEqual(first.model_dump(), second.model_dump())
+        self.assertEqual(before, after)
+        self.assertFalse(first.checkpoint.ordinary_read_acknowledges)
+        self.assertEqual(
+            {
+                first.changes_since_meaningful_check.section_id.value,
+                first.attention_today.section_id.value,
+                first.handled_paused_waiting.section_id.value,
+                first.project_momentum_constraints.section_id.value,
+                first.realistic_day_shape.section_id.value,
+            },
+            {
+                "changes_since_meaningful_check",
+                "attention_today",
+                "handled_paused_waiting",
+                "project_momentum_constraints",
+                "realistic_day_shape",
+            },
+        )
+        with self.assertRaisesRegex(HTTPException, "explicit timezone"):
+            main.morning_state_index(
+                current_time=datetime(2026, 8, 7, 9, 0),
+                authorization=self.authorization,
+            )
 
     def test_projects_endpoint_builds_project_brain(self):
         now = datetime(2026, 6, 5, 12, 0, tzinfo=ZoneInfo("America/Chicago"))

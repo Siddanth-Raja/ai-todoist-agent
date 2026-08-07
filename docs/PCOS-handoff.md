@@ -9921,3 +9921,156 @@ Final verified gates before publication:
 Intentional milestone boundaries remain: no SID-244 Morning State Synthesis or Good Morning UI; no correction UI/route; no background polling or scheduler; no automatic provider resolution; no new provider adapter; and no replacement of Activity/focus, SID-139 change detection, or recommendation policy. Current Todoist reads lack completed-history coverage, so live project projections remain incomplete and honestly retain unknown items. Exact linked cross-provider communication reconciliation is supported by the shared contract and fixtures but cannot be claimed from the inspected live snapshot without trustworthy linked communication evidence.
 
 Publication is one focused SID-243 commit containing this section and the bounded shared implementation. A commit cannot contain its own final SHA without changing that SHA, so the exact published SHA is recorded in SID-243 Linear evidence and the final release report after the normal fast-forward push. Local HEAD, local `origin/main`, and GitHub `main` must match it before SID-243 is marked Done. SID-244 must remain To Do; the Personal Reality Loop milestone must remain active.
+
+---
+
+# 66. SID-244 Morning State Synthesis From Shared Intelligence
+
+SID-244, **Generate Morning State Synthesis From Shared Intelligence**, adds the typed provider-neutral morning projection above the already-shared SID-138 activity/focus, SID-139 change/checkpoint, SID-243 reality/actionability, and Calendar time contracts. It does not add the SID-245 Good Morning UI, correction controls, SID-246 surface projections, a second planner, a recommendation engine, background work, or a provider mutation path.
+
+The preserved dependency direction is:
+
+```text
+SID-138 Project Activity / Focus
+SID-139 provider changes + durable acknowledged checkpoints
+SID-243 reality reconciliation + temporal actionability
+shared Calendar time normalization
+                         ↓
+            Morning State Synthesis
+                         ↓
+          authenticated GET /morning-state
+```
+
+`backend/app/morning_state.py` owns synthesis and section projection. Project Brain still owns project identity, provider aggregation, work normalization, focus, changes, and reality computation. The route only authenticates, validates the optional consumer identity and timezone-aware `current_time`, and returns the typed service result. The frontend change is additive API typing only; no component, route, layout, text heuristic, or Good Morning presentation was added.
+
+## 66.1 Versioned synthesis and statement contracts
+
+The frozen, extra-forbidden version-1 `MorningStateSynthesis` contains one stable synthesis identity, timezone-aware evaluation time, overall SID-243 classification, complete-evidence and honest no-urgent-attention flags, the full urgent-item count, all five typed sections, the selected meaningful-check checkpoint contract, and provider diagnostics.
+
+Every `MorningStatement` preserves:
+
+- a stable evidence-derived statement identity;
+- section identity and the reused SID-243 classification taxonomy;
+- a separate source status such as `active_momentum`, `waiting_external`, `fixed_commitment`, or a SID-139 change category;
+- canonical project, project key/life-area, normalized work, provider, provider-record, provider-reference, and provider-URL identity where applicable;
+- attributable evidence references and bounded evidence summaries, including both sides of a trustworthy conflict;
+- source timestamps and observation time;
+- freshness and availability;
+- explicit fact, deterministic conclusion, or bounded inference;
+- confidence and visible uncertainty;
+- preserved SID-243 temporal actionability;
+- an optional safe correction, confirmation, or next-action proposal whose `performs_provider_mutation` field is structurally fixed to `false`;
+- schema version.
+
+The synthesis reuses `needs_action`, `potential_mismatch`, `waiting`, `already_handled`, `upcoming_not_actionable`, `no_meaningful_change`, and `unknown` directly from SID-243. It does not create competing reconciliation semantics. Provider conflicts retain their distinct stable identities, claims, timestamps, evidence summaries, and safe review proposal; no source silently wins. Similar titles are never used to link records or construct statement identity.
+
+Each section computes its complete eligible statement set before deterministic classification, temporal, canonical-identity, provider-identity, and stable-ID ordering. Only then is the response bounded to 12 statements by default, with `total_count`, `returned_count`, `item_limit`, and `truncated` retained. Project Brain now retains the complete internal SID-243 projection on its service snapshot while preserving the existing 12-item public `reality` response exactly.
+
+## 66.2 Deterministic meaningful-check rule
+
+The changes section uses a documented provider-scope rule for consumer `morning-state` by default, or another bounded consumer identity supplied by the caller:
+
+1. Prefer each provider scope's explicit durable SID-139 consumer checkpoint.
+2. When a scope has no acknowledgement, use a deterministic 30-day retained-history fallback.
+3. Use mixed mode when some scopes have explicit checkpoints and others require fallback.
+4. Read every eligible SID-139 cursor page from the earliest selected boundary, then apply the exact per-scope effective-time and event-position boundary.
+5. Exclude future-effective events through the existing SID-139 query contract. A future-skewed acknowledgement is ignored for selection, reported diagnostically, and replaced by the safe fallback so it cannot poison ordering.
+6. Preserve `historical_coverage_start`, `retained_from`, provider availability, baseline-only history, staleness, and failures. If any applicable scope does not cover its selected boundary, the section returns `unknown`/incomplete coverage rather than `no_meaningful_change`.
+
+`ConsumerChangeCheckpoint` and the new `ProviderChangeService.consumer_checkpoints()` read seam expose the existing durable acknowledgement rows without advancing them. Ordinary Morning State reads set `ordinary_read_acknowledges=false`; they create no acknowledgement or consumer row. The endpoint does not create or acknowledge a meaningful checkpoint merely because the synthesis was viewed.
+
+## 66.3 Five-section behavior
+
+### Changes since last meaningful check
+
+The section projects complete eligible SID-139 transitions with canonical provider identity, stable record identity, source/effective/observation times, and normalized transition evidence. Completion transitions can reassure as `already_handled`; current waiting/blocker transitions remain `waiting`; other changes stay attributable without being promoted into unsupported actionability. A complete empty window may return `no_meaningful_change`. Missing, stale, retained-after-boundary, baseline-only, or failed history returns `unknown`.
+
+### Attention today
+
+Only SID-243 `needs_action` and `potential_mismatch` items enter primary attention. Existing overdue and due-today normalized obligations therefore retain the shared Must do protection without a second scoring path. Tomorrow-only `upcoming_not_actionable` work cannot compete. Preparation appears only when SID-243 already established a currently useful preparation window. Waiting work remains outside attention until its shared temporal/actionability classification changes. A complete eligible set with no urgent item produces an explicit valid no-action statement; incomplete evidence says only that no urgent item is currently supported.
+
+### Handled, paused, and waiting
+
+Attributable SID-243 `already_handled`, `waiting`, and `upcoming_not_actionable` items provide reassurance after primary attention. They retain distinct statuses, temporal boundaries, confirmation provenance, identities, and evidence. Intentional pause is added only from an explicit reviewed SID-138 intent; inactivity or a quiet inference cannot manufacture a pause. No read creates a confirmation or invokes a provider correction.
+
+### Project momentum and constraints
+
+Every canonical Project Brain project receives one pulse statement derived directly from its complete-set SID-138 focus result. The section retains `active_momentum`, `waiting_external`, `intentionally_paused`, `dedicated_session_needed`, `quiet_possible_drift`, `recently_completed`, and `insufficient_evidence`, plus supporting evidence counts, provider coverage, confidence, freshness, uncertainty, and a focused confirmation question when SID-138 recommends one. External waits remain distinct from user inaction. Quiet stays a conservative inference; silence does not become intent or adverse project meaning. Production synthesis contains no named project, person, device-context, abandonment, or emotional-state inference rule.
+
+### Realistic day shape
+
+The section reuses `normalize_calendar_time` and the existing Calendar blocking/free-block semantics. Scheduled fixed commitments preserve stable event identity, start/end times, and explicit language that reserved time does not prove attendance or completion. A current or next usable free block is a deterministic capacity conclusion only; it never creates a task or command. A successful empty Calendar read can state that no blocking commitment remains. Calendar failure returns `unknown`/unavailable rather than a fabricated open day. Calendar state alone never creates a preparation action.
+
+## 66.4 Representative deterministic evidence
+
+Twenty focused SID-244 tests plus the additive endpoint regression prove:
+
+- the versioned synthesis, statement, checkpoint, section, count, provenance, fact-type, confidence, uncertainty, temporal, and safe-action contracts;
+- all five required sections;
+- a representative provider-neutral scenario in which PCOS- and Freelance-shaped fixtures have supported momentum, an exactly linked sent/open Freelance-style follow-up remains an attributable `potential_mismatch` with both claims visible and a non-mutating review proposal, an XO-shaped fixture has a structured dedicated-session state, a Nebulo-shaped fixture has an external waiting constraint, and a tomorrow-only item remains outside attention;
+- concrete `needs_action` obligations lead, preparation appears only from SID-243, waiting/handled/upcoming items reassure, and explicit pause is never inferred from quiet;
+- a large Calendar free block describes capacity without manufacturing work, and a scheduled event never claims attendance or completion;
+- complete no-action and incomplete/unknown states are different;
+- stale, missing, partial, unavailable, and conflicting evidence remain visible;
+- exact identity, not title similarity, controls statement identity;
+- explicit checkpoint preference, no-checkpoint fallback, mixed/retained boundaries, and future-skew handling;
+- complete-set totals are computed before section bounds;
+- deterministic ordering and identical repeated reads;
+- timezone-aware evaluation;
+- existing Project Brain public reality bounds and identity compatibility;
+- ordinary reads create no consumer acknowledgement or reality confirmation.
+
+The complete backend regression suite preserves Activity, Projects, populated project details, SID-138 focus, SID-139 recent changes, SID-243 reality, Today Must do, Tasks, recommendations, Chat, email, pending actions, Calendar, and existing public response behavior. The unchanged frontend suite continues to prove that overdue/due-today Must do remains ahead of and distinct from Recommended work.
+
+## 66.5 Live read-only runtime verification
+
+The real local FastAPI application started cleanly on an isolated verification port. `GET /health` returned HTTP 200 with `{"status":"ok","mode":"ai_agent"}`. Authenticated read-only `GET /activity`, `GET /projects`, and populated PCOS, Freelance, XO, and Nebulo project details all returned HTTP 200. The additive authenticated `GET /morning-state` serialized all five sections with schema version 1.
+
+At injected `2026-08-07T14:00:00-05:00`, the inspected Morning State result was honestly incomplete: overall `unknown`, zero supported urgent items, `no_urgent_attention=false`, no acknowledged `morning-state-runtime-verification` checkpoint, and a 30-day fallback whose four applicable Linear scopes did not completely cover the fallback boundary. It returned three attributable PCOS provider changes (`milestone_progressed`, `work_started`, and `work_completed`), one incomplete-coverage attention statement, 135 handled/waiting/supporting candidates before the 12-item response bound, seven project-pulse statements, and one usable Calendar free-block statement. The usable block did not propose work.
+
+Current project observations were:
+
+| Project | SID-138 focus | Focus evidence | SID-139 changes | SID-243 reality | Complete evidence |
+| --- | --- | ---: | ---: | --- | --- |
+| PCOS | `active_momentum` / low confidence | 135 | 3 | `waiting`, 86 total / 12 returned: 41 handled, 28 waiting, 17 unknown | false |
+| Freelance | `waiting_external` / low confidence | 50 | 0 | `waiting`, 38 / 12: 18 handled, 12 waiting, 6 unknown, 2 no-action | false |
+| XO | `waiting_external` / low confidence | 56 | 0 | `waiting`, 36 / 12: 21 handled, 8 waiting, 7 unknown | false |
+| Nebulo | `waiting_external` / low confidence | 20 | 0 | `waiting`, 12 / 12: 7 waiting, 5 unknown | false |
+
+All four mapped Linear reads were connected. Todoist remained explicitly `missing_history`, which correctly reduced confidence and prevented complete no-change/no-action claims. The live snapshot did not establish a trustworthy linked Gmail follow-up or a structured XO device-context next step, so those representative behaviors are claimed only from deterministic fixtures and not fabricated as live facts.
+
+Two repeated authenticated Morning State GETs with the same injected time produced the identical SHA-256 response hash `3ff6d8e80df830cde1759b7b3ea08dc5785892783d14fe0844cf94d598967f40`. Before and after those reads, durable counts remained: zero provider-change consumer acknowledgements, zero reality confirmations, three provider-change events, and 195 provider-record checkpoints. All runtime traffic was GET/read-only. No Todoist, Gmail, Google Calendar, Linear work item, or other external provider data was mutated by runtime verification.
+
+## 66.6 Final automated gates, limitations, and publication
+
+Changed files for the focused SID-244 implementation are:
+
+- `backend/app/morning_state.py`
+- `backend/app/main.py`
+- `backend/app/project_brain.py`
+- `backend/app/provider_changes.py`
+- `backend/tests/test_morning_state.py`
+- `backend/tests/test_app_surfaces.py`
+- `frontend/src/lib/api.ts`
+- `docs/PCOS-handoff.md`
+
+Final verified gates before publication:
+
+- Required untouched baseline at `a9c28105feb4fc1cd5f73b28b6845ae07d8742a7`: 409 backend tests and 50 frontend tests passed; local `HEAD`, fetched `origin/main`, and GitHub `main` matched; worktree was clean; normal fast-forward publication was possible.
+- Backend after SID-244: 430 tests passed in 3.166 seconds, including 20 focused Morning State tests and the additive endpoint regression.
+- Frontend: 50 tests passed.
+- TypeScript: `./node_modules/.bin/tsc --noEmit` passed.
+- Production: Next.js 15.5.19 `npm run build` passed for all routes.
+- Python compilation: `python -m compileall -q backend/app backend/scripts backend/tests` passed.
+- `git diff --check`: passed.
+- Privacy/secret scan: no credential, token literal, private key, personal email address, raw email body, raw provider payload, or unrelated personal data was added.
+- Forbidden-provider-mutation scan: Morning State imports no provider write client or mutation function and adds only authenticated GET behavior; every suggested action fixes `performs_provider_mutation=false`.
+- Project/person/device hard-coding scan: no named project, person, VR/headset, abandonment, neglect, or emotional-state production rule exists.
+- Title-only scan: title is presentation context only and never participates in identity, matching, checkpoint selection, classification, ordering, or stable IDs.
+- Migration/compatibility review: no table or destructive migration was added; the checkpoint change is a read-only query over SID-139's existing additive table; existing Project Brain `activity_focus`, `recent_changes`, and bounded `reality` remain compatible.
+- Complete-set/bounding review: Project Brain retains complete internal reality items for synthesis, SID-139 cursor pages are exhausted before checkpoint filtering, and every Morning section computes total/order before response slicing.
+- Generated-artifact/debug scan: no tracked build artifact, generated file, debug print, breakpoint, TODO, or unrelated edit was added.
+
+Intentional milestone boundaries remain: no Good Morning UI or rendering; no durable correction control or confirmation route; no SID-246 Today/Project Brain/Chat projection work; no new recommendation policy; no background polling or scheduler; no automatic provider correction; no new broad adapter; and no Freelance automation. The default no-acknowledgement fallback is intentionally bounded to 30 days and remains incomplete when retained/provider history cannot cover it. Current Todoist reads lack completed history, and live communication evidence remains unavailable unless a trustworthy exactly linked provider source supplies it.
+
+Publication is one focused SID-244 commit containing this section and the bounded implementation. A commit cannot contain its own final SHA without changing that SHA, so the exact published SHA is recorded in SID-244 Linear evidence and the final release report after the normal fast-forward push. Local `HEAD`, local `origin/main`, and GitHub `main` must match before SID-244 is marked Done. SID-245 and SID-246 may become unblocked but must remain To Do with `startedAt=null`; the Personal Reality Loop V1 milestone remains active.

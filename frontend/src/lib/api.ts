@@ -610,6 +610,96 @@ export type RealityProjection = {
   provider_diagnostics: string[];
 };
 
+export type MorningSectionId =
+  | "changes_since_meaningful_check"
+  | "attention_today"
+  | "handled_paused_waiting"
+  | "project_momentum_constraints"
+  | "realistic_day_shape";
+
+export type MorningStatement = {
+  schema_version: 1;
+  statement_id: string;
+  section: MorningSectionId;
+  classification: RealityClassification;
+  status: string;
+  summary: string;
+  reason: string;
+  canonical_project_id: string | null;
+  canonical_project_key: string | null;
+  life_area_id: string | null;
+  linked_work_identity: RealityWorkIdentity | null;
+  provider_identities: RealityEvidence["provider_identity"][];
+  source_evidence_references: string[];
+  source_evidence_summaries: string[];
+  source_timestamps: string[];
+  observed_at: string;
+  freshness: "fresh" | "stale" | "mixed" | "unavailable" | "unknown";
+  availability: "complete" | "partial" | "unavailable" | "not_applicable" | "unknown";
+  fact_type: "explicit_fact" | "deterministic_conclusion" | "inference";
+  confidence: "high" | "medium" | "low" | "unknown";
+  uncertainty: string[];
+  temporal: RealityTemporalActionability | null;
+  suggested_action: {
+    code: string;
+    summary: string;
+    target_work_identity: RealityWorkIdentity | null;
+    requires_user_confirmation: boolean;
+    performs_provider_mutation: false;
+  } | null;
+};
+
+export type MorningSection = {
+  schema_version: 1;
+  section_id: MorningSectionId;
+  heading: string;
+  statements: MorningStatement[];
+  total_count: number;
+  returned_count: number;
+  item_limit: number;
+  truncated: boolean;
+};
+
+export type MorningCheckpointSelection = {
+  schema_version: 1;
+  consumer_id: string;
+  mode: "acknowledged_checkpoint" | "retained_history_fallback" | "mixed";
+  selected_since: string;
+  fallback_days: 30;
+  checkpoints: Array<{
+    schema_version: 1;
+    consumer_id: string;
+    provider: string;
+    scope_id: string;
+    canonical_project_id: string | null;
+    acknowledged_effective_at: string;
+    acknowledged_event_position: number;
+    acknowledged_at: string;
+  }>;
+  fallback_scopes: string[];
+  coverage_complete: boolean;
+  retained_boundaries: string[];
+  diagnostics: string[];
+  ordinary_read_acknowledges: false;
+};
+
+export type MorningStateSynthesis = {
+  schema_version: 1;
+  synthesis_id: string;
+  evaluated_at: string;
+  overall_classification: RealityClassification;
+  complete_evidence: boolean;
+  no_urgent_attention: boolean;
+  urgent_attention_count: number;
+  changes_since_meaningful_check: MorningSection;
+  attention_today: MorningSection;
+  handled_paused_waiting: MorningSection;
+  project_momentum_constraints: MorningSection;
+  realistic_day_shape: MorningSection;
+  checkpoint: MorningCheckpointSelection;
+  provider_diagnostics: string[];
+};
+
 export type ProjectBrain = {
   key: string;
   name: string;

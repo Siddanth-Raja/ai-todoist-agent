@@ -24,6 +24,7 @@ from .project_registry import (
 )
 from .project_activity_focus import (
     ExplicitProjectIntent,
+    ProjectActivityFocus,
     ProviderCoverage,
     ProviderCoverageState,
     project_activity_focus_service,
@@ -33,11 +34,12 @@ from .project_work_packages import (
     project_work_package_service,
 )
 from .provider_changes import (
+    ChangeQueryResult,
     ObservationAvailability,
     ObservationFreshness,
     provider_change_service,
 )
-from .reality_reconciliation import reality_reconciliation_service
+from .reality_reconciliation import RealityProjection, reality_reconciliation_service
 from .storage import (
     get_latest_project_focus_intent,
     list_activity,
@@ -64,6 +66,9 @@ class ProjectBrainProjectSnapshot:
     work_items: tuple[NormalizedWorkItem, ...]
     recommendation_candidates: tuple[NormalizedWorkItem, ...]
     canonical_recommendation: WorkRecommendation | None
+    activity_focus: ProjectActivityFocus | None = None
+    recent_changes: ChangeQueryResult | None = None
+    reality: RealityProjection | None = None
 
 
 @dataclass(frozen=True)
@@ -419,7 +424,7 @@ class ProjectBrainService:
             canonical_project_id=canonical_project_id,
             evaluated_at=now,
         )
-        reality = reality_reconciliation_service.project_from_work(
+        complete_reality = reality_reconciliation_service.project_from_work(
             canonical_project_id=canonical_project_id,
             canonical_project_key=str(project["key"]),
             work_items=project_work,
@@ -427,8 +432,17 @@ class ProjectBrainService:
             provider_coverage=provider_coverage,
             recent_changes=complete_reality_changes,
             evaluated_at=now,
-            item_limit=12,
+            item_limit=max(12, len(project_work)),
         )
+        reality = complete_reality
+        if complete_reality.total_count > 12:
+            reality = complete_reality.model_copy(
+                update={
+                    "items": complete_reality.items[:12],
+                    "returned_count": 12,
+                    "item_limit": 12,
+                }
+            )
 
         summary = {
             "key": project["key"],
@@ -477,6 +491,9 @@ class ProjectBrainService:
             work_items=tuple(project_work),
             recommendation_candidates=tuple(recommendation_candidates),
             canonical_recommendation=recommendation,
+            activity_focus=activity_focus,
+            recent_changes=complete_reality_changes,
+            reality=complete_reality,
         )
 
 

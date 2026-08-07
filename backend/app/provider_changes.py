@@ -249,6 +249,27 @@ class ChangeQueryResult(BaseModel):
     conclusion: ChangeComparisonState
 
 
+class ConsumerChangeCheckpoint(BaseModel):
+    """A durable, explicitly acknowledged provider-change position."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = PROVIDER_CHANGE_SCHEMA_VERSION
+    consumer_id: str
+    provider: str
+    scope_id: str
+    canonical_project_id: str | None = None
+    acknowledged_effective_at: datetime
+    acknowledged_event_position: int
+    acknowledged_at: datetime
+
+    @model_validator(mode="after")
+    def validate_timestamps(self) -> "ConsumerChangeCheckpoint":
+        _require_aware(self.acknowledged_effective_at, "acknowledged_effective_at")
+        _require_aware(self.acknowledged_at, "acknowledged_at")
+        return self
+
+
 class ProviderChangeService:
     def observe_scope(
         self,
@@ -535,6 +556,46 @@ class ProviderChangeService:
                     PROVIDER_CHANGE_SCHEMA_VERSION,
                 ),
             )
+
+    def consumer_checkpoints(
+        self,
+        *,
+        consumer_id: str,
+        canonical_project_id: str | None = None,
+    ) -> tuple[ConsumerChangeCheckpoint, ...]:
+        """Read explicit acknowledgement positions without advancing them."""
+
+        with database_connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT consumers.*, scopes.canonical_project_id
+                FROM provider_change_consumers AS consumers
+                LEFT JOIN provider_change_scopes AS scopes
+                  ON scopes.provider = consumers.provider
+                 AND scopes.scope_id = consumers.scope_id
+                WHERE consumers.consumer_id = ?
+                  AND (? IS NULL OR scopes.canonical_project_id = ?)
+                ORDER BY consumers.provider, consumers.scope_id
+                """,
+                (consumer_id, canonical_project_id, canonical_project_id),
+            ).fetchall()
+        return tuple(
+            ConsumerChangeCheckpoint(
+                consumer_id=row["consumer_id"],
+                provider=row["provider"],
+                scope_id=row["scope_id"],
+                canonical_project_id=row["canonical_project_id"],
+                acknowledged_effective_at=_parse_datetime(
+                    row["acknowledged_effective_at"]
+                ),
+                acknowledged_event_position=int(
+                    row["acknowledged_event_position"]
+                ),
+                acknowledged_at=_parse_datetime(row["acknowledged_at"]),
+                schema_version=int(row["schema_version"]),
+            )
+            for row in rows
+        )
 
 
 provider_change_service = ProviderChangeService()

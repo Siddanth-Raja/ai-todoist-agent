@@ -28,6 +28,7 @@ from .gmail_review import (
     GmailReadonlySelectionPreview,
     GmailReadonlySelectionRequest,
 )
+from .morning_state import MorningStateSynthesis, morning_state_service
 from .project_brain import project_brain_service
 from .project_activity_focus import ProjectActivityFocus
 from .provider_changes import ChangeQueryResult
@@ -1075,6 +1076,34 @@ def today_index(
         settings=get_settings(),
         current_time=current_time,
     )
+
+
+@app.get("/morning-state", response_model=MorningStateSynthesis)
+def morning_state_index(
+    current_time: datetime | None = None,
+    consumer_id: str = "morning-state",
+    authorization: str | None = Header(default=None),
+) -> MorningStateSynthesis:
+    require_agent_api_key(authorization)
+    normalized_consumer = consumer_id.strip()
+    if not normalized_consumer or len(normalized_consumer) > 120:
+        raise HTTPException(
+            status_code=400,
+            detail="consumer_id must contain 1 to 120 characters",
+        )
+    try:
+        return morning_state_service.build(
+            settings=get_settings(),
+            current_time=current_time,
+            consumer_id=normalized_consumer,
+        )
+    except ValueError as exc:
+        if "timezone-aware" not in str(exc):
+            raise
+        raise HTTPException(
+            status_code=400,
+            detail="current_time must include an explicit timezone offset",
+        ) from exc
 
 
 @app.get("/projects", response_model=list[ProjectBrain])

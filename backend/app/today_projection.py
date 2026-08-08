@@ -8,6 +8,8 @@ from .project_brain import (
     ProjectBrainSnapshot,
     project_brain_service,
 )
+from .personal_reality import PersonalRealityProjection, personal_reality_service
+from .reality_reconciliation import RealityClassification, RealityItem
 from .recommendation_service import (
     RecommendationContext,
     WorkRecommendation,
@@ -73,10 +75,15 @@ class TodayProjectionService:
             ),
             minutes_until_upcoming_commitment=calendar_time.minutes_until_next_event,
         )
+        personal_reality = project_snapshot.personal_reality or personal_reality_service.build(
+            project_snapshot.projects,
+            evaluated_at=project_snapshot.now,
+        )
         must_do = today_obligation_service.build(
             project_snapshot.normalized_work,
             current_time=project_snapshot.now,
             provider_states=project_snapshot.work_provider_states,
+            reality_items=personal_reality.items,
         )
         obligation_identities = {
             (item.provider, item.provider_record_id) for item in must_do.items
@@ -87,6 +94,7 @@ class TodayProjectionService:
                 for item in project_snapshot.normalized_work
                 if (item.provider, item.provider_record_id)
                 not in obligation_identities
+                and _recommendable_now(item, personal_reality)
             ],
             context=context,
         )
@@ -117,8 +125,15 @@ class TodayProjectionService:
                 for event in calendar_time.remaining_events
             ],
             "must_do": must_do.model_dump(mode="json"),
+            "personal_reality": personal_reality.bounded(24).model_dump(mode="json"),
+            "reality_attention": [
+                item.model_dump(mode="json")
+                for item in personal_reality.items
+                if _reviewable_now(item)
+            ][:12],
             "recommendation": _today_recommendation(
                 project_snapshot=project_snapshot,
+                personal_reality=personal_reality,
                 calendar_time=calendar_time,
                 current_action=current_action,
                 must_do=must_do,
@@ -132,6 +147,7 @@ class TodayProjectionService:
 def _today_recommendation(
     *,
     project_snapshot: ProjectBrainSnapshot,
+    personal_reality: PersonalRealityProjection,
     calendar_time: CalendarTimeState,
     current_action: WorkRecommendation | None,
     must_do: TodayObligationProjection,
@@ -207,6 +223,12 @@ def _today_recommendation(
                 str(project.summary["next_recommendation"]) if project else None
             ),
             contextual_override=contextual_override,
+            reality=(
+                personal_reality.item_for_work(
+                    current_action.selected_work.provider,
+                    current_action.selected_work.provider_record_id,
+                )
+            ),
         )
 
     if errors:
@@ -267,6 +289,7 @@ def _recommendation_payload(
     canonical_project_key: str | None = None,
     canonical_project_next_move: str | None = None,
     contextual_override: bool = False,
+    reality: RealityItem | None = None,
 ) -> dict[str, Any]:
     return {
         "type": recommendation_type,
@@ -284,7 +307,38 @@ def _recommendation_payload(
         "canonical_project_key": canonical_project_key,
         "canonical_project_next_move": canonical_project_next_move,
         "contextual_override": contextual_override,
+        "reality": reality.model_dump(mode="json") if reality else None,
     }
+
+
+def _recommendable_now(
+    item: NormalizedWorkItem,
+    personal_reality: PersonalRealityProjection,
+) -> bool:
+    reality = personal_reality.item_for_work(item.provider, item.provider_record_id)
+    if reality is None:
+        return True
+    if reality.classification in {
+        RealityClassification.POTENTIAL_MISMATCH,
+        RealityClassification.WAITING,
+        RealityClassification.ALREADY_HANDLED,
+        RealityClassification.UPCOMING_NOT_ACTIONABLE,
+        RealityClassification.NO_MEANINGFUL_CHANGE,
+    }:
+        return False
+    if (
+        reality.classification == RealityClassification.UNKNOWN
+        and reality.effective_correction is not None
+    ):
+        return False
+    return True
+
+
+def _reviewable_now(item: RealityItem) -> bool:
+    return (
+        item.classification == RealityClassification.POTENTIAL_MISMATCH
+        and item.temporal.action_useful_now is True
+    )
 
 
 def _life_area_projections(

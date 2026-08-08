@@ -343,6 +343,14 @@ def handle_chat(
             plan=plan,
             calendar_events=calendar_result.events,
             errors=errors,
+            grounding={
+                "schema_version": 1,
+                "question_kind": project_grounding.question_kind.value,
+                "canonical_project_key": project_grounding.canonical_project_key,
+                "evidence": list(project_grounding.evidence),
+                "provider_limitations": list(project_grounding.warnings),
+                "ordinary_read_side_effects": False,
+            },
         )
         next_state = {
             "last_question": _last_question(project_grounding.answer),
@@ -562,6 +570,7 @@ def _conversation_answer(
     plan: dict[str, Any],
     calendar_events: list[dict[str, Any]],
     errors: list[str | dict[str, Any]],
+    grounding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "answer": answer,
@@ -575,6 +584,7 @@ def _conversation_answer(
         "calendar_events": _summarize_calendar_events(calendar_events),
         "mode": MODE,
         "errors": errors,
+        "grounding": grounding,
     }
 
 

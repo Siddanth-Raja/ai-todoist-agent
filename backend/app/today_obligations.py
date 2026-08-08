@@ -3,6 +3,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
+from .reality_reconciliation import RealityClassification, RealityItem
 from .work_domain import NormalizedWorkItem, WorkProviderReadState, WorkStatus
 
 
@@ -30,6 +31,7 @@ class TodayObligation(BaseModel):
     days_overdue: int
     priority: int
     provider_url: str | None = None
+    reality: RealityItem | None = None
 
 
 class TodayObligationProjection(BaseModel):
@@ -48,8 +50,17 @@ class TodayObligationService:
         *,
         current_time: datetime,
         provider_states: tuple[WorkProviderReadState, ...] = (),
+        reality_items: tuple[RealityItem, ...] = (),
     ) -> TodayObligationProjection:
         today = current_time.date()
+        reality_by_identity = {
+            (
+                item.normalized_work_identity.provider,
+                item.normalized_work_identity.provider_record_id,
+            ): item
+            for item in reality_items
+            if item.normalized_work_identity is not None
+        }
         by_identity: dict[tuple[str, str], TodayObligation] = {}
         for item in work_items:
             if not _eligible(item):
@@ -58,6 +69,12 @@ class TodayObligationService:
             if local_due_date is None or local_due_date > today:
                 continue
             identity = (item.provider, item.provider_record_id)
+            reality = reality_by_identity.get(identity)
+            if (
+                reality is not None
+                and reality.classification != RealityClassification.NEEDS_ACTION
+            ):
+                continue
             by_identity[identity] = TodayObligation(
                 provider=item.provider,
                 provider_record_id=item.provider_record_id,
@@ -73,6 +90,7 @@ class TodayObligationService:
                 days_overdue=max(0, (today - local_due_date).days),
                 priority=int(item.priority),
                 provider_url=item.provider_url,
+                reality=reality,
             )
 
         failures = tuple(state for state in provider_states if not state.available)

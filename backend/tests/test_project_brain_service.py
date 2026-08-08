@@ -784,6 +784,55 @@ class ProjectBrainServiceTests(unittest.TestCase):
                 )
             )
 
+    def test_ordinary_snapshot_reads_do_not_write_provider_change_state(self):
+        client = unittest.mock.Mock()
+        client.list_issues.return_value = LinearReadResult(records=[])
+        with patch("app.project_brain.LinearClient", return_value=client), patch(
+            "app.project_brain.list_active_tasks",
+            return_value=TodoistReadResult(tasks=[]),
+        ), patch(
+            "app.project_brain.list_upcoming_events",
+            return_value=CalendarReadResult(events=[]),
+        ), patch("app.project_brain.list_memory_entries", return_value=[]), patch(
+            "app.project_brain.list_activity", return_value=[]
+        ), patch(
+            "app.project_brain.provider_change_service.record_coverage"
+        ) as record_coverage, patch(
+            "app.project_brain.provider_change_service.observe_scope"
+        ) as observe_scope:
+            self.service.snapshot(
+                settings=FakeSettings(linear_api_key="configured"),
+                current_time=self.now,
+            )
+
+        record_coverage.assert_not_called()
+        observe_scope.assert_not_called()
+
+    def test_explicit_ingestion_can_record_provider_change_state(self):
+        client = unittest.mock.Mock()
+        client.list_issues.return_value = LinearReadResult(records=[])
+        with patch("app.project_brain.LinearClient", return_value=client), patch(
+            "app.project_brain.list_active_tasks",
+            return_value=TodoistReadResult(tasks=[]),
+        ), patch(
+            "app.project_brain.list_upcoming_events",
+            return_value=CalendarReadResult(events=[]),
+        ), patch("app.project_brain.list_memory_entries", return_value=[]), patch(
+            "app.project_brain.list_activity", return_value=[]
+        ), patch(
+            "app.project_brain.provider_change_service.record_coverage"
+        ) as record_coverage, patch(
+            "app.project_brain.provider_change_service.observe_scope"
+        ) as observe_scope:
+            self.service.snapshot(
+                settings=FakeSettings(linear_api_key="configured"),
+                current_time=self.now,
+                record_change_observations=True,
+            )
+
+        self.assertEqual(record_coverage.call_count, 3)
+        self.assertEqual(observe_scope.call_count, 4)
+
     def test_snapshot_preserves_summaries_structured_recommendations_and_normalized_work(self):
         task = {
             "id": "xo-task",

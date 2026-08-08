@@ -2,6 +2,7 @@ from datetime import datetime
 from pathlib import Path
 import sys
 import unittest
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -45,6 +46,21 @@ class FakeBrainService:
     def get_project(self, project_key, *, settings, current_time=None):
         self.calls.append((project_key, settings, current_time))
         return self.snapshots.get(project_key)
+
+    def snapshot(self, *, settings, current_time=None):
+        self.calls.append(("snapshot", settings, current_time))
+        project_values = tuple(self.snapshots.values())
+        return SimpleNamespace(
+            projects=tuple(SimpleNamespace(summary=value) for value in project_values),
+            personal_reality={
+                "schema_version": 1,
+                "items": tuple(
+                    item
+                    for value in project_values
+                    for item in value["reality"]["items"]
+                ),
+            },
+        )
 
 
 def snapshot(key, name, *, diagnostic_status="connected"):
@@ -94,6 +110,49 @@ def snapshot(key, name, *, diagnostic_status="connected"):
                 "Mapped Linear work loaded successfully."
                 if diagnostic_status == "connected"
                 else "Linear could not be reached; existing Project Brain sources remain available."
+            ),
+        },
+        "activity_focus": {
+            "canonical_project_key": key,
+            "primary_state": "active_momentum" if key == "pcos-ai-todoist-agent" else "waiting_external",
+            "confidence": "low",
+            "freshness": "unknown",
+            "evidence": [],
+        },
+        "recent_changes": {
+            "changes": (
+                [{"id": "change-1", "provider": "linear", "provider_record_id": "SID-245", "category": "work_completed"}]
+                if key == "pcos-ai-todoist-agent"
+                else []
+            ),
+            "total_count": 1 if key == "pcos-ai-todoist-agent" else 0,
+        },
+        "reality": {
+            "items": [
+                {
+                    "reality_item_id": f"reality:{key}",
+                    "canonical_project_key": key,
+                    "title": f"{name} obligation",
+                    "classification": "needs_action" if key == "pcos-ai-todoist-agent" else "waiting",
+                    "classification_reason": "Canonical shared classification.",
+                    "temporal": {
+                        "action_useful_now": key == "pcos-ai-todoist-agent",
+                    },
+                    "provider_identity": {
+                        "provider": "linear",
+                        "provider_record_id": f"record:{key}",
+                    },
+                    "evidence": [
+                        {
+                            "evidence_id": f"evidence:{key}",
+                            "summary": "Attributable Linear evidence.",
+                        }
+                    ],
+                    "effective_correction": None,
+                }
+            ],
+            "provider_diagnostics": (
+                ["todoist: missing_history"] if key == "pcos-ai-todoist-agent" else []
             ),
         },
     }
@@ -217,6 +276,34 @@ class ProjectChatGroundingTests(unittest.TestCase):
         self.assertIn("degraded", overview.answer)
         self.assertNotIn("0 active dependencies", overview.answer)
         self.assertNotIn("0 current Linear work packages", overview.answer)
+
+    def test_global_reality_questions_use_one_project_brain_snapshot_with_evidence(self):
+        attention = self.service.ground("What needs me today?", settings=self.settings, current_time=self.now)
+        changes = self.service.ground("What changed since I last checked?", settings=self.settings, current_time=self.now)
+        waiting = self.service.ground("What am I waiting on?", settings=self.settings, current_time=self.now)
+
+        self.assertEqual(attention.question_kind, ProjectQuestionKind.NEEDS_TODAY)
+        self.assertIn("PCOS / ai todoist agent obligation", attention.answer)
+        self.assertEqual(attention.evidence[0]["reality_item_id"], "reality:pcos-ai-todoist-agent")
+        self.assertIn("SID-245", changes.answer)
+        self.assertTrue(changes.evidence)
+        self.assertIn("waiting", waiting.answer.lower())
+        self.assertTrue(waiting.evidence)
+        self.assertEqual([call[0] for call in self.brain.calls], ["snapshot", "snapshot", "snapshot"])
+
+    def test_project_today_omission_and_uncertainty_are_explained_without_title_matching(self):
+        omitted = self.service.ground("Why is XO not on Today?", settings=self.settings)
+        not_actionable = self.service.ground("What needs me today for Nebulo?", settings=self.settings)
+        uncertain = self.service.ground("What is uncertain because a provider is unavailable?", settings=self.settings)
+
+        self.assertEqual(omitted.question_kind, ProjectQuestionKind.WHY_NOT_TODAY)
+        self.assertIn("waiting", omitted.answer.lower())
+        self.assertEqual(omitted.evidence[0]["provider_identity"]["provider_record_id"], "record:xo")
+        self.assertEqual(not_actionable.question_kind, ProjectQuestionKind.NEEDS_TODAY)
+        self.assertIn("no shared item", not_actionable.answer.lower())
+        self.assertEqual(not_actionable.evidence, ())
+        self.assertIn("missing_history", uncertain.answer)
+        self.assertNotIn("nothing changed", uncertain.answer.lower())
 
     def test_generic_global_planning_question_is_not_hijacked(self):
         result = self.service.ground("What should I work on right now?", settings=self.settings)

@@ -13,6 +13,7 @@ from .dependency_evaluator import (
 )
 from .linear_client import LinearClient, LinearProviderError
 from .linear_work_adapter import linear_work_adapter
+from .personal_reality import PersonalRealityProjection, personal_reality_service
 from .recommendation_service import (
     RecommendationAction,
     WorkRecommendation,
@@ -78,6 +79,7 @@ class ProjectBrainSnapshot:
     normalized_work: tuple[NormalizedWorkItem, ...]
     warnings: tuple[str, ...] = ()
     work_provider_states: tuple[WorkProviderReadState, ...] = ()
+    personal_reality: PersonalRealityProjection | None = None
 
     def project_for_key(self, key: str) -> ProjectBrainProjectSnapshot | None:
         return next(
@@ -120,6 +122,7 @@ class ProjectBrainService:
         *,
         settings: Any,
         current_time: datetime | None = None,
+        record_change_observations: bool = False,
     ) -> ProjectBrainSnapshot:
         registry = self.registry_service.snapshot()
         local_now = current_time.astimezone(settings.local_tz) if current_time else datetime.now(settings.local_tz)
@@ -155,6 +158,7 @@ class ProjectBrainService:
                 registry=registry,
                 settings=settings,
                 observed_at=local_now,
+                record_change_observations=record_change_observations,
             )
             linear_work.extend(linear_tasks)
             project_snapshots.append(
@@ -190,12 +194,17 @@ class ProjectBrainService:
                     )
                 )
 
+        personal_reality = personal_reality_service.build(
+            project_snapshots,
+            evaluated_at=local_now,
+        )
         return ProjectBrainSnapshot(
             now=local_now,
             projects=tuple(project_snapshots),
             normalized_work=tuple([*todoist_tasks, *linear_work]),
             warnings=tuple(dict.fromkeys(warnings)),
             work_provider_states=tuple(work_provider_states),
+            personal_reality=personal_reality,
         )
 
     def get_project(
@@ -204,6 +213,7 @@ class ProjectBrainService:
         *,
         settings: Any,
         current_time: datetime | None = None,
+        record_change_observations: bool = False,
     ) -> dict[str, Any] | None:
         registry = self.registry_service.snapshot()
         canonical_key = registry.resolve_key(project_key)
@@ -231,6 +241,7 @@ class ProjectBrainService:
                     registry=registry,
                     settings=settings,
                     todoist_coverage=todoist_coverage,
+                    record_change_observations=record_change_observations,
                 )
                 for project in registry.projects
                 if project["key"] == canonical_key
@@ -253,12 +264,14 @@ class ProjectBrainService:
         registry: ProjectRegistrySnapshot,
         settings: Any,
         todoist_coverage: ProviderCoverage,
+        record_change_observations: bool = False,
     ) -> dict[str, Any]:
         linear_tasks, dependency_evidence, linear_diagnostic = _read_mapped_linear_work(
             project=project,
             registry=registry,
             settings=settings,
             observed_at=now,
+            record_change_observations=record_change_observations,
         )
         return self.build_project(
             project=project,
@@ -433,6 +446,10 @@ class ProjectBrainService:
             recent_changes=complete_reality_changes,
             evaluated_at=now,
             item_limit=max(12, len(project_work)),
+        )
+        complete_reality = personal_reality_service.apply_corrections(
+            complete_reality,
+            evaluated_at=now,
         )
         reality = complete_reality
         if complete_reality.total_count > 12:
@@ -645,6 +662,7 @@ def _read_mapped_linear_work(
     registry: ProjectRegistrySnapshot,
     settings: Any,
     observed_at: datetime,
+    record_change_observations: bool = False,
 ) -> tuple[
     list[NormalizedWorkItem],
     tuple[EvaluatedDependencyEvidence, ...],
@@ -659,7 +677,8 @@ def _read_mapped_linear_work(
         resource_type="project",
     )
     if mapping.status != "mapped" or not mapping.provider_ref:
-        provider_change_service.record_coverage(
+        _record_linear_coverage(
+            record_change_observations,
             provider="linear",
             scope_id=f"canonical:{canonical_project_id}",
             canonical_project_id=canonical_project_id,
@@ -676,7 +695,8 @@ def _read_mapped_linear_work(
     try:
         result = LinearClient(settings).list_issues(project_id=project_id)
     except Exception:
-        provider_change_service.record_coverage(
+        _record_linear_coverage(
+            record_change_observations,
             provider="linear",
             scope_id=project_id,
             canonical_project_id=canonical_project_id,
@@ -690,7 +710,8 @@ def _read_mapped_linear_work(
             message="Linear could not be reached; existing Project Brain sources remain available.",
         )
     if result.error:
-        provider_change_service.record_coverage(
+        _record_linear_coverage(
+            record_change_observations,
             provider="linear",
             scope_id=project_id,
             canonical_project_id=canonical_project_id,
@@ -707,7 +728,8 @@ def _read_mapped_linear_work(
     for record in result.records:
         provider_project = record.get("project") if isinstance(record, dict) else None
         if not isinstance(provider_project, dict) or str(provider_project.get("id") or "") != project_id:
-            provider_change_service.record_coverage(
+            _record_linear_coverage(
+                record_change_observations,
                 provider="linear",
                 scope_id=project_id,
                 canonical_project_id=canonical_project_id,
@@ -723,7 +745,8 @@ def _read_mapped_linear_work(
     try:
         adapted = linear_work_adapter.adapt_many(result.records)
     except (TypeError, ValueError):
-        provider_change_service.record_coverage(
+        _record_linear_coverage(
+            record_change_observations,
             provider="linear",
             scope_id=project_id,
             canonical_project_id=canonical_project_id,
@@ -742,7 +765,8 @@ def _read_mapped_linear_work(
         for item in adapted
     ]
     if len(mapped_items) != len(result.records):
-        provider_change_service.record_coverage(
+        _record_linear_coverage(
+            record_change_observations,
             provider="linear",
             scope_id=project_id,
             canonical_project_id=canonical_project_id,
@@ -770,20 +794,22 @@ def _read_mapped_linear_work(
             scope_id=project_id,
             observed_at=observed_at,
         )
-        provider_change_service.observe_scope(
-            provider="linear",
-            scope_id=project_id,
-            canonical_project_id=canonical_project_id,
-            observations=(*issue_observations, *milestone_observations),
-            observed_at=observed_at,
-            # Linear exposes current state here, not a revision log. Comparison
-            # coverage therefore begins with PCOS's first successful observation.
-            historical_coverage_start=observed_at,
-            freshness=ObservationFreshness.FRESH,
-            diagnostic="Mapped Linear comparison state loaded successfully.",
-        )
+        if record_change_observations:
+            provider_change_service.observe_scope(
+                provider="linear",
+                scope_id=project_id,
+                canonical_project_id=canonical_project_id,
+                observations=(*issue_observations, *milestone_observations),
+                observed_at=observed_at,
+                # Linear exposes current state here, not a revision log. Comparison
+                # coverage therefore begins with PCOS's first successful observation.
+                historical_coverage_start=observed_at,
+                freshness=ObservationFreshness.FRESH,
+                diagnostic="Mapped Linear comparison state loaded successfully.",
+            )
     except (TypeError, ValueError) as exc:
-        provider_change_service.record_coverage(
+        _record_linear_coverage(
+            record_change_observations,
             provider="linear",
             scope_id=project_id,
             canonical_project_id=canonical_project_id,
@@ -797,6 +823,11 @@ def _read_mapped_linear_work(
         issue_count=len(mapped_items),
         message="Mapped Linear work loaded successfully.",
     )
+
+
+def _record_linear_coverage(enabled: bool, **kwargs: Any) -> None:
+    if enabled:
+        provider_change_service.record_coverage(**kwargs)
 
 
 def _linear_failure_diagnostic(

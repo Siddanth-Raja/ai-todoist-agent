@@ -16,6 +16,7 @@ import {
   Target,
   TimerReset,
   Waves,
+  ExternalLink,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -35,6 +36,10 @@ import {
   todayRecommendationPresentation,
 } from "@/lib/surface-hierarchy-presentation";
 import { useRetainedApiQuery } from "@/lib/use-retained-api-query";
+import {
+  RealityEvidenceCard,
+  RealityEvidenceDisclosure,
+} from "@/components/reality-evidence";
 
 const lifeAreaGradients: Record<string, string> = {
   "A&M": "from-rose-300/20 via-white/[0.055] to-white/[0.035]",
@@ -385,19 +390,23 @@ export default function TodayPage() {
                     <p className="mt-2 text-sm text-stone-400">
                       Due {formatObligationDate(obligation.due_date)}
                     </p>
+                    {obligation.reality ? (
+                      <RealityEvidenceDisclosure item={obligation.reality} />
+                    ) : null}
+                    {obligation.provider_url ? (
+                      <a
+                        href={obligation.provider_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-3 inline-flex min-h-11 items-center gap-1.5 text-xs text-moss hover:text-pearl"
+                      >
+                        Open provider record
+                        <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                      </a>
+                    ) : null}
                   </>
                 );
-                return obligation.provider_url ? (
-                  <a
-                    key={`${obligation.provider}:${obligation.provider_record_id}`}
-                    href={obligation.provider_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-[1.4rem] border border-white/10 bg-black/20 p-5 transition hover:border-white/20 hover:bg-black/25"
-                  >
-                    {content}
-                  </a>
-                ) : (
+                return (
                   <article
                     key={`${obligation.provider}:${obligation.provider_record_id}`}
                     className="rounded-[1.4rem] border border-white/10 bg-black/20 p-5"
@@ -422,6 +431,21 @@ export default function TodayPage() {
           )}
         </SoftCard>
       </section>
+
+      {todayData?.reality_attention.length ? (
+        <section className="min-w-0 space-y-5 xl:col-span-2">
+          <SectionTitle
+            eyebrow="Needs review"
+            title="Actionable shared reality"
+            detail="Exactly linked mismatches are reviewable now. Provider truth remains unchanged until a separate exact confirmation succeeds."
+          />
+          <SoftCard className="grid gap-3 p-5 md:grid-cols-2 md:p-7">
+            {todayData.reality_attention.map((item) => (
+              <RealityEvidenceCard key={item.reality_item_id} item={item} />
+            ))}
+          </SoftCard>
+        </section>
+      ) : null}
 
       <section
         className="grid min-w-0 gap-4 xl:col-span-2 xl:grid-cols-[minmax(0,1.22fr)_minmax(320px,0.78fr)]"
@@ -455,6 +479,9 @@ export default function TodayPage() {
                 {recommendationBadge}
               </span>
             </div>
+            {recommendation?.reality ? (
+              <RealityEvidenceDisclosure item={recommendation.reality} />
+            ) : null}
           </div>
         </SoftCard>
 

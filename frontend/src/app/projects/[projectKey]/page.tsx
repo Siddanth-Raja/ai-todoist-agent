@@ -16,6 +16,8 @@ import {
   RefreshCw,
   Target,
   UserRound,
+  BrainCircuit,
+  History,
 } from "lucide-react";
 import {
   formatDateTime,
@@ -42,6 +44,7 @@ import {
   projectCollectionPresentation,
   type ProjectCollectionDensity,
 } from "@/lib/project-panel-presentation";
+import { RealityEvidenceCard } from "@/components/reality-evidence";
 
 function statusClass(status: string) {
   if (status === "Blocked") {
@@ -614,6 +617,87 @@ export default function ProjectDetailPage() {
                 </article>
               ))}
             </ScrollableCollection>
+          )}
+        </Card>
+      </section>
+
+      <section className="grid items-start gap-4 xl:grid-cols-2">
+        <Card title="Project pulse" icon={<BrainCircuit className="h-5 w-5" aria-hidden="true" />}>
+          <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-moss/25 bg-moss/10 px-2.5 py-1 text-xs capitalize text-moss">
+                {project.activity_focus.primary_state.replaceAll("_", " ")}
+              </span>
+              <span className="text-xs capitalize text-stone-500">
+                {project.activity_focus.confidence} confidence · {project.activity_focus.freshness}
+              </span>
+            </div>
+            <p className="mt-3 text-sm leading-6 text-stone-400">
+              {project.activity_focus.evidence_total_count} attributable focus records evaluated before the {project.activity_focus.evidence_returned_count}-record evidence projection.
+            </p>
+            {project.activity_focus.confirmation_reason ? (
+              <p className="mt-3 text-sm leading-6 text-gold">{project.activity_focus.confirmation_reason}</p>
+            ) : null}
+          </div>
+          <details className="mt-3 rounded-2xl border border-white/10 bg-black/20 p-4">
+            <summary className="cursor-pointer text-sm font-medium text-stone-300">
+              Focus evidence and provider coverage
+            </summary>
+            <div className="mt-3 space-y-3 text-xs leading-5 text-stone-400">
+              {project.activity_focus.evidence.map((evidence) => (
+                <p key={evidence.evidence_key} className="rounded-xl bg-white/[0.035] p-3">
+                  {evidence.summary}<br />
+                  <span className="break-all text-stone-500">{evidence.provider} · {evidence.provider_record_id ?? evidence.evidence_key}</span>
+                </p>
+              ))}
+              {project.activity_focus.provider_coverage.map((coverage) => (
+                <p key={`${coverage.provider}:${coverage.provider_reference ?? "default"}`}>
+                  {coverage.provider}: <span className="capitalize">{coverage.state.replaceAll("_", " ")}</span>
+                  {coverage.detail ? ` · ${coverage.detail}` : ""}
+                </p>
+              ))}
+            </div>
+          </details>
+          <div className="mt-4 flex items-center gap-2 text-xs uppercase tracking-[0.16em] text-stone-500">
+            <History className="h-4 w-4" aria-hidden="true" />
+            Recent provider changes · {project.recent_changes.total_count}
+          </div>
+          {project.recent_changes.changes.length ? (
+            <div className="mt-3 space-y-2">
+              {project.recent_changes.changes.slice(0, 5).map((change) => (
+                <p key={change.id} className="rounded-xl bg-black/20 p-3 text-xs leading-5 text-stone-400">
+                  <span className="capitalize text-stone-300">{change.category.replaceAll("_", " ")}</span>
+                  {` · ${change.provider} ${change.provider_record_id} · ${change.effective_at}`}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <EmptyState text={`No attributable change returned; coverage is ${project.recent_changes.conclusion.replaceAll("_", " ")}.`} />
+          )}
+        </Card>
+
+        <Card title="Personal reality" icon={<Target className="h-5 w-5" aria-hidden="true" />}>
+          <p className="mb-3 text-xs leading-5 text-stone-500">
+            {project.reality.total_count} canonical item{project.reality.total_count === 1 ? "" : "s"} · {project.reality.returned_count} shown · evidence {project.reality.complete_evidence ? "complete" : "partial"}
+          </p>
+          {project.reality.provider_diagnostics.length ? (
+            <div className="mb-3 rounded-2xl border border-gold/20 bg-gold/10 p-4 text-xs leading-5 text-gold">
+              {project.reality.provider_diagnostics.join(" ")}
+            </div>
+          ) : null}
+          {project.reality.items.length ? (
+            <ScrollableCollection
+              label="Canonical personal reality"
+              recordCount={project.reality.items.length}
+              overflowThreshold={4}
+              className="space-y-3"
+            >
+              {project.reality.items.map((item) => (
+                <RealityEvidenceCard key={item.reality_item_id} item={item} />
+              ))}
+            </ScrollableCollection>
+          ) : (
+            <EmptyState text="No canonical personal reality item is currently available." />
           )}
         </Card>
       </section>

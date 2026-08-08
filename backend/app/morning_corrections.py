@@ -10,11 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .reality_reconciliation import (
     ConfirmationOutcome,
+    EffectiveRealityCorrection,
     ProviderRecordIdentity,
     RealityClassification,
     RealityConfidence,
     RealityEvidence,
     RealityEvidenceType,
+    RealityFactType,
     RealityFreshness,
     RealityItem,
     TemporalActionability,
@@ -562,6 +564,7 @@ class MorningCorrectionService:
         items: Iterable[RealityItem],
         *,
         evaluated_at: datetime,
+        include_snoozed: bool = False,
     ) -> tuple[RealityItem, ...]:
         source = tuple(items)
         corrections = self.repository.list_active_for_reconciliations(
@@ -579,7 +582,21 @@ class MorningCorrectionService:
             if correction is None or correction.evidence_version != item.evidence_version:
                 result.append(item)
                 continue
-            if correction.correction_type == MorningCorrectionType.SNOOZE:
+            if (
+                item.effective_correction is not None
+                and item.effective_correction.correction_id == correction.correction_id
+            ):
+                if (
+                    correction.correction_type == MorningCorrectionType.SNOOZE
+                    and not include_snoozed
+                ):
+                    continue
+                result.append(item)
+                continue
+            if (
+                correction.correction_type == MorningCorrectionType.SNOOZE
+                and not include_snoozed
+            ):
                 continue
             result.append(_apply_correction(item, correction, evaluated_at))
         return tuple(result)
@@ -932,6 +949,15 @@ def _apply_correction(
         classification = RealityClassification.UNKNOWN
         reason = "The presented association or interpretation is explicitly disputed; original evidence remains available for review."
         confidence = RealityConfidence.UNKNOWN
+    elif correction.correction_type == MorningCorrectionType.SNOOZE:
+        classification = RealityClassification.UPCOMING_NOT_ACTIONABLE
+        reason = "An attributable PCOS snooze temporarily suppresses this item until its wake boundary without changing provider truth."
+        temporal = temporal.model_copy(
+            update={
+                "earliest_useful_action_at": correction.expires_at,
+                "action_useful_now": False,
+            }
+        )
     evidence = RealityEvidence(
         evidence_id=f"morning_correction:{correction.correction_id}",
         evidence_type=RealityEvidenceType.USER_CONFIRMATION,
@@ -970,7 +996,16 @@ def _apply_correction(
             "classification_reason": reason,
             "temporal": temporal,
             "confidence": confidence,
+            "fact_type": RealityFactType.EXPLICIT_FACT,
             "evidence": tuple((*item.evidence, evidence)),
+            "effective_correction": EffectiveRealityCorrection(
+                correction_id=correction.correction_id,
+                correction_type=correction.correction_type.value,
+                attribution=correction.attribution,
+                effective_at=correction.effective_at,
+                expires_at=correction.expires_at,
+                review_at=correction.review_at,
+            ),
         }
     )
 

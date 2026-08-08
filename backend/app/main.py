@@ -42,8 +42,9 @@ from .morning_corrections import (
 )
 from .project_brain import project_brain_service
 from .project_activity_focus import ProjectActivityFocus
+from .personal_reality import PersonalRealityProjection
 from .provider_changes import ChangeQueryResult
-from .reality_reconciliation import RealityProjection
+from .reality_reconciliation import RealityItem, RealityProjection
 from .project_work_packages import LinearProjectDiagnostic, ProjectWorkPackage
 from .storage import (
     create_habit,
@@ -105,6 +106,7 @@ class ChatResponse(BaseModel):
     conversation_state: dict[str, Any] | None = None
     mode: str
     errors: list[str | dict[str, Any]] = Field(default_factory=list)
+    grounding: dict[str, Any] | None = None
 
 
 class ConfirmRequest(BaseModel):
@@ -554,6 +556,7 @@ class TodayObligation(BaseModel):
     days_overdue: int
     priority: int
     provider_url: str | None = None
+    reality: RealityItem | None = None
 
 
 class TodayMustDo(BaseModel):
@@ -579,6 +582,7 @@ class TodayRecommendation(BaseModel):
     canonical_project_key: str | None = None
     canonical_project_next_move: str | None = None
     contextual_override: bool = False
+    reality: RealityItem | None = None
 
 
 class LifeArea(BaseModel):
@@ -605,6 +609,8 @@ class TodayResponse(BaseModel):
     current_free_block: TodayFreeBlock | None = None
     today_remaining_events: list[TodayEvent] = Field(default_factory=list)
     must_do: TodayMustDo
+    personal_reality: PersonalRealityProjection
+    reality_attention: list[RealityItem] = Field(default_factory=list)
     recommendation: TodayRecommendation
     life_areas: list[LifeArea]
     errors: list[str] = Field(default_factory=list)

@@ -194,6 +194,7 @@ export type TodayObligation = {
   days_overdue: number;
   priority: number;
   provider_url?: string | null;
+  reality?: RealityItem | null;
 };
 
 export type TodayMustDo = {
@@ -228,6 +229,7 @@ export type TodayRecommendation = {
   canonical_project_key?: string | null;
   canonical_project_next_move?: string | null;
   contextual_override: boolean;
+  reality?: RealityItem | null;
 };
 
 export type ActivityEntry = {
@@ -306,6 +308,8 @@ export type TodayResponse = {
   current_free_block?: TodayFreeBlock | null;
   today_remaining_events: TodayEvent[];
   must_do: TodayMustDo;
+  personal_reality: PersonalRealityProjection;
+  reality_attention: RealityItem[];
   recommendation: TodayRecommendation;
   life_areas: LifeArea[];
   errors: string[];
@@ -584,8 +588,19 @@ export type RealityItem = {
   identity_state: "exact" | "ambiguous" | "unsupported";
   ambiguity_candidates: RealityWorkIdentity[];
   confidence: "high" | "medium" | "low" | "unknown";
+  fact_type: "explicit_fact" | "deterministic_conclusion" | "inference";
+  freshness: "fresh" | "stale" | "unknown";
+  availability: "available" | "unavailable" | "not_configured" | "not_applicable";
   evidence: RealityEvidence[];
   evidence_version: string;
+  effective_correction: {
+    correction_id: string;
+    correction_type: string;
+    attribution: string;
+    effective_at: string;
+    expires_at: string | null;
+    review_at: string | null;
+  } | null;
   proposed_safe_resolution: {
     code: string;
     summary: string;
@@ -593,6 +608,19 @@ export type RealityItem = {
     requires_user_confirmation: boolean;
     performs_provider_mutation: false;
   } | null;
+};
+
+export type PersonalRealityProjection = {
+  schema_version: 1;
+  evaluated_at: string;
+  items: RealityItem[];
+  total_count: number;
+  returned_count: number;
+  item_limit: number;
+  truncated: boolean;
+  classification_counts: Record<string, number>;
+  complete_evidence: boolean;
+  provider_diagnostics: string[];
 };
 
 export type RealityProjection = {
@@ -608,6 +636,37 @@ export type RealityProjection = {
   classification_counts: Record<string, number>;
   complete_evidence: boolean;
   provider_diagnostics: string[];
+};
+
+export type ProviderChangeEvent = {
+  schema_version: 1;
+  event_position: number | null;
+  id: string;
+  category: string;
+  canonical_project_id: string | null;
+  provider: string;
+  scope_id: string;
+  provider_record_type: string;
+  provider_record_id: string;
+  source_event_at: string | null;
+  source_updated_at: string | null;
+  observed_at: string;
+  effective_at: string;
+  before: unknown;
+  after: unknown;
+};
+
+export type ChangeQueryResult = {
+  evaluated_at: string;
+  since: string | null;
+  days: 7 | 14 | 30 | null;
+  changes: ProviderChangeEvent[];
+  total_count: number;
+  returned_count: number;
+  limit: number;
+  next_cursor: string | null;
+  coverage: Array<Record<string, unknown>>;
+  conclusion: string;
 };
 
 export type MorningSectionId =
@@ -802,6 +861,7 @@ export type ProjectBrain = {
   work_packages: ProjectWorkPackage[];
   linear_diagnostic: LinearProjectDiagnostic | null;
   activity_focus: ProjectActivityFocus;
+  recent_changes: ChangeQueryResult;
   reality: RealityProjection;
 };
 

@@ -375,6 +375,17 @@ class MorningCorrectionTests(unittest.TestCase):
             self.service.apply_to_reality_items((reality_item(),), evaluated_at=NOW),
             (),
         )
+        shared = self.service.apply_to_reality_items(
+            (reality_item(),),
+            evaluated_at=NOW,
+            include_snoozed=True,
+        )[0]
+        self.assertEqual(
+            shared.classification,
+            RealityClassification.UPCOMING_NOT_ACTIONABLE,
+        )
+        self.assertEqual(shared.effective_correction.correction_type, "snooze")
+        self.assertEqual(shared.temporal.earliest_useful_action_at, wake)
         self.assertEqual(
             len(self.service.apply_to_reality_items((reality_item(),), evaluated_at=wake)),
             1,

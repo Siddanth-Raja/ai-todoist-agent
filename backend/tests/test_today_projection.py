@@ -15,6 +15,19 @@ from app.project_brain import (  # noqa: E402
     ProjectBrainSnapshot,
 )
 from app.project_work_packages import LinearProjectDiagnostic  # noqa: E402
+from app.personal_reality import personal_reality_service  # noqa: E402
+from app.reality_reconciliation import (  # noqa: E402
+    ProviderRecordIdentity,
+    RealityClassification,
+    RealityConfidence,
+    RealityEvidence,
+    RealityEvidenceType,
+    RealityIdentityState,
+    RealityItem,
+    RealityProjection,
+    TemporalActionability,
+    WorkIdentity,
+)
 from app.recommendation_service import recommendation_service  # noqa: E402
 from app.today_projection import TodayProjectionService  # noqa: E402
 from app.work_domain import (  # noqa: E402
@@ -68,6 +81,7 @@ def project_snapshot(
     *,
     status: str = "Active",
     diagnostic: LinearProjectDiagnostic | None = None,
+    reality: RealityProjection | None = None,
 ) -> ProjectBrainProjectSnapshot:
     canonical = recommendation_service.recommend_project_next_move(
         items,
@@ -96,6 +110,7 @@ def project_snapshot(
         work_items=tuple(items),
         recommendation_candidates=tuple(items),
         canonical_recommendation=canonical,
+        reality=reality,
     )
 
 
@@ -110,12 +125,80 @@ def brain_snapshot(
         for project in projects
         for item in project.work_items
     }
+    project_tuple = tuple(projects)
+    personal_reality = personal_reality_service.build(
+        project_tuple,
+        evaluated_at=NOW,
+    )
     return ProjectBrainSnapshot(
         now=NOW,
-        projects=tuple(projects),
+        projects=project_tuple,
         normalized_work=tuple(work.values()),
         warnings=warnings,
         work_provider_states=work_provider_states,
+        personal_reality=personal_reality,
+    )
+
+
+def reality_projection(
+    item: NormalizedWorkItem,
+    classification: RealityClassification,
+) -> RealityProjection:
+    identity = WorkIdentity(
+        provider=item.provider,
+        provider_record_id=item.provider_record_id,
+    )
+    evidence = RealityEvidence(
+        evidence_id=f"evidence:{item.provider}:{item.provider_record_id}",
+        evidence_type=RealityEvidenceType.WORK_STATE,
+        canonical_project_id=str(item.canonical_project_id),
+        normalized_work_identity=identity,
+        provider_identity=ProviderRecordIdentity(
+            provider=item.provider,
+            provider_record_type="work_item",
+            provider_record_id=item.provider_record_id,
+            provider_url=item.provider_url,
+        ),
+        claim="open",
+        observed_state="open",
+        observed_at=NOW,
+        summary="Attributable work state.",
+    )
+    reality = RealityItem(
+        reality_item_id=f"reality:{item.provider}:{item.provider_record_id}",
+        reconciliation_id=f"reality:{item.provider}:{item.provider_record_id}",
+        canonical_project_id=str(item.canonical_project_id),
+        canonical_project_key="test-project",
+        normalized_work_identity=identity,
+        provider_identity=evidence.provider_identity,
+        title=item.title,
+        classification=classification,
+        classification_reason=f"Shared classification is {classification.value}.",
+        temporal=TemporalActionability(
+            due_date=item.due_date,
+            action_possible_now=item.is_executable,
+            action_useful_now=classification
+            in {
+                RealityClassification.NEEDS_ACTION,
+                RealityClassification.POTENTIAL_MISMATCH,
+            },
+        ),
+        identity_state=RealityIdentityState.EXACT,
+        confidence=RealityConfidence.HIGH,
+        evidence=(evidence,),
+        evidence_version="evidence-v1",
+    )
+    return RealityProjection(
+        canonical_project_id=str(item.canonical_project_id),
+        canonical_project_key="test-project",
+        evaluated_at=NOW,
+        overall_classification=classification,
+        items=(reality,),
+        total_count=1,
+        returned_count=1,
+        item_limit=12,
+        classification_counts={classification.value: 1},
+        complete_evidence=True,
     )
 
 
@@ -183,6 +266,104 @@ class TodayProjectionTests(unittest.TestCase):
             "Work next: Ship the Today projection",
         )
         self.assertFalse(recommendation["contextual_override"])
+
+    def test_shared_reality_suppresses_waiting_and_future_work_without_replacing_recommendations(self):
+        waiting = NormalizedWorkItem(
+            provider="linear",
+            provider_record_id="waiting",
+            canonical_project_id="xo-id",
+            title="Waiting on someone",
+            status=WorkStatus.OPEN,
+            priority=WorkPriority.URGENT,
+            due_date=NOW.date(),
+            is_executable=True,
+        )
+        useful = work_item(
+            "useful",
+            "Useful existing recommendation",
+            canonical_project_id="xo-id",
+            priority=WorkPriority.HIGH,
+            duration=30,
+            provider="linear",
+        )
+        waiting_project = project_snapshot(
+            "xo",
+            "XO",
+            "xo-id",
+            [waiting],
+            reality=reality_projection(waiting, RealityClassification.WAITING),
+        )
+        useful_project = project_snapshot("freelance", "Freelance", "freelance-id", [useful])
+        snapshot = brain_snapshot(
+            [waiting_project, useful_project],
+            work_provider_states=(WorkProviderReadState(provider="linear", available=True),),
+        )
+
+        payload = self.build(snapshot)
+
+        self.assertEqual(payload["must_do"]["items"], [])
+        self.assertEqual(payload["recommendation"]["provider_record_id"], "useful")
+        self.assertEqual(payload["personal_reality"]["classification_counts"], {"waiting": 1})
+
+    def test_actionable_mismatch_is_reviewable_with_canonical_evidence_not_recommended_as_work(self):
+        mismatch = work_item(
+            "mismatch",
+            "Sent follow-up still open",
+            canonical_project_id="freelance-id",
+            priority=WorkPriority.URGENT,
+            duration=20,
+            provider="linear",
+        )
+        project = project_snapshot(
+            "freelance",
+            "Freelance",
+            "freelance-id",
+            [mismatch],
+            reality=reality_projection(mismatch, RealityClassification.POTENTIAL_MISMATCH),
+        )
+
+        payload = self.build(brain_snapshot([project]))
+
+        self.assertEqual(len(payload["reality_attention"]), 1)
+        self.assertEqual(payload["reality_attention"][0]["reality_item_id"], "reality:linear:mismatch")
+        self.assertNotEqual(payload["recommendation"].get("provider_record_id"), "mismatch")
+
+    def test_mismatch_is_omitted_from_today_when_review_is_not_useful_now(self):
+        mismatch = work_item(
+            "later-mismatch",
+            "Review later mismatch",
+            canonical_project_id="freelance-id",
+            priority=WorkPriority.URGENT,
+            duration=20,
+            provider="linear",
+        )
+        reality = reality_projection(
+            mismatch,
+            RealityClassification.POTENTIAL_MISMATCH,
+        )
+        deferred_item = reality.items[0].model_copy(
+            update={
+                "temporal": reality.items[0].temporal.model_copy(
+                    update={"action_useful_now": False}
+                )
+            }
+        )
+        reality = reality.model_copy(update={"items": (deferred_item,)})
+        project = project_snapshot(
+            "freelance",
+            "Freelance",
+            "freelance-id",
+            [mismatch],
+            reality=reality,
+        )
+
+        payload = self.build(brain_snapshot([project]))
+
+        self.assertEqual(payload["reality_attention"], [])
+        self.assertNotEqual(
+            payload["recommendation"].get("provider_record_id"),
+            "later-mismatch",
+        )
 
     def test_due_today_blinn_payment_is_protected_from_freelance_recommendation(self):
         blinn_payment = NormalizedWorkItem(

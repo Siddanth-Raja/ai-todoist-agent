@@ -35,6 +35,14 @@ type ChatResponse = {
   calendar_events?: ChatAction[];
   mode?: string;
   errors?: Array<string | ChatAction>;
+  grounding?: {
+    schema_version: 1;
+    question_kind: string;
+    canonical_project_key?: string | null;
+    evidence: ChatAction[];
+    provider_limitations: string[];
+    ordinary_read_side_effects: false;
+  } | null;
 };
 
 type ConversationItem = {
@@ -388,6 +396,52 @@ function ResponseErrorCards({ errors }: { errors: Array<string | ChatAction> }) 
         </div>
       ))}
     </div>
+  );
+}
+
+function GroundingEvidence({ grounding }: { grounding: NonNullable<ChatResponse["grounding"]> }) {
+  return (
+    <details className="glass-panel rounded-lg px-4 py-3 text-sm text-stone-300">
+      <summary className="cursor-pointer font-medium text-stone-200">
+        Shared reality evidence ({grounding.evidence.length})
+      </summary>
+      <div className="mt-3 space-y-3">
+        <p className="text-xs capitalize text-stone-500">
+          {grounding.question_kind.replaceAll("_", " ")}
+          {grounding.canonical_project_key ? ` · ${grounding.canonical_project_key}` : ""}
+          {" · read only"}
+        </p>
+        {grounding.evidence.map((entry, index) => {
+          const identity = getRecord(entry, "provider_identity");
+          const title = getString(entry, "title") ?? getString(entry, "summary") ?? getString(entry, "primary_state");
+          const classification = getString(entry, "classification") ?? getString(entry, "category");
+          const nestedEvidence = getArray(entry, "evidence").filter(isRecord);
+          return (
+            <article key={getString(entry, "reality_item_id") ?? getString(entry, "id") ?? `${index}`} className="rounded-lg border border-line bg-black/20 p-3">
+              <p className="break-words font-medium text-pearl">{title ?? "Attributable shared evidence"}</p>
+              <p className="mt-1 break-all text-xs capitalize text-stone-500">
+                {classification?.replaceAll("_", " ") ?? "shared fact"}
+                {identity ? ` · ${getString(identity, "provider") ?? "provider"} ${getString(identity, "provider_record_id") ?? "record"}` : ""}
+              </p>
+              {getString(entry, "classification_reason") ? (
+                <p className="mt-2 text-xs leading-5 text-stone-400">{getString(entry, "classification_reason")}</p>
+              ) : null}
+              {nestedEvidence.map((evidence) => (
+                <p key={getString(evidence, "evidence_id") ?? formatObject(evidence)} className="mt-2 text-xs leading-5 text-stone-400">
+                  {getString(evidence, "summary") ?? "Attributable evidence"}
+                  {getString(evidence, "evidence_id") ? <span className="block break-all text-stone-600">{getString(evidence, "evidence_id")}</span> : null}
+                </p>
+              ))}
+            </article>
+          );
+        })}
+        {grounding.provider_limitations.length ? (
+          <div className="rounded-lg border border-gold/25 bg-gold/10 p-3 text-xs leading-5 text-gold">
+            {grounding.provider_limitations.join(" ")}
+          </div>
+        ) : null}
+      </div>
+    </details>
   );
 }
 
@@ -901,6 +955,9 @@ export function ChatPanel() {
                 <div className="glass-panel rounded-lg px-4 py-3 text-sm leading-6 text-stone-100">
                   {item.response.answer}
                 </div>
+                {item.response.grounding ? (
+                  <GroundingEvidence grounding={item.response.grounding} />
+                ) : null}
                 <ActionCards actions={item.response.actions_taken ?? []} />
                 <ConfirmationCard
                   response={item.response}

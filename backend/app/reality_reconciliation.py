@@ -80,6 +80,32 @@ class RealityConfidence(StrEnum):
     UNKNOWN = "unknown"
 
 
+class RealityFactType(StrEnum):
+    EXPLICIT_FACT = "explicit_fact"
+    DETERMINISTIC_CONCLUSION = "deterministic_conclusion"
+    INFERENCE = "inference"
+
+
+class EffectiveRealityCorrection(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    correction_id: str = Field(..., min_length=1, max_length=128)
+    correction_type: str = Field(..., min_length=1, max_length=80)
+    attribution: str = Field(..., min_length=1, max_length=120)
+    effective_at: datetime
+    expires_at: datetime | None = None
+    review_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_times(self) -> "EffectiveRealityCorrection":
+        _require_aware(self.effective_at, "effective_at")
+        for name in ("expires_at", "review_at"):
+            value = getattr(self, name)
+            if value is not None:
+                _require_aware(value, name)
+        return self
+
+
 class ConfirmationOutcome(StrEnum):
     HANDLED = "handled"
     NOT_HANDLED = "not_handled"
@@ -203,8 +229,12 @@ class RealityItem(BaseModel):
     identity_state: RealityIdentityState
     ambiguity_candidates: tuple[WorkIdentity, ...] = ()
     confidence: RealityConfidence
+    fact_type: RealityFactType = RealityFactType.DETERMINISTIC_CONCLUSION
+    freshness: RealityFreshness = RealityFreshness.UNKNOWN
+    availability: RealityAvailability = RealityAvailability.AVAILABLE
     evidence: tuple[RealityEvidence, ...]
     evidence_version: str
+    effective_correction: EffectiveRealityCorrection | None = None
     proposed_safe_resolution: SafeResolution | None = None
 
 
@@ -392,6 +422,32 @@ class RealityConfirmationRepository:
 
 
 class RealityReconciliationService:
+    def reproject_effective_items(
+        self,
+        projection: RealityProjection,
+        items: Iterable[RealityItem],
+        *,
+        item_limit: int | None = None,
+    ) -> RealityProjection:
+        """Rebuild projection totals after attributable PCOS corrections are applied."""
+        ordered = sorted(tuple(items), key=_item_order_key)
+        bound = max(0, projection.item_limit if item_limit is None else item_limit)
+        returned = tuple(ordered[:bound])
+        counts = Counter(item.classification.value for item in ordered)
+        return projection.model_copy(
+            update={
+                "overall_classification": _overall_classification(
+                    list(ordered),
+                    complete_evidence=projection.complete_evidence,
+                ),
+                "items": returned,
+                "total_count": len(ordered),
+                "returned_count": len(returned),
+                "item_limit": bound,
+                "classification_counts": dict(sorted(counts.items())),
+            }
+        )
+
     def evaluate(
         self,
         *,
@@ -655,6 +711,9 @@ class RealityReconciliationService:
             identity_state=candidate.identity_state,
             ambiguity_candidates=candidate.possible_work_matches,
             confidence=confidence,
+            fact_type=RealityFactType.DETERMINISTIC_CONCLUSION,
+            freshness=_item_freshness(evidence),
+            availability=_item_availability(evidence),
             evidence=evidence,
             evidence_version=evidence_version,
             proposed_safe_resolution=resolution,
@@ -942,6 +1001,26 @@ def _handled_evidence(evidence: Iterable[RealityEvidence]) -> bool:
 
 def _claim_value(evidence: RealityEvidence) -> str:
     return str(evidence.claim or evidence.observed_state or "").strip().lower()
+
+
+def _item_freshness(evidence: Iterable[RealityEvidence]) -> RealityFreshness:
+    values = {item.freshness for item in evidence}
+    if RealityFreshness.STALE in values:
+        return RealityFreshness.STALE
+    if RealityFreshness.UNKNOWN in values or not values:
+        return RealityFreshness.UNKNOWN
+    return RealityFreshness.FRESH
+
+
+def _item_availability(evidence: Iterable[RealityEvidence]) -> RealityAvailability:
+    values = {item.availability for item in evidence}
+    if RealityAvailability.UNAVAILABLE in values:
+        return RealityAvailability.UNAVAILABLE
+    if RealityAvailability.NOT_CONFIGURED in values:
+        return RealityAvailability.NOT_CONFIGURED
+    if values == {RealityAvailability.NOT_APPLICABLE}:
+        return RealityAvailability.NOT_APPLICABLE
+    return RealityAvailability.AVAILABLE
 
 
 def _has_unlinked_cross_provider_evidence(candidate: RealityCandidate) -> bool:

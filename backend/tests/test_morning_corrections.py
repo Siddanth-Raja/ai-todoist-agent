@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import sqlite3
 import sys
 import tempfile
 from datetime import datetime, timedelta
@@ -255,6 +256,58 @@ class MorningCorrectionTests(unittest.TestCase):
         self.assertIn("morning_provider_previews", tables)
         self.assertIn("reality_confirmation_reversals", tables)
         self.assertEqual(before, after)
+
+    def test_legacy_provider_preview_schema_is_migrated_additively(self):
+        legacy_path = os.path.join(self.tempdir.name, "legacy-preview.sqlite3")
+        with sqlite3.connect(legacy_path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE morning_provider_previews (
+                    id TEXT PRIMARY KEY,
+                    statement_id TEXT NOT NULL,
+                    synthesis_id TEXT NOT NULL,
+                    evidence_version TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    provider_record_type TEXT NOT NULL,
+                    provider_record_id TEXT NOT NULL,
+                    field_name TEXT NOT NULL,
+                    previous_value_json TEXT,
+                    proposed_value_json TEXT NOT NULL,
+                    provider_revision TEXT,
+                    requested_by_actor TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    diagnostic TEXT,
+                    confirmation_idempotency_key TEXT UNIQUE,
+                    confirmed_at TEXT,
+                    result_reference TEXT,
+                    request_idempotency_key TEXT NOT NULL UNIQUE,
+                    schema_version INTEGER NOT NULL
+                )
+                """
+            )
+
+        with patch.dict(os.environ, {"APP_DB_PATH": legacy_path}):
+            ensure_database()
+            with database_connection() as connection:
+                columns = {
+                    row["name"]
+                    for row in connection.execute(
+                        "PRAGMA table_info(morning_provider_previews)"
+                    ).fetchall()
+                }
+            self.assertIn("confirmed_by_actor", columns)
+
+            adapter = FakeProviderAdapter()
+            service = MorningProviderReconciliationService(adapters={"linear": adapter})
+            preview = service.preview(
+                self.preview_request(key="legacy-preview"),
+                synthesis=synthesis(),
+                created_at=NOW,
+            )
+            self.assertEqual(preview.status, ProviderPreviewStatus.READY)
+            self.assertEqual(adapter.mutations, 0)
 
     def test_already_done_is_idempotent_attributable_and_reversible(self):
         request = self.request(MorningCorrectionType.ALREADY_DONE)

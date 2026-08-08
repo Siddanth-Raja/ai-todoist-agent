@@ -1,0 +1,775 @@
+{
+  "schema_version": 1,
+  "scope": "SID-247 responsive and accessibility verification",
+  "frontend_url": "http://127.0.0.1:3010",
+  "backend_url": "http://127.0.0.1:8000",
+  "external_model_access": "disabled by verification server environment",
+  "raw_provider_payloads_retained": false,
+  "screenshots_retained_in_repository": false,
+  "widths": [
+    {
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      },
+      "routes": [
+        {
+          "id": "today",
+          "path": "/today",
+          "final_url": "/today",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1100,
+            "viewport_height": 1100,
+            "headings": 21,
+            "h1_count": 1,
+            "landmarks": 4,
+            "disclosures": 2,
+            "buttons": 0,
+            "minimum_visible_button_height": null,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "a",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "morning",
+          "path": "/morning",
+          "final_url": "/morning",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1100,
+            "viewport_height": 1100,
+            "headings": 33,
+            "h1_count": 2,
+            "landmarks": 4,
+            "disclosures": 51,
+            "buttons": 14,
+            "minimum_visible_button_height": 44,
+            "provider_limitations_visible": true,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "a",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "projects",
+          "path": "/projects",
+          "final_url": "/projects",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1100,
+            "viewport_height": 1100,
+            "headings": 10,
+            "h1_count": 1,
+            "landmarks": 4,
+            "disclosures": 0,
+            "buttons": 0,
+            "minimum_visible_button_height": null,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "a",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [
+            {
+              "url": "/projects/pcos-ai-todoist-agent",
+              "error": "net::ERR_ABORTED"
+            },
+            {
+              "url": "/projects/nebulo",
+              "error": "net::ERR_ABORTED"
+            },
+            {
+              "url": "/projects/freelance",
+              "error": "net::ERR_ABORTED"
+            },
+            {
+              "url": "/projects/xo",
+              "error": "net::ERR_ABORTED"
+            },
+            {
+              "url": "/projects/am",
+              "error": "net::ERR_ABORTED"
+            }
+          ],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "project-brain",
+          "path": "/projects/pcos-ai-todoist-agent",
+          "final_url": "/projects/pcos-ai-todoist-agent",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1100,
+            "viewport_height": 1100,
+            "headings": 15,
+            "h1_count": 1,
+            "landmarks": 4,
+            "disclosures": 13,
+            "buttons": 0,
+            "minimum_visible_button_height": null,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "a",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "chat",
+          "path": "/chat",
+          "final_url": "/chat",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1100,
+            "viewport_height": 1100,
+            "headings": 2,
+            "h1_count": 1,
+            "landmarks": 4,
+            "disclosures": 1,
+            "buttons": 1,
+            "minimum_visible_button_height": 48,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": true,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "textarea",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        }
+      ],
+      "retained_state": {
+        "controlled_503_retained_content": true,
+        "recovery_cleared_warning": true
+      },
+      "correction_dialog": {
+        "opened": true,
+        "exact_preview_rendered": true,
+        "content_fits_without_clipping": true,
+        "focus_initially_inside": true,
+        "focus_trap_preserved": true,
+        "escape_closed": true,
+        "trigger_focus_restored": true
+      }
+    },
+    {
+      "viewport": {
+        "width": 1024,
+        "height": 1000
+      },
+      "routes": [
+        {
+          "id": "today",
+          "path": "/today",
+          "final_url": "/today",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1000,
+            "viewport_height": 1000,
+            "headings": 20,
+            "h1_count": 1,
+            "landmarks": 3,
+            "disclosures": 2,
+            "buttons": 0,
+            "minimum_visible_button_height": null,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "summary",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "morning",
+          "path": "/morning",
+          "final_url": "/morning",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1000,
+            "viewport_height": 1000,
+            "headings": 32,
+            "h1_count": 2,
+            "landmarks": 3,
+            "disclosures": 51,
+            "buttons": 14,
+            "minimum_visible_button_height": 44,
+            "provider_limitations_visible": true,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "button",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "projects",
+          "path": "/projects",
+          "final_url": "/projects",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1000,
+            "viewport_height": 1000,
+            "headings": 9,
+            "h1_count": 1,
+            "landmarks": 3,
+            "disclosures": 0,
+            "buttons": 0,
+            "minimum_visible_button_height": null,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "a",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [
+            {
+              "url": "/projects/pcos-ai-todoist-agent",
+              "error": "net::ERR_ABORTED"
+            },
+            {
+              "url": "/projects/nebulo",
+              "error": "net::ERR_ABORTED"
+            },
+            {
+              "url": "/projects/xo",
+              "error": "net::ERR_ABORTED"
+            },
+            {
+              "url": "/projects/freelance",
+              "error": "net::ERR_ABORTED"
+            }
+          ],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "project-brain",
+          "path": "/projects/pcos-ai-todoist-agent",
+          "final_url": "/projects/pcos-ai-todoist-agent",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1000,
+            "viewport_height": 1000,
+            "headings": 14,
+            "h1_count": 1,
+            "landmarks": 3,
+            "disclosures": 13,
+            "buttons": 0,
+            "minimum_visible_button_height": null,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "a",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "chat",
+          "path": "/chat",
+          "final_url": "/chat",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1000,
+            "viewport_height": 1000,
+            "headings": 1,
+            "h1_count": 1,
+            "landmarks": 3,
+            "disclosures": 1,
+            "buttons": 1,
+            "minimum_visible_button_height": 48,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": true,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "textarea",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        }
+      ],
+      "retained_state": {
+        "controlled_503_retained_content": true,
+        "recovery_cleared_warning": true
+      },
+      "correction_dialog": {
+        "opened": true,
+        "exact_preview_rendered": true,
+        "content_fits_without_clipping": true,
+        "focus_initially_inside": true,
+        "focus_trap_preserved": true,
+        "escape_closed": true,
+        "trigger_focus_restored": true
+      }
+    },
+    {
+      "viewport": {
+        "width": 768,
+        "height": 1000
+      },
+      "routes": [
+        {
+          "id": "today",
+          "path": "/today",
+          "final_url": "/today",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1000,
+            "viewport_height": 1000,
+            "headings": 20,
+            "h1_count": 1,
+            "landmarks": 3,
+            "disclosures": 2,
+            "buttons": 0,
+            "minimum_visible_button_height": null,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "summary",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "morning",
+          "path": "/morning",
+          "final_url": "/morning",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1000,
+            "viewport_height": 1000,
+            "headings": 32,
+            "h1_count": 2,
+            "landmarks": 3,
+            "disclosures": 51,
+            "buttons": 14,
+            "minimum_visible_button_height": 44,
+            "provider_limitations_visible": true,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "button",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "projects",
+          "path": "/projects",
+          "final_url": "/projects",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1000,
+            "viewport_height": 1000,
+            "headings": 9,
+            "h1_count": 1,
+            "landmarks": 3,
+            "disclosures": 0,
+            "buttons": 0,
+            "minimum_visible_button_height": null,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "a",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [
+            {
+              "url": "/projects/pcos-ai-todoist-agent",
+              "error": "net::ERR_ABORTED"
+            },
+            {
+              "url": "/projects/nebulo",
+              "error": "net::ERR_ABORTED"
+            },
+            {
+              "url": "/projects/xo",
+              "error": "net::ERR_ABORTED"
+            },
+            {
+              "url": "/projects/freelance",
+              "error": "net::ERR_ABORTED"
+            }
+          ],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "project-brain",
+          "path": "/projects/pcos-ai-todoist-agent",
+          "final_url": "/projects/pcos-ai-todoist-agent",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1000,
+            "viewport_height": 1000,
+            "headings": 14,
+            "h1_count": 1,
+            "landmarks": 3,
+            "disclosures": 13,
+            "buttons": 0,
+            "minimum_visible_button_height": null,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "a",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "chat",
+          "path": "/chat",
+          "final_url": "/chat",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 1000,
+            "viewport_height": 1000,
+            "headings": 1,
+            "h1_count": 1,
+            "landmarks": 3,
+            "disclosures": 1,
+            "buttons": 1,
+            "minimum_visible_button_height": 48,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": true,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "textarea",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        }
+      ],
+      "retained_state": {
+        "controlled_503_retained_content": true,
+        "recovery_cleared_warning": true
+      },
+      "correction_dialog": {
+        "opened": true,
+        "exact_preview_rendered": true,
+        "content_fits_without_clipping": true,
+        "focus_initially_inside": true,
+        "focus_trap_preserved": true,
+        "escape_closed": true,
+        "trigger_focus_restored": true
+      }
+    },
+    {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "routes": [
+        {
+          "id": "today",
+          "path": "/today",
+          "final_url": "/today",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 844,
+            "viewport_height": 844,
+            "headings": 20,
+            "h1_count": 1,
+            "landmarks": 3,
+            "disclosures": 2,
+            "buttons": 0,
+            "minimum_visible_button_height": null,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "summary",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "morning",
+          "path": "/morning",
+          "final_url": "/morning",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 844,
+            "viewport_height": 844,
+            "headings": 32,
+            "h1_count": 2,
+            "landmarks": 3,
+            "disclosures": 51,
+            "buttons": 14,
+            "minimum_visible_button_height": 44,
+            "provider_limitations_visible": true,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "button",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "projects",
+          "path": "/projects",
+          "final_url": "/projects",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 844,
+            "viewport_height": 844,
+            "headings": 9,
+            "h1_count": 1,
+            "landmarks": 3,
+            "disclosures": 0,
+            "buttons": 0,
+            "minimum_visible_button_height": null,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "a",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [
+            {
+              "url": "/projects/pcos-ai-todoist-agent",
+              "error": "net::ERR_ABORTED"
+            }
+          ],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "project-brain",
+          "path": "/projects/pcos-ai-todoist-agent",
+          "final_url": "/projects/pcos-ai-todoist-agent",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 844,
+            "viewport_height": 844,
+            "headings": 14,
+            "h1_count": 1,
+            "landmarks": 3,
+            "disclosures": 13,
+            "buttons": 0,
+            "minimum_visible_button_height": null,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": false,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "a",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        },
+        {
+          "id": "chat",
+          "path": "/chat",
+          "final_url": "/chat",
+          "metrics": {
+            "has_content": true,
+            "error_overlay": false,
+            "horizontal_overflow": false,
+            "document_scroll_height": 844,
+            "viewport_height": 844,
+            "headings": 1,
+            "h1_count": 1,
+            "landmarks": 3,
+            "disclosures": 1,
+            "buttons": 1,
+            "minimum_visible_button_height": 48,
+            "provider_limitations_visible": false,
+            "read_only_grounding_visible": true,
+            "evidence_visible_without_hover": true
+          },
+          "keyboard_focus": {
+            "visible": true,
+            "tag": "textarea",
+            "outline": "solid"
+          },
+          "console_errors": [],
+          "expected_console_noise": [],
+          "request_failures": [],
+          "expected_request_cancellations": [],
+          "unexpected_http_errors": []
+        }
+      ],
+      "retained_state": {
+        "controlled_503_retained_content": true,
+        "recovery_cleared_warning": true
+      },
+      "correction_dialog": {
+        "opened": true,
+        "exact_preview_rendered": true,
+        "content_fits_without_clipping": true,
+        "focus_initially_inside": true,
+        "focus_trap_preserved": true,
+        "escape_closed": true,
+        "trigger_focus_restored": true
+      }
+    }
+  ]
+}

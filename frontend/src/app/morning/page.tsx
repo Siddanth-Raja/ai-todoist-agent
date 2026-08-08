@@ -390,7 +390,7 @@ function ProviderDialog({
               <div><dt className="text-stone-500">Provider</dt><dd className="mt-1 break-words text-stone-200">{preview.provider}</dd></div>
               <div><dt className="text-stone-500">Record</dt><dd className="mt-1 break-words text-stone-200">{preview.provider_record_type} · {preview.provider_record_id}</dd></div>
               <div><dt className="text-stone-500">Field</dt><dd className="mt-1 text-stone-200">{preview.field_name}</dd></div>
-              <div><dt className="text-stone-500">Evidence version</dt><dd className="mt-1 break-words text-stone-200">{preview.evidence_version}</dd></div>
+              <div className="min-w-0"><dt className="text-stone-500">Evidence version</dt><dd className="mt-1 break-all text-stone-200">{preview.evidence_version}</dd></div>
               <div><dt className="text-stone-500">Previous value</dt><dd className="mt-1 break-words text-stone-200">{safeValue(preview.previous_value)}</dd></div>
               <div><dt className="text-stone-500">Proposed value</dt><dd className="mt-1 break-words text-stone-200">{safeValue(preview.proposed_value)}</dd></div>
             </dl>

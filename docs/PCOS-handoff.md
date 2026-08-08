@@ -10364,3 +10364,164 @@ Verified gates before publication:
 Honest limitations: current Todoist reads still lack completed-history coverage, so Personal Reality remains partial and does not claim complete calm/no-change. No external provider correction is automatic. The live snapshot did not establish every deterministic fixture state, so waiting, mismatch, corrected-state, and uncertainty edge behavior is claimed from tests rather than fabricated as live fact. SID-246 adds no SID-247 release-verification behavior and does not start SID-247.
 
 Publication is one focused SID-246 commit containing this section and the bounded implementation. A commit cannot contain its own final SHA without changing that SHA, so the exact published SHA is recorded in SID-246 Linear completion evidence and the final release report after the normal fast-forward push. Local `HEAD`, local `origin/main`, and GitHub `main` must match before SID-246 is marked Done. SID-247 must remain To Do with `startedAt=null`; once both SID-245 and SID-246 are Done it is eligible but intentionally not started. Personal Reality Loop V1 remains active.
+
+---
+
+# 69. SID-247 Personal Reality Loop end-to-end verification and milestone closeout
+
+SID-247, **Verify the Personal Reality Loop End to End**, verifies the published SID-138, SID-139, SID-243, SID-244, SID-245, and SID-246 contracts as one bounded personal-reality loop. It adds no new intelligence, recommendation rule, project-state engine, provider adapter, polling, or background execution.
+
+The verified architecture is:
+
+```text
+provider evidence and normalized canonical work identity
+        ↓
+SID-138 activity/focus + SID-139 attributable changes
+        ↓
+SID-243 temporal reality reconciliation
+        ↓
+SID-244 Morning State synthesis
+        ↓
+SID-246 shared projection into Morning / Today / Project Brain / Chat
+        ↓
+SID-245 durable attributable correction or exact provider preview/confirmation
+        ↓
+next successful shared backend read
+```
+
+Complete eligible sets are reconciled, classified, and deterministically ordered before surface bounds. Today does not recompute classification or ranking; Project Brain does not create a competing reality; Morning does not reconstruct synthesis; Chat prefers the canonical shared snapshot; and corrections propagate through backend persistence rather than frontend patches. Canonical work/project/provider identity, evidence references and versions, timestamps and freshness, availability and coverage, temporal boundaries, effective corrections, conflicting claims, fact type, confidence, uncertainty, limitations, and schema version remain aligned across surfaces.
+
+## 69.1 Canonical start and verification sequencing
+
+The required baseline was verified before modification:
+
+- local `HEAD`, fetched `origin/main`, and GitHub `main` all equaled `ad60cbb154f84d0c79f0a2c3fd159d33a480e5e5`;
+- the worktree was clean and normal fast-forward publication was possible;
+- the checked-out handoff contained the published SID-246 state;
+- SID-138, SID-139, SID-243, SID-244, SID-245, and SID-246 were Done;
+- SID-247 was To Do, unblocked, highest-priority eligible, and had `startedAt=null`;
+- Personal Reality Loop V1 was active at exactly 85.71%; the project-list display rounded this to 86%;
+- Freelance Outbound Automation V1 and Repository Awareness and Catch-Ups remained planned at 0% and none of their issues was started;
+- the untouched suites passed at the published counts: 457 backend and 66 frontend tests.
+
+Only after those gates passed was SID-247 marked In Progress. The implementation and fixture audit found the required shared architecture intact, so work remained verification-first.
+
+## 69.2 Live read-only observations and deterministic scenarios
+
+Live and deterministic evidence remain explicitly separate:
+
+| Scenario | Evidence | Verified result |
+| --- | --- | --- |
+| PCOS active momentum | Live read-only plus fixture | Live Project Brain reported `active_momentum`, 131 attributable focus records, three provider changes, and 86 effective reality items before the public bound. Morning summarized the shared state, Today selected only currently actionable work, and grounded Chat used canonical citations. |
+| Freelance sent-follow-up mismatch | Deterministic fixture | One stable identity retains both the trustworthy sent-follow-up and open-work claims across Project Brain, Morning, conditional Today review, and Chat. It is not title-linked, auto-resolved, or provider-mutated. Live Freelance instead reported conservative `waiting_external` with low confidence and incomplete Todoist history; that live state was not rewritten to match the fixture. |
+| XO constrained next step | Deterministic fixture | The VR/headset-dependent step becomes `dedicated_session_needed`; Project Brain and Morning explain the constraint, Today omits it when not useful, and Chat explains the omission without calling XO abandoned or neglected. Live XO was conservatively `waiting_external` with low confidence and incomplete history. |
+| Nebulo constraint or unknown | Deterministic fixture plus live partial state | Trustworthy constraint evidence produces `waiting_external`; absent support remains unknown and never invents user inaction or a next action. Live Nebulo was `waiting_external` with low confidence and explicit incomplete history. |
+| Tomorrow-only task | Deterministic fixture | Remains `upcoming_not_actionable`; it can remain contextual in Morning/Project Brain, is excluded from Today Must do, and a large free block does not promote it. |
+| Overdue or due-today obligation | Live read-only plus fixture | Live Today Must do, Morning attention, and grounded Chat referenced the same Todoist record `6h4mJ52v7WV2mHhg`. Must do ordering remains overdue then due today and lower-confidence context does not displace it. |
+| Calm, mostly open day | Complete deterministic fixture | Today can honestly show no urgent action, Morning remains useful without manufacturing work, Project Brain preserves context, and Chat explains the state. Free time remains context. No complete-calm claim is made about the incomplete live state. |
+| Partial provider failure | Deterministic fixture and controlled HTTP 503 | Healthy evidence remains visible; incomplete availability cannot become `no_meaningful_change`; retained content survives failed revalidation; a later successful read clears the warning and converges on fresh shared state. |
+
+The live read-only routes returned HTTP 200 for `/health`, `/activity?limit=5`, `/today`, `/projects`, `/projects/pcos-ai-todoist-agent`, `/projects/freelance`, `/projects/xo`, `/projects/nebulo`, and `/morning-state`. `/morning` correctly remains a frontend route rather than a backend API. Activity returned five compatible records, Projects returned seven canonical project keys, and Today returned one Must do obligation, one separate recommendation, and 183 Personal Reality items before its response bound. The model key was deliberately disabled for deterministic local Chat verification; **What needs me today?** still returned HTTP 200 from canonical grounding, `ordinary_read_side_effects=false`, three evidence references, and the same due-today identity used by Today and Morning.
+
+Every live project read retained Todoist `missing_history`. Therefore live Personal Reality remains incomplete: it is not reported as complete calm, everything handled, or proof of no change.
+
+## 69.3 Corrections and exact provider gate
+
+The final focused suite contains 135 deterministic tests and proves the full correction matrix:
+
+- **Already done** is durable, attributable, evidence-versioned, and idempotent; the next shared read treats the item as handled while preserving provider evidence and conflict; no provider record is completed.
+- **Not today** records a bounded temporal choice, suppresses only until its boundary, remains deferred rather than complete, and reevaluates after deterministic expiry.
+- **Wrong context** retains the disputed association and original evidence, invents no replacement identity, stays unknown/reviewable, and never relinks by title.
+- **Waiting on someone** suppresses executable treatment only while supported, retains explanation and attribution, invents no deadline, and reevaluates after an explicit boundary.
+- **Snooze** preserves a timezone-aware wake time, retains original evidence/classification, returns after expiry, and supports attributable safe undo.
+- correction history retains active, superseded, reversed, and effective states; ordinary reads do not create corrections.
+
+Exact provider preview identifies provider, stable record, field, prior value, proposed value, evidence version, actor, expiry, and idempotency identity. Preview performs no provider mutation. Confirmation is a distinct operation bound to that exact preview, re-reads provider state, rejects changed or stale state, handles retry idempotently, reports success only after trustworthy post-state verification, and retains attributable failure/uncertain outcomes. Unsupported production writers remain unsupported.
+
+Browser verification opened preview only. The local preview endpoint returned HTTP 200 and used an exact read of the Todoist record; the confirmation endpoint was never called. Deterministic adapters cover ready, stale, success, failure, uncertain, already-complete, and idempotent retry paths without changing Todoist, Linear, Gmail, Calendar, or another live provider.
+
+## 69.4 Ordinary-read side effects, protected rows, and provider traffic
+
+An isolated copy of the existing SQLite database bracketed repeated authenticated Project Brain, Today, Morning, and grounded Chat reads. Ordinary reads left every protected count unchanged:
+
+| Durable structure | Before ordinary reads | After ordinary reads |
+| --- | ---: | ---: |
+| provider-change scopes | 7 | 7 |
+| provider-record checkpoints | 195 | 195 |
+| provider-change events | 3 | 3 |
+| provider-change consumers | 0 | 0 |
+| reality confirmations | 0 | 0 |
+| confirmation reversals | 0 | 0 |
+| Morning corrections | 0 | 0 |
+| provider previews | 0 | 0 |
+| pending actions | 32 | 32 |
+
+Two complete browser-debug/final cycles at four widths then created eight expected **local preview ledger** rows. Final counts were otherwise unchanged: scopes 7, checkpoints 195, events 3, consumers 0, confirmations 0, reversals 0, corrections 0, previews 8, and pending actions 32. Preview persistence is not acknowledgement, correction, confirmation, successful reconciliation, or external mutation.
+
+Request-log review showed HTTP 200 for every final relevant local API read, grounded Chat POST, and preview POST. Provider traffic consisted of ordinary read-only projection fetches and exact preview target reads. There was no confirmation request, mutating provider method, external write, background poller, or live provider state change.
+
+## 69.5 Browser, responsive, retained-state, and accessibility evidence
+
+`scripts/verify_sid_247_browser.mjs` drove native headless Chrome against a fresh Next.js 15.5.19 production server and FastAPI server with external model access disabled and an isolated database. The sanitized durable report is `docs/verification/SID-247-browser-report.json`; it retains no API key, raw provider payload, screenshot, or raw response body. Screenshots used for visual review remained outside the repository in `/tmp`.
+
+The final report covers Today, Morning, Projects, populated PCOS Project Brain, and grounded Chat at 1440×1100, 1024×1000, 768×1000, and 390×844: 20 route/viewport combinations. All 20 had meaningful content, semantic headings and landmarks, no framework overlay, no document-level horizontal overflow, no application console error, no unexpected HTTP error, and no broken relevant request. One initial optional `/favicon.ico` 404 and canceled Next route-prefetch requests are separately classified as benign expected browser noise, not application failures.
+
+At every width:
+
+- keyboard focus was visible with a solid outline;
+- evidence/citations were reachable without hover and native disclosures remained accessible;
+- grounded Chat exposed `Needs Today · Read Only` evidence;
+- Morning exposed explicit incomplete-provider text;
+- the controlled 503 retained prior Morning content and the next successful refresh cleared the warning;
+- the correction dialog opened with focus inside, trapped Tab/Shift+Tab, closed with Escape, restored focus to the trigger, and rendered the exact preview without clipping;
+- buttons measured at least 44px on Morning and 48px in Chat; bottom navigation remained clear of content through the 1024px layout and hid only when the desktop sidebar appeared;
+- reduced motion was requested, natural page flow remained usable, and bounded Project Brain evidence remained reachable without an SID-218 scrolling regression.
+
+Pending, success, failure, stale-preview, duplicate-submit, correction-history, and undo semantics are covered by deterministic frontend/backend tests; the live browser did not manufacture a provider write to display them.
+
+## 69.6 Verification-discovered defects and focused fixes
+
+Verification found and fixed only two direct blockers plus one narrow legibility issue:
+
+1. At 1024px the bottom navigation remained visible while the shell dropped its bottom clearance, allowing the nav to intercept Chat Send. Clearance now remains until the navigation hides at `xl`; a source regression test and all-width browser pass protect it.
+2. An existing migrated `morning_provider_previews` table lacked the later `confirmed_by_actor` column, causing preview HTTP 500 despite fresh-database tests. Startup now adds that single nullable column when absent. A legacy-schema regression proves the additive migration and a mutation-free preview.
+3. The long evidence-version value in the 390px dialog could clip. The value now wraps at arbitrary characters; automated inner-width measurement and visual review prove it fits.
+
+The migration is additive and idempotent: `PRAGMA table_info` plus `ALTER TABLE ... ADD COLUMN`. It contains no drop, delete, rename, rewrite, or destructive data operation.
+
+Focused SID-247 files are:
+
+- `backend/app/storage.py`
+- `backend/tests/test_morning_corrections.py`
+- `frontend/src/app/morning/page.tsx`
+- `frontend/src/components/app-shell.tsx`
+- `frontend/tests/morning-brief.test.mjs`
+- `frontend/tests/surface-hierarchy-presentation.test.mjs`
+- `scripts/verify_sid_247_browser.mjs`
+- `docs/verification/SID-247-browser-report.json`
+- `docs/PCOS-handoff.md`
+
+## 69.7 Final automated gates, limitations, and publication state
+
+Final gates before publication:
+
+- untouched baseline: 457 backend tests and 66 frontend tests passed;
+- focused Personal Reality loop: 135 tests passed;
+- final backend: 458 tests passed in 3.922 seconds;
+- final frontend: 67 tests passed;
+- TypeScript: `npx tsc --noEmit` passed;
+- production: Next.js 15.5.19 `npm run build` passed for all existing routes;
+- Python: `python -m compileall -q backend/app backend/scripts backend/tests` passed;
+- `git diff --check`: passed;
+- privacy/artifact scan: no raw provider/email payload, credential, API key, or screenshot is retained; report flags confirm raw payloads and repository screenshots are false;
+- secret scan: no token, access key, private-key marker, or credential literal was added;
+- forbidden-provider-mutation and capability-boundary scans: no provider writer, adapter, mutation route, automatic correction, polling, or expanded external authority was added;
+- migration/backward-compatibility: the only schema change is the tested additive nullable legacy column; all 458 backend regressions pass;
+- project hard-coding and title-only matching scans: no new production PCOS/Freelance/XO/Nebulo rule, fuzzy/title join, or title-based reconciliation exists;
+- generated/debug scan: no tracked screenshot/build output, breakpoint, debug statement, TODO, or FIXME was added; the JSON report and verifier are intentional SID-247 evidence assets;
+- frontend recomputation and duplicate-engine scans: the production frontend changes only spacing/wrapping, and no classifier, ranking, recommendation, reconciliation, project-state, or synthesis engine was added;
+- complete-set-before-bounding, cross-surface identity/classification/evidence consistency, correction durability/history/undo/expiry/idempotency, retained-state recovery, ordinary-read and Chat side-effect freedom, exact confirmation, stale-preview rejection, provider-failure attribution, and provider-traffic constraints pass in the focused and complete suites plus runtime/browser evidence.
+
+Honest limitations: Todoist completed-history coverage remains unavailable, so live conclusions affected by that gap remain explicitly partial. Live Freelance/XO/Nebulo state does not reproduce every controlled fixture, and those scenario claims are labeled deterministic rather than invented live evidence. The browser observed the unsupported live preview state; successful provider confirmation is proven with injected deterministic adapters only. No unauthorized external provider data was mutated.
+
+Publication is one focused SID-247 commit containing only these verification assets, regression fixes/tests, and this canonical handoff section. A commit cannot contain its own final SHA without changing that SHA, and SID-247 cannot be marked Done or its milestone closed before that SHA is published and remotely verified. Therefore the exact published SHA, final Linear Done transition, final live milestone percentage/status, and remote reconciliation are recorded in SID-247 completion evidence and the final release report after the normal fast-forward push. Personal Reality Loop V1 is eligible for closeout only after all seven milestone issues are confirmed Done. Freelance Outbound Automation V1, Repository Awareness and Catch-Ups, and every later issue remain untouched.

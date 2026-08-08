@@ -710,6 +710,7 @@ def ensure_database() -> None:
             _ensure_activity_columns(connection)
             _ensure_pending_action_contract(connection)
             _ensure_gmail_mutation_gate_columns(connection)
+            _ensure_morning_provider_preview_columns(connection)
             _seed_default_habits(connection)
             _seed_default_memories(connection)
             _seed_default_canonical_projects(connection)
@@ -930,6 +931,20 @@ def _ensure_gmail_mutation_gate_columns(connection: sqlite3.Connection) -> None:
             ALTER TABLE gmail_mutation_gate
             ADD COLUMN provider_mutation_calls INTEGER NOT NULL DEFAULT 0
             """
+        )
+
+
+def _ensure_morning_provider_preview_columns(connection: sqlite3.Connection) -> None:
+    """Keep the additive SID-245 preview ledger readable across schema revisions."""
+    columns = {
+        row["name"]
+        for row in connection.execute(
+            "PRAGMA table_info(morning_provider_previews)"
+        ).fetchall()
+    }
+    if "confirmed_by_actor" not in columns:
+        connection.execute(
+            "ALTER TABLE morning_provider_previews ADD COLUMN confirmed_by_actor TEXT"
         )
 
 

@@ -194,6 +194,7 @@ test("evidence is reachable without hover and narrow content can wrap", async ()
   assert.match(source, /<details/);
   assert.match(source, /Evidence, identity, and uncertainty/);
   assert.match(source, /break-words/);
+  assert.match(source, /Evidence version<\/dt><dd className="mt-1 break-all/);
   assert.doesNotMatch(source, /tooltip|group-hover.*evidence/i);
 });
 

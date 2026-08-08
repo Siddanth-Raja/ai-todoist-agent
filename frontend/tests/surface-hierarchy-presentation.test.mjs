@@ -26,6 +26,10 @@ const globalsSource = await readFile(
   new URL("../src/app/globals.css", import.meta.url),
   "utf8",
 );
+const appShellSource = await readFile(
+  new URL("../src/components/app-shell.tsx", import.meta.url),
+  "utf8",
+);
 
 function recommendation(overrides = {}) {
   return {
@@ -161,4 +165,11 @@ test("Project hierarchy preserves every SID-218 collection contract", () => {
   assert.match(projectSource, /project\.classification_diagnostics\.map/);
   assert.doesNotMatch(projectSource, /currentDependencyBlockers\.(slice|splice)\(/);
   assert.doesNotMatch(projectSource, /project\.classification_diagnostics\.(slice|splice)\(/);
+});
+
+test("bottom navigation clearance remains until the navigation hides", () => {
+  assert.match(appShellSource, /pb-24/);
+  assert.match(appShellSource, /xl:pb-6/);
+  assert.match(appShellSource, /xl:hidden/);
+  assert.doesNotMatch(appShellSource, /lg:pb-6/);
 });

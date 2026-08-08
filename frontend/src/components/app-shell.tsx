@@ -50,7 +50,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="absolute right-[-10rem] top-10 h-96 w-96 rounded-full bg-moss/10 blur-3xl" />
       </div>
 
-      <div className="mx-auto flex h-full w-full max-w-[1680px] gap-6 overflow-hidden px-3 pb-24 pt-3 md:px-6 lg:pb-6 xl:px-8">
+      <div className="mx-auto flex h-full w-full max-w-[1680px] gap-6 overflow-hidden px-3 pb-24 pt-3 md:px-6 xl:px-8 xl:pb-6">
         <aside className="sticky top-6 hidden h-[calc(100dvh-3rem)] w-72 shrink-0 rounded-[2rem] border border-white/10 bg-white/[0.055] p-3 shadow-soft backdrop-blur-2xl xl:block">
           <div className="px-4 pb-5 pt-4">
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-pearl text-ink shadow-card">

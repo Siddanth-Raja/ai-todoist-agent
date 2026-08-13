@@ -436,6 +436,9 @@ class MorningStateTests(unittest.TestCase):
         result = self.synthesize(projects, events=(event,))
         attention = result.attention_today.statements
         self.assertEqual(attention[0].classification, RealityClassification.POTENTIAL_MISMATCH)
+        self.assertEqual(result.briefing.primary_kind, "review")
+        self.assertEqual(result.briefing.primary_statement_id, attention[0].statement_id)
+        self.assertIn("not a command", result.briefing.summary)
         self.assertEqual(attention[0].suggested_action.performs_provider_mutation, False)
         self.assertTrue(any("open" in item for item in attention[0].source_evidence_summaries))
         self.assertTrue(any("sent" in item for item in attention[0].source_evidence_summaries))
@@ -491,6 +494,40 @@ class MorningStateTests(unittest.TestCase):
         )
         self.assertEqual(result.urgent_attention_count, 2)
         self.assertEqual(result.overall_classification, RealityClassification.NEEDS_ACTION)
+        self.assertEqual(result.briefing.primary_kind, "move")
+        self.assertEqual(
+            result.briefing.primary_statement_id,
+            result.attention_today.statements[0].statement_id,
+        )
+        self.assertIn("One move", result.briefing.headline)
+
+    def test_structured_due_date_and_explicit_title_date_conflict_becomes_review_first(self):
+        suspicious = reality_item(
+            "project-pcos",
+            "pcos",
+            "date-conflict",
+            RealityClassification.NEEDS_ACTION,
+            title="try to move in Aug 15th",
+            temporal=TemporalActionability(
+                due_date=NOW.date(),
+                action_possible_now=True,
+                action_useful_now=True,
+            ),
+        )
+        result = self.synthesize(
+            [project("project-pcos", "pcos", "PCOS", ProjectFocusState.ACTIVE_MOMENTUM, (suspicious,))]
+        )
+        self.assertEqual(result.attention_today.statements[0].classification, RealityClassification.NEEDS_ACTION)
+        self.assertEqual(result.briefing.primary_kind, "review")
+        self.assertEqual(result.briefing.headline, "Confirm the move-in task’s date.")
+        self.assertEqual(
+            result.briefing.primary_caution,
+            "The task title says Aug 15, but its Linear due date says Aug 7.",
+        )
+        self.assertEqual(
+            result.briefing.review_cautions[result.briefing.primary_statement_id],
+            result.briefing.primary_caution,
+        )
 
     def test_tomorrow_only_never_competes_for_attention(self):
         tomorrow = reality_item(
@@ -568,6 +605,10 @@ class MorningStateTests(unittest.TestCase):
             {item.classification for item in result.handled_paused_waiting.statements},
             {RealityClassification.ALREADY_HANDLED, RealityClassification.WAITING},
         )
+        self.assertEqual(result.briefing.handled_count, 1)
+        self.assertEqual(result.briefing.waiting_count, 1)
+        self.assertEqual(result.briefing.upcoming_count, 0)
+        self.assertLessEqual(len(result.briefing.support_statement_ids), 3)
 
     def test_intentional_pause_requires_explicit_focus_state(self):
         intent = ExplicitProjectIntent(
@@ -619,12 +660,58 @@ class MorningStateTests(unittest.TestCase):
         )
         self.assertTrue(complete.no_urgent_attention)
         self.assertEqual(complete.overall_classification, RealityClassification.NO_MEANINGFUL_CHANGE)
+        self.assertIsNone(complete.briefing.primary_kind)
+        self.assertIsNone(complete.briefing.primary_statement_id)
+        self.assertIn("without an urgent catch-up", complete.briefing.headline)
         incomplete = self.synthesize(
             [project("project-pcos", "pcos", "PCOS", ProjectFocusState.INSUFFICIENT_EVIDENCE, complete=False)]
         )
         self.assertFalse(incomplete.no_urgent_attention)
         self.assertEqual(incomplete.overall_classification, RealityClassification.UNKNOWN)
         self.assertEqual(incomplete.attention_today.statements[0].classification, RealityClassification.UNKNOWN)
+        self.assertIn("evidence gaps", incomplete.briefing.headline)
+
+    def test_briefing_compresses_many_under_control_items_without_losing_counts(self):
+        items = tuple(
+            reality_item(
+                "project-pcos",
+                "pcos",
+                f"handled-{index:02d}",
+                RealityClassification.ALREADY_HANDLED,
+            )
+            for index in range(18)
+        ) + tuple(
+            reality_item(
+                "project-pcos",
+                "pcos",
+                f"waiting-{index:02d}",
+                RealityClassification.WAITING,
+            )
+            for index in range(7)
+        ) + tuple(
+            reality_item(
+                "project-pcos",
+                "pcos",
+                f"later-{index:02d}",
+                RealityClassification.UPCOMING_NOT_ACTIONABLE,
+            )
+            for index in range(5)
+        )
+        result = self.synthesize(
+            [project("project-pcos", "pcos", "PCOS", ProjectFocusState.ACTIVE_MOMENTUM, items)]
+        )
+        self.assertEqual(result.briefing.handled_count, 18)
+        self.assertEqual(result.briefing.waiting_count, 7)
+        self.assertEqual(result.briefing.upcoming_count, 5)
+        self.assertEqual(len(result.briefing.support_statement_ids), 3)
+        self.assertEqual(result.handled_paused_waiting.total_count, 30)
+
+    def test_briefing_change_projection_counts_only_real_provider_events(self):
+        calm = self.synthesize(
+            [project("project-pcos", "pcos", "PCOS", ProjectFocusState.ACTIVE_MOMENTUM)]
+        )
+        self.assertEqual(calm.briefing.material_change_count, 0)
+        self.assertEqual(calm.briefing.material_change_statement_ids, ())
 
     def test_stale_and_failed_evidence_remain_visible(self):
         stale_item = reality_item(

@@ -158,16 +158,33 @@ test("provider preview and confirmation payloads are separate and exact", () => 
 test("Good Morning uses retained revalidation and never recomputes synthesis in the client", async () => {
   const source = await readFile("src/app/morning/page.tsx", "utf8");
   assert.match(source, /useRetainedApiQuery<MorningStateSynthesis>\("\/morning-state"\)/);
+  assert.match(source, /synthesis\.briefing\.headline/);
+  assert.match(source, /synthesis\.briefing\.primary_statement_id/);
+  assert.match(source, /synthesis\.briefing\.material_change_statement_ids/);
+  assert.match(source, /synthesis\.briefing\.support_statement_ids/);
+  assert.match(source, /synthesis\.briefing\.review_cautions\[item\.statement_id\]/);
   assert.match(source, /refresh failed; showing retained state/i);
   assert.doesNotMatch(source, /score|rankTasks|inferProject|classifyStatement/);
   assert.doesNotMatch(source, /(?:PCOS|Freelance|Nebulo|XO).*(?:rule|classification)/);
+});
+
+test("chief-of-staff hierarchy keeps one primary and compresses supporting reality", async () => {
+  const source = await readFile("src/app/morning/page.tsx", "utf8");
+  assert.match(source, /Primary move/);
+  assert.match(source, /Review before acting/);
+  assert.match(source, /already handled/);
+  assert.match(source, /waiting or intentionally paused/);
+  assert.match(source, /protected for later/);
+  assert.match(source, /Review \{remainingSupport\.length\} more supporting item/);
+  assert.doesNotMatch(source, /canonical_project_key \? <p/);
+  assert.doesNotMatch(source, /statement\.fact_type\.replaceAll\("_", " "\)<\/span>/);
 });
 
 test("honest no-action and partial-provider states are first-class copy", async () => {
   const source = await readFile("src/app/morning/page.tsx", "utf8");
   assert.match(source, /Nothing urgent needs attention/);
   assert.match(source, /Absence of an urgent item is not being treated as proof/);
-  assert.match(source, /Provider limitations/);
+  assert.match(source, /Evidence limitations/);
 });
 
 test("initial provider interaction only previews; exact confirmation is a second action", async () => {
@@ -192,10 +209,19 @@ test("dialog has accessible semantics, keyboard focus handling, and duplicate pr
 test("evidence is reachable without hover and narrow content can wrap", async () => {
   const source = await readFile("src/app/morning/page.tsx", "utf8");
   assert.match(source, /<details/);
-  assert.match(source, /Evidence, identity, and uncertainty/);
+  assert.match(source, /Details and corrections/);
+  assert.match(source, /Technical source references/);
   assert.match(source, /break-words/);
   assert.match(source, /Evidence version<\/dt><dd className="mt-1 break-all/);
   assert.doesNotMatch(source, /tooltip|group-hover.*evidence/i);
+});
+
+test("the primary card states a date conflict once and keeps controls in one disclosure", async () => {
+  const source = await readFile("src/app/morning/page.tsx", "utf8");
+  assert.match(source, /displaySummary=\{synthesis\.briefing\.primary_caution \?\? undefined\}/);
+  assert.equal((source.match(/Details and corrections/g) || []).length, 1);
+  assert.doesNotMatch(source, />Why this is here</);
+  assert.doesNotMatch(source, />Correct this conclusion</);
 });
 
 test("correction history and reversible PCOS undo remain reachable", async () => {
@@ -208,6 +234,10 @@ test("correction history and reversible PCOS undo remain reachable", async () =>
 test("mobile navigation keeps full-size touch targets in a contained scroll region", async () => {
   const source = await readFile("src/components/app-shell.tsx", "utf8");
   assert.match(source, /href: "\/morning"/);
-  assert.match(source, /overflow-x-auto/);
+  assert.match(source, /w-full gap-1 overflow-x-auto scroll-px-2/);
   assert.match(source, /min-h-14 min-w-16/);
+  assert.match(source, /aria-current=\{isActive \? "page" : undefined\}/);
+  assert.match(source, /hidden whitespace-nowrap sm:block/);
+  assert.doesNotMatch(source, /max-w-xl gap-1 overflow-x-auto/);
+  assert.doesNotMatch(source, /truncate sm:block/);
 });

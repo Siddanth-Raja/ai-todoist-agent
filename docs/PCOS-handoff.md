@@ -10525,3 +10525,76 @@ Final gates before publication:
 Honest limitations: Todoist completed-history coverage remains unavailable, so live conclusions affected by that gap remain explicitly partial. Live Freelance/XO/Nebulo state does not reproduce every controlled fixture, and those scenario claims are labeled deterministic rather than invented live evidence. The browser observed the unsupported live preview state; successful provider confirmation is proven with injected deterministic adapters only. No unauthorized external provider data was mutated.
 
 Publication is one focused SID-247 commit containing only these verification assets, regression fixes/tests, and this canonical handoff section. A commit cannot contain its own final SHA without changing that SHA, and SID-247 cannot be marked Done or its milestone closed before that SHA is published and remotely verified. Therefore the exact published SHA, final Linear Done transition, final live milestone percentage/status, and remote reconciliation are recorded in SID-247 completion evidence and the final release report after the normal fast-forward push. Personal Reality Loop V1 is eligible for closeout only after all seven milestone issues are confirmed Done. Freelance Outbound Automation V1, Repository Awareness and Catch-Ups, and every later issue remain untouched.
+
+---
+
+# 70. SID-248 Morning Brief product acceptance and Personal Reality Loop V1 final closeout
+
+SID-248, **Turn Canonical Reality Into a Genuinely Useful Morning Brief**, completes the product-acceptance work that reopened Personal Reality Loop V1 after its technically verified SID-247 closeout. The original system correctly preserved canonical identity, evidence, uncertainty, corrections, retained state, and provider safety, but the rendered Morning page still behaved like an inspection dashboard: it repeated full cards, exposed implementation language, made evidence controls compete with the brief, and did not answer “What matters today?” quickly enough.
+
+Siddanth explicitly approved the refined Morning product experience on August 13, 2026. The accepted page now leads with a backend-owned plain-English briefing; allows zero or one dominant move or review; compresses handled, waiting, paused, and upcoming populations into counts plus only a few meaningful exceptions; keeps material changes, project pulse, and day shape distinct; and leaves evidence, uncertainty, corrections, history, and exact provider-preview controls reachable through intentional disclosures rather than the default reading path.
+
+## 70.1 Product outcome and hierarchy
+
+The typed `MorningBriefPresentation` projection is owned by `backend/app/morning_state.py`. It supplies the headline, summary, primary move/review identity, explicit conflict caution, material-change identities, support identities, and summary counts. `frontend/src/app/morning/page.tsx` renders that projection without recomputing classification, recommendation priority, project state, or reconciliation.
+
+The approved opening conflict state reads:
+
+- **Today’s brief**;
+- **Confirm the move-in task’s date.**;
+- **The task title says Aug 15, but its Todoist due date says Aug 8.**
+
+The conflict is stated once. It is presented as `Review before acting`, not converted into a confident command. The title date and structured provider due date both remain available as evidence; neither silently wins. The primary card has one **Details and corrections** disclosure containing evidence, correction controls, exact provider preview, and correction history. Supporting cards use the same reachable disclosure pattern without dominating the initial read.
+
+Default copy no longer exposes “classified as actionable,” “structured due evidence,” “today’s command,” “attributable changes,” or “selected meaningful-check boundary.” The time-sensitive “Good morning” greeting is replaced with **Today’s brief**. Raw identifiers, evidence versions, classification vocabulary, and source diagnostics remain closed by default in technical/evidence disclosures.
+
+## 70.2 Canonical behavior and architecture boundaries
+
+SID-248 adds no second synthesis, recommendation, classification, project-state, or reconciliation engine. It does not change Must do semantics, recommendation ordering, temporal actionability, correction persistence, provider identity, evidence versioning, freshness, retained-state recovery, or confirmation gates. The frontend consumes typed backend fields and performs only presentation selection and compression.
+
+The explicit title-versus-due conflict check requires both a parseable title date and a structured provider due date. It is a bounded backend presentation safeguard after canonical reconciliation, not a title join, fuzzy identity matcher, replacement classifier, or frontend heuristic. No project-specific PCOS, Freelance, XO, or Nebulo production rule was added.
+
+Ordinary Morning reads remain side-effect free. Browser and runtime verification did not call a provider-confirmation endpoint or mutate Todoist, Linear work items, Gmail, Calendar, or another external provider. Durable correction history, reversible PCOS corrections, exact preview-before-confirmation behavior, stale-preview rejection, and provider-failure honesty remain covered by the existing architecture and final regression suites.
+
+## 70.3 Representative live and deterministic behavior
+
+Live and fixture evidence remain explicitly separate.
+
+The final authenticated live Morning read on August 13, 2026 returned `overall_classification=unknown`, `complete_evidence=false`, zero supported urgent items, three material provider changes, seven project summaries, nine provider diagnostics, and 137 handled/waiting records before the existing 12-record section bound. The backend presentation correctly said **The brief is useful, with evidence gaps.** It summarized 84 already-handled and 53 waiting/paused items without claiming complete calm or rendering the full population as default cards. The historical Aug 15/Aug 8 task was no longer in current live provider state, so the live page did not fabricate that conflict.
+
+The approved conflict screenshots use a deterministic canonical backend projection with the Todoist task title `try to move in aug 15th` and structured due date Aug 8. Deterministic tests also cover genuine due/overdue work, complete calm evidence, meaningful changes, many under-control items, waiting and constrained work, partial availability, date/evidence conflict review, correction behavior, and retained useful state through a controlled HTTP 503. Fixture conclusions are never described as current live facts.
+
+Todoist completed-history coverage remains unavailable. Affected live conclusions therefore remain partial and explicitly uncertain; missing history is not converted into abandonment, completion, no change, or reassurance.
+
+## 70.4 Responsive navigation and browser acceptance
+
+The approved Morning composition was reviewed at 1440, 1024, 768, and 390 CSS pixels. After approval, the final release check found that the tenth bottom-navigation destination could be partially clipped at 1024 and 768 because ten 64px touch targets were constrained inside a 576px shell. The shell now uses the available tablet width, preserves its horizontal containment for narrow mobile screens, keeps every destination at least 56px high, uses non-truncated labels from 640px upward, and exposes `aria-current="page"` for the active destination.
+
+Fresh 1024×900 and 768×900 production captures verify all ten destinations—Morning, Today, Projects, Chat, Calendar, Tasks, Email, Habits, Memory, and Settings—fully inside the navigation scroller with unclipped labels. Sequential Tab navigation reached all ten destinations in order; every target remained visible and touch-sized. Both widths had one semantic page heading, one explicit conflict sentence, no document-level horizontal overflow, no framework overlay, no unexpected console/network error, reduced motion enabled, accessible disclosures, and reachable evidence/corrections. A controlled 503 at 1024 retained the approved headline and showed the retained-state warning.
+
+The final 1024 and 768 images are attached directly to SID-248 for cloud review. Screenshots and the raw browser fixture remain outside the repository; `scripts/verify_sid_248_browser.mjs` is the intentional reproducible verification asset.
+
+## 70.5 Final gates and publication state
+
+Final approval gates passed:
+
+- backend: 461 tests passed;
+- frontend: 69 tests passed;
+- focused Morning backend: 41 tests passed across state and correction suites;
+- focused Morning frontend: 14 tests passed;
+- TypeScript: `npx tsc --noEmit` passed;
+- production: Next.js 15.5.19 `npm run build` passed for all existing routes from an isolated clean build tree;
+- Python: `python -m compileall -q backend/app backend/scripts backend/tests` passed;
+- `git diff --check`: passed;
+- browser: 1024 and 768 recaptures passed content, touch-target, label-clipping, keyboard-order, overflow, disclosure, retained-state, console, request, and overlay checks;
+- privacy/secret scan: no credential, API key, token, private-key marker, raw provider payload, raw email body, or unrelated personal datum was added;
+- provider/capability scan: no provider writer, new mutation route, automatic correction, polling, or expanded external authority was added;
+- migration/backward-compatibility scan: no schema migration, destructive data operation, or response-contract break was added; all complete regressions passed;
+- identity/title scan: no title-based join, fuzzy identity match, reconciliation rule, or title-only classification was added;
+- frontend-intelligence/duplicate-engine scan: no frontend scorer, classifier, ranker, reconciliation engine, or competing Morning synthesis was added;
+- ordinary-read and Chat side-effect checks, retained-state recovery, provider-failure attribution, correction durability/history/undo, and exact preview/confirmation boundaries remain green in the complete and focused suites;
+- hard-coding/debug/artifact scan: no project-specific intelligence rule, breakpoint, debug statement, TODO/FIXME, tracked build output, or tracked screenshot was added.
+
+The final release is one focused SID-248 commit from the verified baseline `3a6e338a4a36a5024ec1578e38d7c89a582190ea`, published directly to `origin/main` only by normal fast-forward after the repository handoff and designated Obsidian snapshot agree. A Git commit cannot contain its own final SHA without changing that SHA, so the exact published commit, local/fetched/GitHub main reconciliation, SID-248 Done transition, final 100% milestone verification, and SID-236 unblocked-but-unstarted state are recorded in Linear completion evidence and the final release report after publication.
+
+SID-236 must remain To Do with `startedAt=null`. Freelance Outbound Automation V1, Repository Awareness and Catch-Ups, and all later work remain unstarted during this closeout.

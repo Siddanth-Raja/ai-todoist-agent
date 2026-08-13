@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 import hashlib
+import re
 from typing import Any, Iterable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -206,6 +207,34 @@ class MorningChangeWindow(BaseModel):
         return self
 
 
+class MorningBriefPresentation(BaseModel):
+    """Small, canonical presentation projection over the existing synthesis."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = MORNING_STATE_SCHEMA_VERSION
+    headline: str = Field(..., min_length=1, max_length=240)
+    summary: str = Field(..., min_length=1, max_length=1000)
+    primary_kind: Literal["move", "review"] | None = None
+    primary_statement_id: str | None = Field(default=None, max_length=240)
+    primary_caution: str | None = Field(default=None, max_length=1000)
+    review_cautions: dict[str, str] = Field(default_factory=dict)
+    material_change_count: int = Field(default=0, ge=0)
+    material_change_statement_ids: tuple[str, ...] = ()
+    support_statement_ids: tuple[str, ...] = ()
+    handled_count: int = Field(default=0, ge=0)
+    waiting_count: int = Field(default=0, ge=0)
+    upcoming_count: int = Field(default=0, ge=0)
+    project_count: int = Field(default=0, ge=0)
+    fixed_commitment_count: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def validate_primary(self) -> "MorningBriefPresentation":
+        if (self.primary_kind is None) != (self.primary_statement_id is None):
+            raise ValueError("briefing primary kind and statement must be set together")
+        return self
+
+
 class MorningStateSynthesis(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -216,6 +245,7 @@ class MorningStateSynthesis(BaseModel):
     complete_evidence: bool
     no_urgent_attention: bool
     urgent_attention_count: int
+    briefing: MorningBriefPresentation
     changes_since_meaningful_check: MorningSection
     attention_today: MorningSection
     handled_paused_waiting: MorningSection
@@ -459,6 +489,18 @@ class MorningStateService:
             evaluated_at.isoformat(),
             *statement_ids,
         )
+        briefing = _briefing_projection(
+            attention=sections[1],
+            changes=sections[0],
+            handled=tuple(handled),
+            day_shape=day_shape,
+            complete=complete,
+            urgent_count=urgent_count,
+            correction_review_count=len(correction_review_items),
+            material_change_count=change_window.total_count,
+            project_count=len(project_states),
+            reality_items=all_reality_items,
+        )
         return MorningStateSynthesis(
             synthesis_id=synthesis_id,
             evaluated_at=evaluated_at,
@@ -466,6 +508,7 @@ class MorningStateService:
             complete_evidence=complete,
             no_urgent_attention=urgent_count == 0 and complete,
             urgent_attention_count=urgent_count,
+            briefing=briefing,
             changes_since_meaningful_check=sections[0],
             attention_today=sections[1],
             handled_paused_waiting=sections[2],
@@ -681,7 +724,7 @@ def _change_statements(
             ),
             status="no_meaningful_change" if complete else "incomplete_change_coverage",
             summary=(
-                "No meaningful provider change was recorded since the selected check boundary."
+                "Nothing important has changed since the last check."
                 if complete
                 else "Change history is incomplete, so no-change cannot be concluded."
             ),
@@ -727,7 +770,7 @@ def _statement_from_change(
     project_name = project.name if project else "the linked project"
     summary = (
         f"{project_name}: {event.category.value.replace('_', ' ')} was observed for "
-        f"{event.provider} {event.provider_record_type} {event.provider_record_id}."
+        f"the linked {event.provider} record."
     )
     source_times = tuple(
         dict.fromkeys(
@@ -819,11 +862,7 @@ def _statement_from_reality(
         )
         else MorningFactType.DETERMINISTIC_CONCLUSION
     )
-    label = item.title or (
-        item.normalized_work_identity.provider_record_id
-        if item.normalized_work_identity
-        else item.reconciliation_id
-    )
+    label = item.title or "Linked work item"
     uncertainty = []
     if item.confidence in {RealityConfidence.LOW, RealityConfidence.UNKNOWN}:
         uncertainty.append(item.classification_reason)
@@ -837,7 +876,7 @@ def _statement_from_reality(
         section=section,
         classification=item.classification,
         status=item.classification.value,
-        summary=f"{label} — {item.classification.value.replace('_', ' ')}.",
+        summary=label,
         reason=item.classification_reason,
         canonical_project_id=item.canonical_project_id,
         canonical_project_key=item.canonical_project_key,
@@ -1226,6 +1265,210 @@ def _bounded_section(
         item_limit=bound,
         truncated=len(ordered) > len(returned),
     )
+
+
+def _briefing_projection(
+    *,
+    attention: MorningSection,
+    changes: MorningSection,
+    handled: tuple[MorningStatement, ...],
+    day_shape: tuple[MorningStatement, ...],
+    complete: bool,
+    urgent_count: int,
+    correction_review_count: int,
+    material_change_count: int,
+    project_count: int,
+    reality_items: tuple[RealityItem, ...],
+) -> MorningBriefPresentation:
+    """Project already-classified Morning State into a concise reading order."""
+
+    actionable = next(
+        (
+            item
+            for item in attention.statements
+            if item.classification == RealityClassification.NEEDS_ACTION
+        ),
+        None,
+    )
+    mismatch = next(
+        (
+            item
+            for item in attention.statements
+            if item.classification == RealityClassification.POTENTIAL_MISMATCH
+        ),
+        None,
+    )
+    corrected_review = next(
+        (
+            item
+            for item in attention.statements
+            if item.classification == RealityClassification.UNKNOWN
+            and item.source_reconciliation_id is not None
+        ),
+        None,
+    )
+    primary = actionable or mismatch or corrected_review
+    reality_by_id = {item.reality_item_id: item for item in reality_items}
+    review_cautions = {
+        statement.statement_id: caution
+        for statement in attention.statements
+        if statement.source_reality_item_id
+        if (
+            caution := _explicit_title_due_conflict(
+                reality_by_id.get(statement.source_reality_item_id)
+            )
+        )
+        is not None
+    }
+    primary_caution = review_cautions.get(primary.statement_id) if primary else None
+    primary_reality = (
+        reality_by_id.get(primary.source_reality_item_id)
+        if primary and primary.source_reality_item_id
+        else None
+    )
+    primary_kind: Literal["move", "review"] | None = None
+    if primary_caution is not None:
+        primary_kind = "review"
+        headline = _date_conflict_headline(primary_reality)
+        summary = (
+            "One task needs a quick date check. The rest of today's known state is summarized below."
+        )
+    elif actionable is not None:
+        primary_kind = "move"
+        headline = "One move matters most today."
+        summary = (
+            f"Canonical reality supports {urgent_count} attention item"
+            f"{'s' if urgent_count != 1 else ''}. Start with the leading obligation; "
+            "the rest remain reviewable below."
+        )
+    elif mismatch is not None:
+        primary_kind = "review"
+        headline = "Review the evidence before you act."
+        summary = (
+            f"Canonical reality found {urgent_count} conflicting item"
+            f"{'s' if urgent_count != 1 else ''}. The leading mismatch is a review, "
+            "not a command."
+        )
+    elif corrected_review is not None:
+        primary_kind = "review"
+        headline = "One conclusion needs your review."
+        summary = (
+            f"{correction_review_count} prior correction"
+            f"{'s are' if correction_review_count != 1 else ' is'} still affecting this brief. "
+            "Review the leading conclusion before relying on it."
+        )
+    elif complete:
+        headline = "You can start without an urgent catch-up."
+        summary = (
+            "Complete eligible evidence supports no urgent action. Material changes, "
+            "waiting items, project pulse, and today's schedule are summarized below."
+        )
+    else:
+        headline = "The brief is useful, with evidence gaps."
+        summary = (
+            "No urgent item is currently supported, but provider coverage is incomplete. "
+            "Known state remains visible without turning missing evidence into reassurance."
+        )
+
+    material_change_ids = tuple(
+        item.statement_id
+        for item in changes.statements
+        if item.status not in {"no_meaningful_change", "incomplete_change_coverage"}
+    )
+    ordered_support = tuple(sorted(handled, key=_statement_order_key))
+    support_ids = tuple(item.statement_id for item in ordered_support[:3])
+    return MorningBriefPresentation(
+        headline=headline,
+        summary=summary,
+        primary_kind=primary_kind,
+        primary_statement_id=primary.statement_id if primary else None,
+        primary_caution=primary_caution,
+        review_cautions=review_cautions,
+        material_change_count=material_change_count,
+        material_change_statement_ids=material_change_ids,
+        support_statement_ids=support_ids,
+        handled_count=sum(
+            item.classification == RealityClassification.ALREADY_HANDLED
+            for item in handled
+        ),
+        waiting_count=sum(
+            item.classification == RealityClassification.WAITING for item in handled
+        ),
+        upcoming_count=sum(
+            item.classification == RealityClassification.UPCOMING_NOT_ACTIONABLE
+            for item in handled
+        ),
+        project_count=project_count,
+        fixed_commitment_count=sum(item.status == "fixed_commitment" for item in day_shape),
+    )
+
+
+_TITLE_MONTH_PATTERN = re.compile(
+    r"\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|"
+    r"dec(?:ember)?)\s+([0-3]?\d)(?:st|nd|rd|th)?\b",
+    re.IGNORECASE,
+)
+_MONTH_NUMBERS = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+
+
+def _explicit_title_due_conflict(item: RealityItem | None) -> str | None:
+    """Flag disagreement only when title text and structured due evidence both exist."""
+
+    if item is None or not item.title or item.temporal.due_date is None:
+        return None
+    match = _TITLE_MONTH_PATTERN.search(item.title)
+    if match is None:
+        return None
+    title_month = _MONTH_NUMBERS[match.group(1)[:3].lower()]
+    title_day = int(match.group(2))
+    due_date = item.temporal.due_date
+    if (title_month, title_day) == (due_date.month, due_date.day):
+        return None
+    title_label = f"{match.group(1).title()} {title_day}"
+    due_label = due_date.strftime("%b %d").replace(" 0", " ")
+    provider = (
+        item.normalized_work_identity.provider
+        if item.normalized_work_identity is not None
+        else "provider"
+    )
+    provider_label = {
+        "todoist": "Todoist",
+        "linear": "Linear",
+    }.get(provider.lower(), provider.replace("_", " ").title())
+    return f"The task title says {title_label}, but its {provider_label} due date says {due_label}."
+
+
+def _date_conflict_headline(item: RealityItem | None) -> str:
+    """Name the review task without changing its canonical interpretation."""
+
+    if item is None or not item.title:
+        return "Confirm this task’s date."
+    match = _TITLE_MONTH_PATTERN.search(item.title)
+    if match is None:
+        return "Confirm this task’s date."
+    subject = item.title[: match.start()].strip(" -–—,:.")
+    subject = re.sub(r"^(?:try to|remember to|please)\s+", "", subject, flags=re.IGNORECASE)
+    if subject.lower() == "move in":
+        subject = "move-in"
+    else:
+        subject = re.sub(r"\s+(?:on|by|for|in)$", "", subject, flags=re.IGNORECASE)
+    if not subject:
+        return "Confirm this task’s date."
+    return f"Confirm the {subject.lower()} task’s date."
 
 
 def _statement_order_key(item: MorningStatement) -> tuple[Any, ...]:

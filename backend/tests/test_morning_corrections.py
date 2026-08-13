@@ -28,6 +28,7 @@ from app.morning_corrections import (  # noqa: E402
 )
 from app.morning_state import (  # noqa: E402
     MorningAvailability,
+    MorningBriefPresentation,
     MorningCheckpointMode,
     MorningCheckpointSelection,
     MorningConfidence,
@@ -122,6 +123,12 @@ def synthesis() -> MorningStateSynthesis:
         complete_evidence=True,
         no_urgent_attention=False,
         urgent_attention_count=1,
+        briefing=MorningBriefPresentation(
+            headline="Review the evidence before you act.",
+            summary="One linked mismatch needs review.",
+            primary_kind="review",
+            primary_statement_id="statement-1",
+        ),
         changes_since_meaningful_check=section(
             MorningSectionId.CHANGES_SINCE_CHECK
         ),

@@ -20,7 +20,7 @@ export const MORNING_SECTION_COPY: Record<
 > = {
   changes_since_meaningful_check: {
     eyebrow: "What changed",
-    detail: "Attributable changes since the selected meaningful-check boundary.",
+    detail: "The few recent changes worth knowing.",
   },
   attention_today: {
     eyebrow: "Attention today",

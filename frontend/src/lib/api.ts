@@ -745,6 +745,24 @@ export type MorningCheckpointSelection = {
   ordinary_read_acknowledges: false;
 };
 
+export type MorningBriefPresentation = {
+  schema_version: 1;
+  headline: string;
+  summary: string;
+  primary_kind: "move" | "review" | null;
+  primary_statement_id: string | null;
+  primary_caution: string | null;
+  review_cautions: Record<string, string>;
+  material_change_count: number;
+  material_change_statement_ids: string[];
+  support_statement_ids: string[];
+  handled_count: number;
+  waiting_count: number;
+  upcoming_count: number;
+  project_count: number;
+  fixed_commitment_count: number;
+};
+
 export type MorningStateSynthesis = {
   schema_version: 1;
   synthesis_id: string;
@@ -753,6 +771,7 @@ export type MorningStateSynthesis = {
   complete_evidence: boolean;
   no_urgent_attention: boolean;
   urgent_attention_count: number;
+  briefing: MorningBriefPresentation;
   changes_since_meaningful_check: MorningSection;
   attention_today: MorningSection;
   handled_paused_waiting: MorningSection;

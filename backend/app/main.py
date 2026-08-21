@@ -15,7 +15,11 @@ from .calendar_tools import check_google_auth, categories_conflict, list_upcomin
 from .config import get_settings
 from .dependency_evaluator import DependencySummary, EvaluatedDependencyEvidence
 from .linear_client import LinearClient
-from .gmail_client import GmailClient, personal_email_health_payload
+from .gmail_client import (
+    GmailClient,
+    personal_email_health_payload,
+    tamu_email_health_payload,
+)
 from .gmail_organization import (
     GmailMutationGateRepository,
     GmailMutationGateState,
@@ -682,6 +686,7 @@ def settings_health(authorization: str | None = Header(default=None)) -> dict[st
             "todoist": _todoist_health(settings),
             "google_calendar": _google_calendar_health(settings),
             "personal_email": personal_email_health_payload(settings),
+            "tamu_email": tamu_email_health_payload(settings),
             "openai": _openai_health(settings),
             "linear": _linear_health(settings),
         },

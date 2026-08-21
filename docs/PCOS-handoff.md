@@ -10598,3 +10598,65 @@ Final approval gates passed:
 The final release is one focused SID-248 commit from the verified baseline `3a6e338a4a36a5024ec1578e38d7c89a582190ea`, published directly to `origin/main` only by normal fast-forward after the repository handoff and designated Obsidian snapshot agree. A Git commit cannot contain its own final SHA without changing that SHA, so the exact published commit, local/fetched/GitHub main reconciliation, SID-248 Done transition, final 100% milestone verification, and SID-236 unblocked-but-unstarted state are recorded in Linear completion evidence and the final release report after publication.
 
 SID-236 must remain To Do with `startedAt=null`. Freelance Outbound Automation V1, Repository Awareness and Catch-Ups, and all later work remain unstarted during this closeout.
+
+---
+
+# 71. SID-145 TAMU Email read-only connection
+
+SID-145, **Connect TAMU Email Read-Only**, connects the Texas A&M student mailbox as a distinct College source through the existing provider-neutral Email Intelligence contracts. It adds no College UI, task or Calendar creation, mailbox organization, provider mutation, polling, or background execution.
+
+## 71.1 Baseline and provider determination
+
+Preflight on August 20, 2026 verified the required baseline `eca2afebc7a653c22950635e6cdffc77efac3964`: local `HEAD`, fetched `origin/main`, and GitHub `main` matched; the worktree was clean; normal fast-forward publication was possible; and the complete untouched suites passed at 461 backend and 69 frontend tests. SID-143, SID-144, and SID-146 were Done. SID-145 was To Do, unstarted, eligible, and the urgent issue in scope; only after those gates passed was it marked In Progress. SID-249 and SID-250 remained To Do and unstarted.
+
+Provider selection came from current Texas A&M documentation and the real login path, not the school name or address. `email.tamu.edu` routes to Texas A&M Google Workspace Gmail. Authentication begins with TAMU NetID through the university Microsoft Entra SAML tenant and Duo, then returns to Google Workspace; Microsoft is the institutional identity layer, not the mailbox API. The supported direct provider API is Gmail API v1. Texas A&M documents `NetID@email.tamu.edu` as the actual student Gmail mailbox and `NetID@tamu.edu` as the institutional address/alias. Forwarding was not used.
+
+The Desktop OAuth flow requested exactly `https://www.googleapis.com/auth/gmail.readonly`. Google returned exactly that scope. It cannot send, reply, forward, mark read or unread, archive, move, label, trash, or delete mail. The user completed account selection and consent manually in the in-app browser; no password, NetID secret, Duo response, authorization code, refresh token, or account address was copied into source, output, fixtures, logs, or completion evidence.
+
+## 71.2 Architecture and isolation
+
+`GmailClient` remains the one read-only Gmail normalization boundary. Its Personal behavior remains the default. `GmailClient.for_tamu(...)` supplies an explicit A&M account profile and TAMU-only client ID, client secret, refresh token, expected-address guard, and exact read scope. Missing TAMU configuration fails closed and cannot fall back to Personal Gmail or Calendar credentials. The existing Desktop OAuth application registration may be copied into TAMU-specific client fields, but no Personal or Calendar refresh token is read, copied, replaced, or expanded; the TAMU grant is a distinct ignored local secret.
+
+Normalized records retain provider, stable opaque account identity, `EmailAccountRole.AM`, provider message ID, provider thread ID, sender, recipients, subject, provider/internal timestamp, unread state, labels, bounded snippet/body text, attachment metadata, parse diagnostics, completeness, truncation, and provider diagnostics. Raw provider responses are not persisted. Bodies are bounded by the existing 20,000-character analysis limit, thread context is available only through the existing explicit read method, and spam/trash remain excluded by default.
+
+The shared `EmailAnalysisService` now accepts the account role supplied by the provider instead of requiring Personal-only identity. Deadline and requested-action evidence, ambiguity, importance, urgency, organization suggestion, project association, thread deduplication, and optional interpretation boundaries remain unchanged. The service still makes zero model calls by default, writes no Memory, and emits no executable task, Calendar, or mailbox action. `/settings/health` reports TAMU independently from Personal Email; authentication, provider, malformed-response, empty, complete, and truncated states remain explicit rather than becoming false quiet state.
+
+Focused SID-145 files are:
+
+- `backend/.env.example`
+- `backend/app/config.py`
+- `backend/app/email_analysis.py`
+- `backend/app/gmail_client.py`
+- `backend/app/gmail_scopes.py`
+- `backend/app/main.py`
+- `backend/scripts/tamu_email_oauth_setup.py`
+- `backend/scripts/verify_tamu_email_analysis.py`
+- `backend/tests/test_tamu_gmail_provider.py`
+- `docs/PCOS-handoff.md`
+
+## 71.3 Deterministic and live verification
+
+Deterministic tests and live evidence remain separate. The focused provider and Email Intelligence suites passed 49 tests. They cover exact read-only scope, distinct Calendar/Personal/TAMU credentials, A&M account identity, opaque provider identity, wrong-account rejection, stable repeated health reads, recent-message normalization, stable message/thread IDs, bounded body and thread parsing, connected-empty and malformed states, incomplete pagination, provider failure, academic/administrative action language, grounded and ambiguous deadlines, informational versus action-required mail, thread deduplication, no persistence, and absence of mailbox mutation methods. Existing Personal Gmail and Email Intelligence regression tests remain green.
+
+After manual consent, the redacted live verifier ran twice against the real TAMU mailbox with identical results. Each run requested at most 12 recent non-spam/non-trash messages and returned `provider_state=connected`, `account_role=am`, 12 normalized records, 12 stable thread/message assessments, 12 attention candidates, two deadline signals, nine explicit-action signals, nine administrative signals, three scheduling signals, and 12 project-communication signals. One assessment was `needs_action`; 11 remained `review_uncertain`. Both runs reported `complete=false` and `truncated=true`, performed zero model calls and zero provider mutations, and printed no address, subject, sender, body, message/thread ID, provider payload, token, or credential.
+
+Those live counts describe only the bounded recent sample. They are not a full-inbox inventory, do not prove that every surfaced message requires action, and do not convert uncertainty into fact. Content-specific behavior beyond the redacted aggregate is claimed from deterministic fixtures, not from unpublished mailbox contents. Provider freshness is represented by the fresh read/computation boundary and message timestamps; completeness and truncation remain explicit.
+
+## 71.4 Final gates and publication state
+
+Final gates before publication:
+
+- focused TAMU/provider/Email Intelligence: 49 tests passed;
+- backend: 467 tests passed in 4.442 seconds;
+- frontend: 69 tests passed;
+- TypeScript: `npx tsc --noEmit` passed;
+- production: Next.js 15.5.19 `npm run build` passed for all existing routes;
+- Python: `python -m compileall -q backend/app backend/scripts backend/tests` passed;
+- `git diff --check`: passed;
+- privacy/secret scan: no token, authorization code, account address, credential, private-key marker, raw provider payload, raw email body, or live message datum was added;
+- provider-capability and mutation scan: the TAMU provider exposes reads only and adds no mark, archive, move, label, forward, reply, send, trash, delete, Todoist, Calendar, Linear-provider-data, polling, or background capability;
+- migration and side-effect scan: no schema migration, persistence path, Memory ingestion, ordinary-read write, or external verification mutation was added;
+- hard-coding and duplicate-engine scan: no College project rule, provider-specific orchestration branch, title join, second classifier, second importance model, or frontend intelligence engine was added;
+- generated-artifact scan: no tracked token file, mailbox export, provider response, screenshot, build output, debug statement, TODO, or FIXME was added.
+
+Publication is one focused SID-145 commit from the verified baseline, pushed directly to `origin/main` only by normal fast-forward after this repository handoff and the designated Obsidian handoff agree. A commit cannot contain its own final SHA without changing that SHA, so the exact published SHA, local/fetched/GitHub reconciliation, Linear completion evidence, Done transition, and final College Command Center V1 percentage are recorded after publication. SID-249 remains To Do and unstarted. SID-236 must remain To Do and blocked by SID-252. No later issue is started.

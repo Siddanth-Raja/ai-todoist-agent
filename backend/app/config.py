@@ -41,6 +41,10 @@ class Settings:
     personal_email_google_client_secret: str | None = None
     personal_email_google_refresh_token: str | None = None
     personal_email_expected_address: str | None = None
+    tamu_email_google_client_id: str | None = None
+    tamu_email_google_client_secret: str | None = None
+    tamu_email_google_refresh_token: str | None = None
+    tamu_email_expected_address: str | None = None
 
     @property
     def local_tz(self) -> ZoneInfo:
@@ -84,6 +88,19 @@ class Settings:
             missing.append("PERSONAL_EMAIL_GOOGLE_REFRESH_TOKEN")
         return missing
 
+    @property
+    def missing_tamu_email_fields(self) -> list[str]:
+        missing: list[str] = []
+        if not self.tamu_email_google_client_id:
+            missing.append("TAMU_EMAIL_GOOGLE_CLIENT_ID")
+        if not self.tamu_email_google_client_secret:
+            missing.append("TAMU_EMAIL_GOOGLE_CLIENT_SECRET")
+        if not self.tamu_email_google_refresh_token:
+            missing.append("TAMU_EMAIL_GOOGLE_REFRESH_TOKEN")
+        if not self.tamu_email_expected_address:
+            missing.append("TAMU_EMAIL_EXPECTED_ADDRESS")
+        return missing
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
@@ -115,6 +132,14 @@ def get_settings() -> Settings:
         personal_email_expected_address=_optional_env(
             "PERSONAL_EMAIL_EXPECTED_ADDRESS"
         ),
+        tamu_email_google_client_id=_optional_env("TAMU_EMAIL_GOOGLE_CLIENT_ID"),
+        tamu_email_google_client_secret=_optional_env(
+            "TAMU_EMAIL_GOOGLE_CLIENT_SECRET"
+        ),
+        tamu_email_google_refresh_token=_optional_env(
+            "TAMU_EMAIL_GOOGLE_REFRESH_TOKEN"
+        ),
+        tamu_email_expected_address=_optional_env("TAMU_EMAIL_EXPECTED_ADDRESS"),
     )
 
 

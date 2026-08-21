@@ -1,4 +1,4 @@
-"""Isolated, read-only Personal Gmail provider and normalization boundary."""
+"""Isolated, read-only Gmail provider and normalization boundary."""
 
 from __future__ import annotations
 
@@ -29,7 +29,11 @@ from .email_domain import (
 )
 
 
-from .gmail_scopes import GMAIL_READONLY_SCOPE, PERSONAL_GMAIL_READ_SCOPES
+from .gmail_scopes import (
+    GMAIL_READONLY_SCOPE,
+    PERSONAL_GMAIL_READ_SCOPES,
+    TAMU_GMAIL_READ_SCOPES,
+)
 
 
 # Backward-compatible public name for the provider's deliberately read-only
@@ -195,26 +199,71 @@ class GmailClient:
         credentials_factory=Credentials,
         request_factory=GoogleAuthRequest,
         service_factory=build,
+        account_role: EmailAccountRole = EmailAccountRole.PERSONAL,
+        account_label: str = "Personal Gmail",
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        refresh_token: str | None = None,
+        expected_address: str | None = None,
+        allow_personal_fallback: bool = True,
+        scopes: tuple[str, ...] = PERSONAL_GMAIL_SCOPES,
+        require_expected_address: bool = False,
     ) -> None:
-        self._client_id = getattr(settings, "personal_email_client_id", None)
-        if self._client_id is None:
-            self._client_id = getattr(settings, "personal_email_google_client_id", None) or getattr(
-                settings, "google_client_id", None
+        self._client_id = client_id
+        if allow_personal_fallback and self._client_id is None:
+            self._client_id = getattr(settings, "personal_email_client_id", None)
+        if allow_personal_fallback and self._client_id is None:
+            self._client_id = getattr(
+                settings, "personal_email_google_client_id", None
+            ) or getattr(settings, "google_client_id", None)
+        self._client_secret = client_secret
+        if allow_personal_fallback and self._client_secret is None:
+            self._client_secret = getattr(
+                settings, "personal_email_client_secret", None
             )
-        self._client_secret = getattr(settings, "personal_email_client_secret", None)
-        if self._client_secret is None:
+        if allow_personal_fallback and self._client_secret is None:
             self._client_secret = getattr(
                 settings, "personal_email_google_client_secret", None
             ) or getattr(settings, "google_client_secret", None)
-        self._refresh_token = getattr(
-            settings, "personal_email_google_refresh_token", None
-        )
-        self._expected_address = getattr(
-            settings, "personal_email_expected_address", None
-        )
+        self._refresh_token = refresh_token
+        if allow_personal_fallback and self._refresh_token is None:
+            self._refresh_token = getattr(
+                settings, "personal_email_google_refresh_token", None
+            )
+        self._expected_address = expected_address
+        if allow_personal_fallback and self._expected_address is None:
+            self._expected_address = getattr(
+                settings, "personal_email_expected_address", None
+            )
+        self._account_role = account_role
+        self._account_label = account_label
+        self._scopes = scopes
+        self._require_expected_address = require_expected_address
         self._credentials_factory = credentials_factory
         self._request_factory = request_factory
         self._service_factory = service_factory
+
+    @classmethod
+    def for_tamu(cls, settings: Settings, **kwargs) -> "GmailClient":
+        """Build the TAMU mailbox client without credential fallback."""
+
+        return cls(
+            settings,
+            account_role=EmailAccountRole.AM,
+            account_label="TAMU Gmail",
+            client_id=settings.tamu_email_google_client_id,
+            client_secret=settings.tamu_email_google_client_secret,
+            refresh_token=settings.tamu_email_google_refresh_token,
+            expected_address=settings.tamu_email_expected_address,
+            allow_personal_fallback=False,
+            scopes=TAMU_GMAIL_READ_SCOPES,
+            require_expected_address=True,
+            **kwargs,
+        )
+
+    @property
+    def account_role(self) -> EmailAccountRole:
+        return self._account_role
 
     def check_health(self) -> GmailHealthResult:
         connection, error = self._connect()
@@ -755,11 +804,13 @@ class GmailClient:
         if not self._client_secret:
             missing.append("OAuth client secret")
         if not self._refresh_token:
-            missing.append("Personal Email refresh token")
+            missing.append(f"{self._account_label} refresh token")
+        if self._require_expected_address and not self._expected_address:
+            missing.append(f"{self._account_label} expected address")
         if missing:
             return None, GmailProviderDiagnostic(
                 code="not_configured",
-                message="Personal Gmail read access is not configured.",
+                message=f"{self._account_label} read access is not configured.",
             )
 
         credentials = self._credentials_factory(
@@ -768,33 +819,31 @@ class GmailClient:
             token_uri=GMAIL_TOKEN_URI,
             client_id=self._client_id,
             client_secret=self._client_secret,
-            scopes=list(PERSONAL_GMAIL_SCOPES),
+            scopes=list(self._scopes),
         )
         try:
             credentials.refresh(self._request_factory())
         except RefreshError:
             return None, GmailProviderDiagnostic(
                 code="authentication",
-                message="Personal Gmail rejected the configured OAuth credential.",
+                message=f"{self._account_label} rejected the configured OAuth credential.",
             )
         except (TransportError, OSError):
             return None, GmailProviderDiagnostic(
                 code="provider",
-                message="Could not reach Google while refreshing Personal Gmail access.",
+                message=f"Could not reach Google while refreshing {self._account_label} access.",
             )
         except Exception:  # noqa: BLE001 - fail closed without leaking provider details.
             return None, GmailProviderDiagnostic(
                 code="provider",
-                message="Personal Gmail credential refresh failed.",
+                message=f"{self._account_label} credential refresh failed.",
             )
 
         granted_scopes = getattr(credentials, "granted_scopes", None)
-        if granted_scopes is not None and set(granted_scopes) != set(
-            PERSONAL_GMAIL_SCOPES
-        ):
+        if granted_scopes is not None and set(granted_scopes) != set(self._scopes):
             return None, GmailProviderDiagnostic(
                 code="scope",
-                message="Personal Gmail OAuth did not grant the exact read-only scope.",
+                message=f"{self._account_label} OAuth did not grant the exact read-only scope.",
             )
 
         try:
@@ -810,12 +859,12 @@ class GmailClient:
         except (TransportError, OSError):
             return None, GmailProviderDiagnostic(
                 code="provider",
-                message="Could not reach the Personal Gmail provider.",
+                message=f"Could not reach the {self._account_label} provider.",
             )
         except Exception:  # noqa: BLE001 - diagnostics must not expose provider data.
             return None, GmailProviderDiagnostic(
                 code="provider",
-                message="Personal Gmail profile check failed.",
+                message=f"{self._account_label} profile check failed.",
             )
 
         if not isinstance(profile, dict):
@@ -829,12 +878,15 @@ class GmailClient:
         ):
             return None, GmailProviderDiagnostic(
                 code="wrong_account",
-                message="Authenticated Gmail account does not match the configured Personal account.",
+                message=(
+                    "Authenticated Gmail account does not match the configured "
+                    f"{self._account_label} account."
+                ),
             )
 
         account = EmailProviderAccountIdentity(
             provider="gmail",
-            account_role=EmailAccountRole.PERSONAL,
+            account_role=self._account_role,
             provider_account_id=_opaque_account_id(profile_address),
         )
         return (
@@ -847,8 +899,7 @@ class GmailClient:
             None,
         )
 
-    @staticmethod
-    def _execute(request) -> tuple[Any | None, GmailProviderDiagnostic | None]:
+    def _execute(self, request) -> tuple[Any | None, GmailProviderDiagnostic | None]:
         try:
             return request.execute(), None
         except HttpError as exc:
@@ -856,12 +907,12 @@ class GmailClient:
         except (TransportError, OSError):
             return None, GmailProviderDiagnostic(
                 code="provider",
-                message="Could not reach the Personal Gmail provider.",
+                message=f"Could not reach the {self._account_label} provider.",
             )
         except Exception:  # noqa: BLE001 - never leak request or message data.
             return None, GmailProviderDiagnostic(
                 code="provider",
-                message="Personal Gmail read failed.",
+                message=f"{self._account_label} read failed.",
             )
 
 
@@ -904,6 +955,45 @@ def personal_email_health_payload(settings: Settings) -> dict[str, Any]:
         message = "Personal Gmail returned an invalid profile response."
     else:
         message = "Personal Gmail provider health check failed."
+    return {"status": "error", "message": message, "details": details}
+
+
+def tamu_email_health_payload(settings: Settings) -> dict[str, Any]:
+    result = GmailClient.for_tamu(settings).check_health()
+    details: dict[str, Any] = {
+        "state": result.state.value,
+        "account_role": EmailAccountRole.AM.value,
+        "configured_scopes": list(TAMU_GMAIL_READ_SCOPES),
+    }
+    if result.account is not None:
+        details["provider_account_id"] = result.account.provider_account_id
+    if result.message_total is not None:
+        details["message_total"] = result.message_total
+    if result.thread_total is not None:
+        details["thread_total"] = result.thread_total
+    if result.diagnostic is not None:
+        details["error_code"] = result.diagnostic.code
+        if result.diagnostic.http_status is not None:
+            details["http_status"] = result.diagnostic.http_status
+
+    if result.state == GmailProviderState.NOT_CONFIGURED:
+        return {
+            "status": "warning",
+            "message": "TAMU Gmail read-only access is not configured.",
+            "details": details,
+        }
+    if result.state == GmailProviderState.CONNECTED:
+        return {
+            "status": "ok",
+            "message": "Connected to TAMU Gmail with read-only access.",
+            "details": details,
+        }
+    if result.state == GmailProviderState.AUTHENTICATION_FAILURE:
+        message = "TAMU Gmail OAuth or account verification failed."
+    elif result.state == GmailProviderState.MALFORMED_RESPONSE:
+        message = "TAMU Gmail returned an invalid profile response."
+    else:
+        message = "TAMU Gmail provider health check failed."
     return {"status": "error", "message": message, "details": details}
 
 

@@ -6,6 +6,7 @@ GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
 # Read paths deliberately mint a read-only access token even after the isolated
 # refresh grant is expanded for SID-231.
 PERSONAL_GMAIL_READ_SCOPES = (GMAIL_READONLY_SCOPE,)
+TAMU_GMAIL_READ_SCOPES = (GMAIL_READONLY_SCOPE,)
 
 # The user approved gmail.modify as the only new scope. The existing readonly
 # grant remains present so reads and writes can use separate least-privilege

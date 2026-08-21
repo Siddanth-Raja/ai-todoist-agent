@@ -1,4 +1,4 @@
-"""Deterministic, local-only Personal Email attention analysis.
+"""Deterministic, local-only Email attention analysis.
 
 The service consumes normalized read-only Gmail records and emits SID-143
 attention candidates. It intentionally has no model, persistence, mailbox,
@@ -143,7 +143,7 @@ class EmailAnalysisResult(BaseModel):
 
     state: EmailAnalysisState
     provider: Literal["gmail"] = "gmail"
-    account_role: Literal[EmailAccountRole.PERSONAL] = EmailAccountRole.PERSONAL
+    account_role: EmailAccountRole = EmailAccountRole.PERSONAL
     provider_state: GmailProviderState
     analyzed_message_count: int = Field(ge=0)
     unique_thread_count: int = Field(ge=0)
@@ -297,13 +297,18 @@ class EmailAnalysisService:
                 f"max_messages must be between 1 and {MAX_ANALYSIS_MESSAGES}"
             )
         page = client.list_recent_messages(max_messages=max_messages)
-        return self.analyze_page(page, registry=self._registry_service.snapshot())
+        return self.analyze_page(
+            page,
+            registry=self._registry_service.snapshot(),
+            account_role=getattr(client, "account_role", EmailAccountRole.PERSONAL),
+        )
 
     def analyze_page(
         self,
         page: GmailMessagePage,
         *,
         registry: ProjectRegistrySnapshot,
+        account_role: EmailAccountRole = EmailAccountRole.PERSONAL,
     ) -> EmailAnalysisResult:
         computed_at = self._clock()
         if page.state not in {GmailProviderState.CONNECTED, GmailProviderState.CONNECTED_EMPTY}:
@@ -311,17 +316,19 @@ class EmailAnalysisService:
                 state=_analysis_state_for_provider(page.state),
                 page=page,
                 computed_at=computed_at,
+                account_role=account_role,
             )
         if not page.messages:
             return _empty_result(
                 state=EmailAnalysisState.CONNECTED_EMPTY,
                 page=page,
                 computed_at=computed_at,
+                account_role=account_role,
             )
-        if not _single_personal_account(page.messages):
+        if not _single_account(page.messages, account_role=account_role):
             diagnostic = GmailProviderDiagnostic(
                 code="malformed_response",
-                message="Personal Email analysis received inconsistent account identity.",
+                message="Email analysis received inconsistent account identity.",
             )
             malformed = page.model_copy(
                 update={
@@ -334,6 +341,7 @@ class EmailAnalysisService:
                 state=EmailAnalysisState.MALFORMED_RESPONSE,
                 page=malformed,
                 computed_at=computed_at,
+                account_role=account_role,
             )
 
         groups: dict[tuple[str, str, str, str], list[GmailMessageRecord]] = defaultdict(list)
@@ -380,6 +388,7 @@ class EmailAnalysisService:
             state = EmailAnalysisState.CONNECTED_QUIET
         return EmailAnalysisResult(
             state=state,
+            account_role=account_role,
             provider_state=page.state,
             analyzed_message_count=len(page.messages),
             unique_thread_count=len(assessment_tuple),
@@ -681,9 +690,11 @@ def _empty_result(
     state: EmailAnalysisState,
     page: GmailMessagePage,
     computed_at: datetime,
+    account_role: EmailAccountRole = EmailAccountRole.PERSONAL,
 ) -> EmailAnalysisResult:
     return EmailAnalysisResult(
         state=state,
+        account_role=account_role,
         provider_state=page.state,
         analyzed_message_count=0,
         unique_thread_count=0,
@@ -710,9 +721,11 @@ def _analysis_state_for_provider(state: GmailProviderState) -> EmailAnalysisStat
     }[state]
 
 
-def _single_personal_account(messages: tuple[GmailMessageRecord, ...]) -> bool:
+def _single_account(
+    messages: tuple[GmailMessageRecord, ...], *, account_role: EmailAccountRole
+) -> bool:
     accounts = {message.identity.account for message in messages}
-    return len(accounts) == 1 and next(iter(accounts)).account_role == EmailAccountRole.PERSONAL
+    return len(accounts) == 1 and next(iter(accounts)).account_role == account_role
 
 
 def _record_sort_key(record: GmailMessageRecord) -> tuple[float, str]:

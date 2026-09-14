@@ -1,5 +1,15 @@
 # Personal Chief of Staff (PCOS)
 
+> **Current state — September 14, 2026; working/unpublished documentation pending publication approval.**
+>
+> - **Published baseline:** fetched `origin/main`, local HEAD and GitHub default `main` agree at `3487d75efb7c835b6548b63559e59a358e6daa13` (SID-145 TAMU read-only publication). This reconciliation adds no published code.
+> - **Active unfinished work:** SID-249 remains In Progress, uncommitted and unshipped; its existing Blinn implementation files and outstanding authentication/live-verification gates are preserved. Execution remains paused.
+> - **Accepted synthetic evidence:** section 72 records the isolated MCP feasibility closeout, not production College capability. That section is preserved verbatim.
+> - **Approved direction:** [PCOS product architecture](PCOS-product-architecture.md) is approved; section 73 maps it to the reconciled live roadmap. These repository edits remain unpublished.
+> - **Unimplemented:** the PCOS College bridge, conversational capture lifecycle and cross-conversation/app continuity have not shipped. Architecture approval does not establish functionality or satisfy implementation/acceptance gates.
+>
+> Sections 1–72 retain their historical milestone wording. Use this block and section 73 for current sequencing and publication policy; do not reinterpret older status or mirror-sync statements as current instructions.
+
 ## Canonical Engineering and Product Handoff
 
 **Status:** Active development / pre-alpha
@@ -10660,3 +10670,108 @@ Final gates before publication:
 - generated-artifact scan: no tracked token file, mailbox export, provider response, screenshot, build output, debug statement, TODO, or FIXME was added.
 
 Publication is one focused SID-145 commit from the verified baseline, pushed directly to `origin/main` only by normal fast-forward after this repository handoff and the designated Obsidian handoff agree. A commit cannot contain its own final SHA without changing that SHA, so the exact published SHA, local/fetched/GitHub reconciliation, Linear completion evidence, Done transition, and final College Command Center V1 percentage are recorded after publication. SID-249 remains To Do and unstarted. SID-236 must remain To Do and blocked by SID-252. No later issue is started.
+
+---
+
+# 72. PCOS MCP feasibility canary — architecture evidence only
+
+The isolated `/Users/siddanthraja/Desktop/pcos-mcp-canary` experiment completed its synthetic acceptance on September 7, 2026. This section records an architectural finding only. It adds no PCOS runtime, source code, database row, provider integration, Linear transition, production authority, or real College record. The canary's three synthetic events and SQLite database remain outside PCOS and must never be imported.
+
+## 72.1 Verified feasibility evidence
+
+The completed acceptance report and closeout evidence establish these bounded facts:
+
+- ChatGPT discovered and called exactly three canary tools through Secure MCP Tunnel: complete-state read, idempotent synthetic append, and receipt status.
+- Three caller-generated synthetic event IDs were applied once and retained their original SHA-256 payload hashes, processing timestamps, and canonical versions 1, 2, and 3.
+- A separate ChatGPT conversation read the persisted state.
+- Reusing an existing event ID with changed synthetic text returned `outcome=conflict` and `error_code=event_id_payload_conflict`, preserved the original receipt, and left canonical version 3 unchanged.
+- Reopening the local store returned the same three receipts at canonical version 3, providing bounded restart-persistence evidence.
+- Closeout found no running canary tunnel or server. The stale canary PID file was removed and its synthetic SQLite database was preserved as evidence.
+
+The reusable architecture pattern is deliberately small: explicit read/write/status contracts, caller-generated event identity, exact-payload idempotency, transactional versioning, durable receipts, conflict-without-change behavior, bounded inputs, and persistent storage behind a least-privilege transport.
+
+## 72.2 Limitations and non-claims
+
+The canary does not establish a production PCOS College bridge. It does not prove or supply:
+
+- a real provider-neutral College event schema or canonical ownership policy;
+- PCOS authentication, authorization, account isolation, or approval policy;
+- production-grade persistence, migrations, backup, restore, observability, hosted execution, availability, or incident recovery;
+- reconciliation with email, Canvas/eCampus, Calendar, Todoist, Linear, or any other provider;
+- safe creation, update, completion, or deletion of coursework, calendars, tasks, email, or other real records;
+- multi-user behavior, privacy review, threat modeling, rate limiting, or a supported production deployment;
+- permission to reuse synthetic rows, credentials, tunnel configuration, or canary implementation code in PCOS.
+
+The evidence reduces uncertainty about MCP transport, receipts, idempotency, conflict behavior, cross-conversation readback, and local persistence. It does not skip any product, data, security, provider, or release gate.
+
+## 72.3 Active issue and exact dependency order
+
+**SID-249 remains the active implementation issue, In Progress, uncommitted, and unshipped pending its manual Microsoft authentication and bounded redacted live Blinn read.** This evidence note does not change SID-249 implementation, scope, status, dependencies, or completion gates. It also does not start or mix in SID-250, SID-252, SID-236, or a new MCP implementation issue.
+
+The revised College-bridge dependency order is exactly:
+
+1. Complete **SID-249** within its existing Blinn read-only scope: manual Microsoft authentication, bounded redacted live verification, final gates, canonical handoff synchronization, one focused publication, and Linear closeout.
+2. Define and approve the real provider-neutral **College event contract and canonical ownership rules**. The canary's generic `message` field is not the production domain model.
+3. Implement the **PCOS-owned durable College event log and receipt/idempotency boundary** on production-grade storage, including exact event identity, versioning, conflict handling, authorization, audit, backup, restore, and migration behavior.
+4. Expose the reviewed boundary first through least-privilege **read and status MCP tools**, with bounded/redacted results and explicit account isolation.
+5. Add a separately reviewed **non-destructive College event write tool** with exact confirmation policy, transactional persistence, idempotent retry, and changed-payload rejection, limited to the approved PCOS-owned event type.
+6. Establish the **production transport/runtime** with managed secrets, authenticated workspace association, health/readiness, monitoring, restart recovery, and documented safe shutdown and rollback.
+7. Run **synthetic staging acceptance** through ChatGPT across conversations, covering duplicate retry, conflict, restart, failure, and receipt behavior; keep staging evidence separate from real College records.
+8. After privacy, authorization, provider-reconciliation, observability, and rollback review, run a **narrow real College pilot** before broader rollout.
+
+No later dependency becomes active merely because the canary passed. Issue-level dependencies remain authoritative, and SID-249 remains the only active College implementation issue at this handoff point.
+
+---
+
+# 73. Approved product architecture and roadmap reconciliation
+
+## 73.1 Decision and current publication state
+
+On September 14, 2026, the user approved the final product architecture and authorized this documentation/Linear reconciliation only. [PCOS-product-architecture.md](PCOS-product-architecture.md) owns the concise approved product decisions, surface roles, capture/authority/retention contracts, closure semantics, first-slice acceptance and component boundaries. Do not duplicate its requirements into a competing specification. Approval establishes direction, not shipped functionality or permission to resume implementation.
+
+Preflight fetched Git refs and verified local HEAD, origin/main and the live GitHub default branch main at `3487d75efb7c835b6548b63559e59a358e6daa13`, the published SID-145 baseline. The remote reference is current. SID-249 remains In Progress, uncommitted and unshipped; its existing implementation bytes were preserved. The pre-existing section 72 addition and this reconciliation are working/unpublished documentation. Nothing was staged, committed, pushed, deployed or executed against College/provider/MCP data by this task.
+
+Section 72 remains verbatim as accepted synthetic feasibility evidence. Its sequence is preserved through bounded owners below: contract → durable state/receipts → reads/status → separately reviewed capture → runtime → isolated staging → separately approved narrow real pilot. The new capture policy specifies the review/opt-in semantics; it does not grant provider-write authority. Runtime operational health does not imply general proactive scheduling. Historical pre-publication mirror-sync language is superseded for future work by section 73.3; historical milestone statements remain records, not current status.
+
+## 73.2 Reconciled live issue ownership and dependencies
+
+The dated proposal's status snapshot still matched preflight live state: SID-249 In Progress; the other requested issues To Do, with no new implementation start dates. The existing proposal-listed blocker relations remained present, including SID-236's SID-258/SID-248 gates. The later user-approved packaging superseded v3/final's proposed SID-250 umbrella and direct SID-249 → SID-151 edge: SID-259 now mediates contract approval; SID-260/261/262 own separate read, capture and staging gates. Existing issue search found no genuinely matching owners for those four scopes. SID-155 remains the broader Memory Inbox workstream; SID-131 remains an additional runtime-design prerequisite.
+
+Live roadmap reconciliation created SID-259–262 and updated SID-151, SID-250, SID-147, SID-251, SID-148, SID-156, SID-157, SID-149, SID-252, SID-236 and SID-258. SID-249's scope/title/status were unchanged; its new outgoing contract dependency is recorded below. Reciprocal dependency and issue-reference links may also appear on connected issues; they do not start those issues.
+
+Every row except SID-249 remains To Do with no start date. A blocker is required to finish before its dependent issue; listed extra prerequisites are intentional.
+
+| Issue | Approved bounded ownership | Direct blockers after reconciliation |
+| --- | --- | --- |
+| [SID-249](https://linear.app/siddanths-workspace/issue/SID-249/connect-blinn-email-read-only) | Existing Blinn read-only scope unchanged; unfinished authentication and verification remain paused. | None |
+| [SID-259](https://linear.app/siddanths-workspace/issue/SID-259/approve-the-provider-neutral-college-contract-and-ownership-rules) | Planning/contract approval only: identity, claims, authority, capture, correction, lifecycle and closure inputs. | SID-249 |
+| [SID-151](https://linear.app/siddanths-workspace/issue/SID-151/persist-shared-conversation-context-and-capture-lifecycle) | Shared context, opt-in, question dispositions, retention/removal; distinct from College truth and pending actions. | SID-259, SID-150 |
+| [SID-250](https://linear.app/siddanths-workspace/issue/SID-250/build-canonical-college-claims-state-and-attention) | Durable College entities/claims, revisions, atomic event/receipt state and shared attention; retain three-account evidence; no MCP/UI. | SID-259, SID-151, SID-145, SID-249 |
+| [SID-260](https://linear.app/siddanths-workspace/issue/SID-260/expose-least-privilege-college-state-and-receipt-reads) | Least-privilege state/status reads, auth binding, bounded output/version readback and side-effect tests. | SID-250 |
+| [SID-261](https://linear.app/siddanths-workspace/issue/SID-261/add-reviewed-college-conversational-capture) | Reviewed conversational capture, revocable opt-in, receipts/correction/undo and changed-payload rejection; no provider mutations. | SID-250, SID-150, SID-151, SID-260 |
+| [SID-147](https://linear.app/siddanths-workspace/issue/SID-147/project-college-intelligence-into-today-and-the-morning-brief) | One Today/Morning engine with learning needs, scoped closure, material coverage and conversation readback. | SID-261, SID-250, SID-127, SID-146 |
+| [SID-251](https://linear.app/siddanths-workspace/issue/SID-251/build-college-capture-context-and-review-surfaces) | Minimal capture/context/review surfaces; optional detail route; responsive/accessibility and product review retained. | SID-151, SID-261, SID-147, SID-250 |
+| [SID-156](https://linear.app/siddanths-workspace/issue/SID-156/design-production-pcos-deployment-architecture) | Runtime design: persistent SQLite, auth, secrets, recovery/backup, environment separation and future worker compatibility. | SID-251, SID-250, SID-261, SID-150, SID-131 |
+| [SID-157](https://linear.app/siddanths-workspace/issue/SID-157/deploy-continuously-available-pcos-backend) | Implement the continuous runtime; general background scheduling is not a prerequisite. | SID-156 |
+| [SID-262](https://linear.app/siddanths-workspace/issue/SID-262/run-isolated-college-continuity-staging-acceptance) | New isolated connected staging acceptance; no production data or old canary database. | SID-261, SID-147, SID-251, SID-151, SID-157, SID-260, SID-250 |
+| [SID-148](https://linear.app/siddanths-workspace/issue/SID-148/add-approval-gated-college-email-to-task-and-calendar-proposals) | Existing protected provider proposals/confirmation; required for full milestone, not no-provider-write first checkpoint. | SID-250, SID-150, SID-146 |
+| [SID-252](https://linear.app/siddanths-workspace/issue/SID-252/accept-college-command-center-v1-end-to-end) | First-slice checkpoint A plus retained full milestone checkpoint B and publication gate; A does not complete issue. | SID-151, SID-157, SID-262, SID-251, SID-148, SID-147 |
+| [SID-149](https://linear.app/siddanths-workspace/issue/SID-149/design-and-implement-background-execution) | Deferred background execution; remove only its blocker edge to SID-157, retaining other downstream gates. | SID-156 |
+| [SID-236](https://linear.app/siddanths-workspace/issue/SID-236/define-the-approved-prospect-packet-and-outreach-state-contract) | To Do/no start; College first pilot does not release Freelance. | SID-258, SID-252, SID-248 |
+| [SID-258](https://linear.app/siddanths-workspace/issue/SID-258/verify-and-approve-food-and-cooking-v1-end-to-end) | Food acceptance scope/gates retained; only publication snapshot wording aligned. | SID-257 |
+
+SID-259's SID-249 blocker is organizational sequencing: Blinn credentials are not technically necessary to reason about the schema. SID-150 remains the protected-action/context prerequisite. SID-145/249 preserve three-account source requirements; existing SID-127/146 and SID-131 prerequisites remain. SID-149's other downstream blockers remain unchanged.
+
+SID-252 checkpoint A reviews one course's capture with a reviewed cross-course obligation/calendar baseline after SID-262. A real pilot still needs separate authorization and security/privacy/provider-reconciliation/rollback review. Checkpoint A can be reviewed before SID-148 completes, but SID-252 remains open/blocked and the milestone incomplete until checkpoint B satisfies all retained criteria. SID-236 retains SID-252, SID-258 and SID-248 blockers, To Do and no start date. No first pilot starts Freelance.
+
+Re-read verification across all 100 PCOS issues found no dependency cycles, no newly unblocked To Do issue, no introduced start dates and only SID-249 In Progress. These are roadmap checks, not implementation verification. SID-249 authentication/live reads, tests/build, production MCP, staging and pilot acceptance were not performed by this task.
+
+## 73.3 Approved documentation workflow
+
+Repository documentation owns engineering truth. Git determines published state; working documentation must be visibly labeled working/unpublished. Publish only after review and explicit publication approval. A publication record identifies the resulting commit; historical baseline SHAs in this section are intentionally fixed observations.
+
+Obsidian receives a one-way snapshot of exact bytes from an identified published commit, plus a manifest containing source path, commit, source SHA-256, export time and state. Prefer one repeatable export/check operation after publication to recurring manual copying. No export automation is implemented here. An export failure leaves an explicitly stale mirror, not authority for copying unpublished bytes. The current Obsidian snapshot has not been overwritten.
+
+College HQ retains student workflow policy and should link to the canonical engineering decision instead of maintaining a second engineering roadmap. Existing HQ content and ChatGPT Project instructions were not changed here; link/cutover work follows publication and its applicable approval boundary. No Project-instruction approval is implied by architecture approval.
+
+Approved source artifacts remain unchanged in `/Users/siddanthraja/Desktop/pcos-planning/`: `PCOS-product-architecture-final-proposal.md`, `PCOS-product-architecture-proposal-v3.md` (research/drift evidence appendix), and `PCOS-current-handoff.md` (the pre-reconciliation working handoff). The final proposal's historical “not applied” text describes its creation time; this section records the later authorized reconciliation. The old `product-spec-v2.md` remains historical and unmodified.

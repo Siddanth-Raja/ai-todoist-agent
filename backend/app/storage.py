@@ -335,6 +335,13 @@ def _connect() -> sqlite3.Connection:
     connection = sqlite3.connect(path, factory=_ClosingConnection)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
+    # Keep query temporaries out of disk-backed SQLite temp files because
+    # SID-151 commands may handle bounded sensitive narrative before redaction.
+    connection.execute("PRAGMA temp_store = MEMORY")
+    # SID-151 privacy lifecycle: content-bearing rows are explicitly erased on
+    # forgetting, so SQLite must also scrub deleted cell content rather than
+    # leaving recoverable plaintext in freelist pages.
+    connection.execute("PRAGMA secure_delete = ON")
     return connection
 
 

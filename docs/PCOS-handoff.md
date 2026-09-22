@@ -10789,3 +10789,53 @@ Publication is limited to `docs/PCOS-college-contract.md` and `docs/PCOS-handoff
 The ten SID-249 implementation paths remain unstaged and byte-identical to publication preflight. SID-249 remains In Progress and externally paused pending Microsoft administrator approval; no consent or live Blinn verification is claimed. Current typed Blinn coverage is availability `pending` (administrator approval), completeness `unknown`, freshness `unknown`; historical combined wording in earlier sections is not a contract enum.
 
 This publication changes no runtime implementation, database schema, service, provider, MCP tool, UI, Today/Morning projection, Project instruction, College HQ content, or roadmap dependency. SID-151 retains shared-context/lifecycle ownership; SID-250 canonical College state and assessment production; SID-260 side-effect-free reads; SID-261 reviewed command adapters; SID-147 consumption of shared attention semantics. No downstream implementation starts in this task. Section 72 and historical section 73 remain unchanged.
+
+---
+
+# 75. SID-151 shared conversation context — published implementation checkpoint
+
+**Status: published implementation checkpoint.** On September 22, 2026, SID-151 moved from To Do to In Progress only after preflight confirmed local `HEAD`, fetched `origin/main`, `FETCH_HEAD`, and live GitHub `main` at the published contract commit `21c3c3754765cf31d8fb648b2add3bac72bf5419`; an empty index; the complete dirty-worktree inventory; SID-150 and SID-259 Done; SID-249 independently In Progress and externally paused; SID-250 To Do; and all ten pre-existing SID-249 implementation paths hashed for later byte comparison. Before publication, nothing in this checkpoint was staged, committed, pushed, exported, published, deployed, or marked Done. Git history is authoritative for the resulting publication identity; these bytes intentionally do not embed their own commit hash.
+
+## 75.1 Implemented boundary and schema
+
+`backend/app/conversation_context.py` adds the SQLite-owned `SharedConversationContextService`. Callers supply a `ContextScope` derived from trusted authentication and a stable `CommandIdentity`; command payloads cannot select actor or workspace. The service is an application boundary only. It adds no HTTP route, MCP endpoint, provider access, provider mutation, background scheduler, UI, transcript archive, College truth, or attention engine.
+
+The additive schema owns:
+
+- versioned, inspectable and revocable exact-scope capture consent, with a separate sensitive-retention flag;
+- durable per-conversation state and an opaque reference to the existing SID-150 pending-action identity, accepted only through an injected trusted actor/workspace/conversation authorizer and without a second action table or executor;
+- durable asked, answered and deferred question dispositions;
+- reviewed course-context bindings containing future SID-250 term/section references, review provenance, validity, revision and revocation, without a course/entity store or title-based binding;
+- bounded shared context items, append-only lifecycle revisions, source identity/time/authority, minimal structured attestations, raw evidence with a default seven-day expiry, and bounded situational context whose expiry remains separate from resolution;
+- explicit interaction baselines/cursors whose reads never advance them;
+- dependency edges, derived-context/cache invalidation, opaque non-content forgetting tombstones, and per-database keyed command fingerprints;
+- actor/workspace-scoped durable command receipts with same-identity/same-payload replay, changed-payload rejection and optimistic target revisions.
+
+SID-151 schema setup is now an explicit startup/migration call; constructing the service only validates the existing schema, fingerprint key verifier, journal mode and secure-delete setting. Initialization migrates SQLite from WAL to persistent `DELETE` journaling or fails closed, while every application connection enables `secure_delete` and memory-backed SQLite temporary storage. This prevents SID-151 plaintext from remaining in application-created WAL, rollback-journal or temp files after a completed local forgetting command. It cannot erase external backups, filesystem/volume snapshots, process or infrastructure logs, crash dumps, or copies made outside this database boundary; those need separate retention and deletion controls. Context, state, raw evidence and retrieval all have fixed bounds. Normal reads perform no maintenance, baseline advancement, expiry write, provider refresh or SID-151 schema initialization. Raw expiry is an explicit, receipt-bearing maintenance command.
+
+## 75.2 Lifecycle behavior
+
+Capture fails closed without active consent for the exact scope/version. Revocation blocks later capture without deleting prior state. Without separate sensitive-retention consent, raw narrative and general content are omitted; only a bounded minimal operational attestation with an allowlisted shape may persist. Narrative or raw-dependent capture fails closed in that case. Routine raw expiry or raw-only removal clears raw source text and reports it unavailable while preserving a clear supported structured attestation and derived fact. Once the raw deadline passes, reads report the source unavailable even before cleanup but do not perform cleanup as a hidden side effect. If an interpretation declared that raw context essential, explicit removal or expiry maintenance changes it to `unknown`/`needs_review` and propagates that loss to unsupported dependents.
+
+Corrections append a new optimistic revision; undo appends a compensating revision only when no later target revision intervened. Forgetting erases the target's current and revision content, removes raw evidence, recursively forgets unsupported SID-151 dependents, invalidates dependent caches atomically, and retains only opaque target/dependency IDs and lifecycle markers. Independently supported context remains. The original capture retry returns its original receipt after forgetting but cannot reapply content; a new command for the tombstoned target rejects, preventing startup or retry resurrection. Command receipts retain keyed non-reversible fingerprints rather than plaintext or raw/unsalted content hashes.
+
+Situational expiry only ends current reliance. It does not change `unresolved` to `resolved`; historical inspection remains explicitly outside validity. Reviewed bindings become invalid after expiry or revocation, and a chat title/client hint cannot create a trusted binding. Multiple current explicit bindings remain multiple records rather than being guessed into one course.
+
+## 75.3 Verification at this checkpoint
+
+Focused SID-151 verification passes **35 tests** with `ResourceWarning` promoted to an error. In addition to the original capture, consent, lifecycle, correction, dependency, cache, isolation, restart, migration and bounded-read cases, the suite now covers explicit initialization with no SID-151 table creation by service construction; durable keyed fingerprint replay; fail-closed missing and changed key handling; safe migration of a populated pre-verifier store without key or replay drift; sensitive-data minimization without narrative retention; raw-source unavailability before explicit cleanup with side-effect-free reads; trusted pending-action scope rejection; injected rollback after domain mutation and after receipt insertion; exact concurrent replay, changed-payload conflict and independent-target revisions through two SQLite connections; WAL-to-DELETE migration; memory-backed temp storage; journal-sidecar marker inspection; and deterministic closing of the raw synthetic-migration connection.
+
+The focused privacy tests write unique narrative markers, forget them, then verify content is null in current/revision/raw rows and absent from the SQLite database plus any remaining `-wal`, `-shm` and rollback-journal sidecars. The synthetic migration preserves a pre-existing legacy table and row while adding the SID-151 and existing application tables. These tests establish the bounded local SQLite behavior above, not deletion from external copies. No real provider or production data is opened or migrated.
+
+The complete backend suite passes **515 tests** in **4.914 seconds** with `ResourceWarning` reporting enabled, including the 35 focused tests and the pre-existing SID-249 tests. The original SID-151 warning was traced to Python's raw `sqlite3.connect(...)` context manager in the synthetic-migration test: it commits or rolls back but does not close. That test now uses deterministic `closing(...)`, and the focused suite passes with `ResourceWarning` promoted to an error. A separate full run with tracemalloc attributed the three remaining warnings to pre-existing instances in `test_morning_corrections.py`, `test_provider_changes.py` and `test_reality_reconciliation.py`; none originates from a SID-151 file or changed application path. Those unrelated tests remain outside this narrow diff. This is deterministic local implementation evidence, not connected College continuity or product acceptance.
+
+## 75.4 Exact working files and limitations
+
+SID-151 changes are limited to:
+
+- `backend/app/conversation_context.py` — new schema, repository/application service and lifecycle implementation;
+- `backend/app/storage.py` — enable SQLite secure deletion for privacy erasure;
+- `backend/tests/test_conversation_context.py` — focused deterministic acceptance, migration, restart and privacy coverage;
+- `docs/PCOS-handoff.md` — this published checkpoint.
+
+The service is intentionally not wired into `agent.py`, `main.py`, frontend surfaces or a transport. SID-261 still owns reviewed conversational capture/lifecycle adapters; SID-260 owns least-privilege reads/status; SID-250 still owns canonical College identities, claims, revisions, reconciliation, receipts and attention; SID-147 still owns Today/Morning consumption. Pending-action execution remains exclusively in SID-150's typed durable architecture. Production authentication/workspace derivation, adapter integration, connected multi-surface continuity, deployment/backup/restore, and product/browser acceptance remain downstream work. Repository publication completes the SID-151 implementation checkpoint; Linear closeout records Done only after repository and Obsidian readback. No downstream issue starts through this publication.

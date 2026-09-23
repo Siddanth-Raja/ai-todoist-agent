@@ -27,10 +27,22 @@ MAX_STATE_BYTES = 24_000
 MAX_RAW_BYTES = 64_000
 MAX_MINIMAL_ATTESTATION_BYTES = 2_000
 MAX_RETRIEVAL_LIMIT = 100
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 KEY_CHECK_MESSAGE = b"sid-151-fingerprint-key-check-v1"
 MINIMAL_ATTESTATION_KEYS = {
     "subject_ref", "field", "normalized_value", "source_verified"
+}
+ASSESSMENT_RELEVANT_COMMANDS = {
+    "capture_context",
+    "create_course_binding",
+    "revoke_course_binding",
+    "correct_context",
+    "undo_context_correction",
+    "remove_raw_evidence",
+    "forget_context",
+    "expire_raw_evidence",
+    "resolve_situational_context",
+    "advance_interaction_baseline",
 }
 
 
@@ -326,6 +338,14 @@ class SharedConversationContextService:
                     advanced_at TEXT NOT NULL,
                     PRIMARY KEY(actor_id, workspace_id, baseline_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS context_assessment_generations (
+                    actor_id TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL,
+                    generation INTEGER NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(actor_id, workspace_id)
+                );
                 """
             )
             connection.execute("BEGIN IMMEDIATE")
@@ -476,6 +496,16 @@ class SharedConversationContextService:
             if existing is not None:
                 return existing
             state, target_ids, revisions = mutation(connection, now)
+            if kind in ASSESSMENT_RELEVANT_COMMANDS:
+                connection.execute(
+                    """INSERT INTO context_assessment_generations(
+                           actor_id, workspace_id, generation, updated_at
+                       ) VALUES (?, ?, 1, ?)
+                       ON CONFLICT(actor_id, workspace_id) DO UPDATE SET
+                           generation=context_assessment_generations.generation+1,
+                           updated_at=excluded.updated_at""",
+                    (scope.actor_id, scope.workspace_id, _iso(now)),
+                )
             self._inject_failure("after_domain_mutation")
             receipt_id = str(uuid.uuid4())
             connection.execute(
@@ -538,6 +568,16 @@ class SharedConversationContextService:
                 ),
             ).fetchone()
         return {"state": "not_found"} if row is None else self._receipt(row, duplicate=False)
+
+    def get_assessment_generation(self, scope: ContextScope) -> int:
+        """Read the SID-151 generation used to fence dependent assessments."""
+        with database_connection() as connection:
+            row = connection.execute(
+                """SELECT generation FROM context_assessment_generations
+                   WHERE actor_id=? AND workspace_id=?""",
+                (scope.actor_id, scope.workspace_id),
+            ).fetchone()
+        return int(row["generation"]) if row is not None else 0
 
     # -- consent ---------------------------------------------------------
 

@@ -10839,3 +10839,51 @@ SID-151 changes are limited to:
 - `docs/PCOS-handoff.md` — this published checkpoint.
 
 The service is intentionally not wired into `agent.py`, `main.py`, frontend surfaces or a transport. SID-261 still owns reviewed conversational capture/lifecycle adapters; SID-260 owns least-privilege reads/status; SID-250 still owns canonical College identities, claims, revisions, reconciliation, receipts and attention; SID-147 still owns Today/Morning consumption. Pending-action execution remains exclusively in SID-150's typed durable architecture. Production authentication/workspace derivation, adapter integration, connected multi-surface continuity, deployment/backup/restore, and product/browser acceptance remain downstream work. Repository publication completes the SID-151 implementation checkpoint; Linear closeout records Done only after repository and Obsidian readback. No downstream issue starts through this publication.
+
+---
+
+# 76. SID-250 canonical College state and attention — working/unpublished checkpoint
+
+**Status: working and unpublished.** On September 23, 2026, SID-250 moved from To Do to In Progress only after read-only preflight confirmed local `HEAD`, fetched `origin/main`, `FETCH_HEAD`, and live GitHub `main` at `d91a70c432a19f266a9c3d04cece7ae2dc5c096c`; an empty index; the complete dirty-worktree inventory; SID-259, SID-151, and SID-145 Done; SID-249 independently In Progress and externally paused; every downstream College issue still To Do; and all ten pre-existing SID-249 paths hashed for later byte comparison. This checkpoint is not staged, committed, pushed, exported, deployed, published, or closed.
+
+## 76.1 Implemented internal capability and ownership
+
+`backend/app/college_domain.py` adds the internal `CollegeDomainService` on the existing SQLite connection boundary. Its additive schema contains 17 `college_*` tables for canonical versions; immutable identities and provider-purpose links; immutable events; durable receipts, transitions, and aliases; attributable append-only claims and field revisions; claim dependencies and privacy tombstones; conflicts; independent provider/account/scope coverage; recorded assessments, lifecycle transitions, and dependencies.
+
+The service implements the eight frozen `college-event/1.0` variants, including dated `course_progress_recorded` session observations. It enforces server-bound actor/workspace scope, explicit expected field revisions including `absent`, strict event fields, stable command/event identities, keyed canonical fingerprints, ordered atomic batches, exact retry disposition, changed-payload rejection, semantic-copy collapse without losing either event or delivery receipt, append-only revisions, field authority, source timing, explicit supersession, and deterministic conflict preservation instead of last-write-wins. Completion, submission, understanding, attendance, scheduling, requirement, attendance intent, provider free/busy, provider-record existence, and deadline remain independent.
+
+Durable acceptance records `received` before application. The application transaction commits validated events, claims, revisions, conflicts, canonical version, affected assessment invalidation, and terminal receipt transition. Injected failures roll back every domain row and false terminal outcome, then append a known `retryable_failure` transition to the original receipt. Provider-purpose links retain exact provider/account/record/purpose/target identity and grant no provider-write authority. Identities require stable provider references or reviewed composite identity and cannot merge by title alone; competing resolution requires review and retired provisional history remains inspectable.
+
+Coverage stores availability, completeness, and freshness independently with declared scope, bounds, assessment/observation times, omission reason, and freshness policy. The Blinn fixture permits only `availability=pending`, `reason=administrator_approval`, `completeness=unknown`, `freshness=unknown`, with null mailbox assessment and observed-through times. TAMU and other evidence remain independently usable.
+
+The explicit internal assessment boundary durably records `queued`, `running`, `ready`, and `failed`, with append-only transition history, retryability metadata, canonical input version, authorized scope, assessment/validity times, timezone/horizon, coverage/omissions, baseline/window, evidence/transient references, deterministic attention items, and invalidation state. Its stable priority bands cover relevant changes, current conflicts/blockers, required obligations, preparation pressure, material unknowns, learning needs, coordination blockers, and optional/recommended opportunities. `ready` with no attention items is explicitly `insufficient_evidence`, never reassurance. Reads report expired, invalidated, failed, or context-generation-stale assessments as historical without recomputing, refreshing a provider, advancing a cursor, acknowledging a change, or writing.
+
+## 76.2 SID-151 integration and preserved boundaries
+
+SID-250 does not create a context, consent, lifecycle, baseline, or generic pending-action store. The minimum compatibility seam adds one actor/workspace generation to SID-151. Every accepted context capture, correction, undo, raw-evidence removal or expiry, forgetting, situational resolution, course-binding creation or revocation, and interaction-baseline advance increments that generation in SID-151's existing command transaction. `context_snapshot_from_sid151` reads the bounded authorized snapshot and its generation. SID-250 records that generation as an assessment dependency, rejects a race before publication, and makes every later read reject a stale assessment immediately without a hidden invalidation write. Expired transient limitations are excluded from current feasibility without being marked resolved. A scope mismatch fails closed.
+
+No `agent.py`, `main.py`, frontend, MCP, HTTP, chat-adapter, provider, Calendar, Todoist, email, authentication, background-monitoring, or deployment wiring is added. SID-260 still owns reads/status transport, SID-261 capture adapters, SID-147 Today/Morning rendering, SID-251 review surfaces, SID-150 pending actions, and providers their own records and mutations.
+
+## 76.3 Deterministic verification at this checkpoint
+
+The focused SID-250 suite passes **44 tests** and the complete SID-151 suite passes **36 tests**, together **80 tests**, with `ResourceWarning` promoted to an error. The original 20 domain walkthroughs remain covered. Adversarial coverage now additionally exercises atomic SID-151 generation fencing, all relevant context lifecycle categories, durable receipt acceptance and immutable transitions, retry and rejection distinctions, durable assessment states and restart, terminal versus retryable no-result failure, same-request assessment recovery, exact batch membership, four rollback boundaries, independent-connection identity/link races, provisional-resolution conflict, lifecycle correction/undo/forget/raw removal, lifecycle retry and atomic invalidation, construction without implicit schema migration, fresh-process restart, unsupported-dependent retraction, retained independent support, content minimization, keyed fingerprints, actor/workspace/account coverage isolation, missing coverage, authority precedence, stale direct evidence, exact attention ordering, transport-copy deduplication, read byte stability, and forgotten-plaintext removal.
+
+The complete backend suite passes **560 tests** in **7.881 seconds**. No warning was emitted in that run, and neither focused suite emits a warning with warnings promoted to errors. These results describe executed deterministic tests; no specification-only walkthrough is counted as runtime evidence.
+
+This is deterministic local implementation evidence only. No live provider was accessed. No connected ChatGPT/app continuity, provider reconciliation, provider action, Today/Morning rendering, deployment, browser/product acceptance, or full College Command Center acceptance occurred.
+
+## 76.4 Working files, coverage limitation, and next gates
+
+SID-250 working changes, including its required SID-151 compatibility seam, are limited to:
+
+- `backend/app/college_domain.py` — internal canonical College schema and application service;
+- `backend/tests/test_college_domain.py` — deterministic domain, concurrency, migration, restart, isolation, rollback, and attention verification;
+- `backend/app/conversation_context.py` — scope-local assessment generation advanced inside accepted SID-151 transactions;
+- `backend/tests/test_conversation_context.py` — full lifecycle generation, replay, rollback, and read-side-effect verification;
+- `docs/PCOS-handoff.md` — this working/unpublished checkpoint.
+
+College uses the same honest local-erasure boundary as SID-151: explicit migration creates and verifies a durable keyed fingerprint secret; application connections use SQLite secure deletion and memory-backed temporary storage; forgetting scrubs current and historical claim lineage, dependent claims, event content, evidence excerpts, conflicts, and recorded assessment material while retaining opaque lifecycle evidence. This does not erase external backups, filesystem or volume snapshots, copied databases, process or infrastructure logs, crash dumps, or exports outside this SQLite boundary; those require separate retention and deletion controls.
+
+Blinn remains setup-only and pending administrator approval. It is not checked, empty, healthy, fresh, or complete. The first continuity slice can use attributable conversational evidence and independently supported TAMU/other evidence with decision-scoped limitations, but no whole-College reassurance is permitted where missing Blinn evidence could materially change the conclusion.
+
+SID-250 remains In Progress for user review. SID-260, SID-261, SID-147, SID-251, SID-252, and SID-262 remain unstarted. No publication or downstream start is authorized or claimed by this checkpoint.

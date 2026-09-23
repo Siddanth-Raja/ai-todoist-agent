@@ -326,6 +326,81 @@ class SharedConversationContextTests(unittest.TestCase):
         )
         self.assertEqual(advanced["target_revisions"]["baseline-1"], 2)
 
+    def test_assessment_generation_fences_every_relevant_context_lifecycle_atomically(self):
+        self.assertEqual(self.service.get_assessment_generation(self.scope), 0)
+        self.grant()
+        self.assertEqual(self.service.get_assessment_generation(self.scope), 0)
+        capture_command = self.command("capture-generation")
+        self.capture("generation-claim", command=capture_command)
+        self.assertEqual(self.service.get_assessment_generation(self.scope), 1)
+        self.capture("generation-claim", command=capture_command)
+        self.assertEqual(self.service.get_assessment_generation(self.scope), 1)
+        self.service.correct_context(
+            self.scope, self.command("correct-generation"), item_id="generation-claim",
+            expected_revision=1, content={"field": "completion", "value": "in_progress"},
+            reason="correction",
+        )
+        self.service.undo_context_correction(
+            self.scope, self.command("undo-generation"), item_id="generation-claim",
+            expected_revision=2, correction_revision=2, reason="undo",
+        )
+        self.service.remove_raw_evidence(
+            self.scope, self.command("remove-generation"), item_id="generation-claim",
+            expected_revision=3,
+        )
+        self.capture(
+            "situational-generation", context_kind="situational",
+            resolution_state="unresolved", expires_at=self.now + timedelta(hours=2),
+            expiry_basis="explicit",
+        )
+        self.service.resolve_situational_context(
+            self.scope, self.command("resolve-generation"),
+            item_id="situational-generation", expected_revision=1,
+            resolution_state="resolved",
+        )
+        self.capture(
+            "expiry-generation", requires_raw_context=True,
+            expires_at=self.now + timedelta(days=1), expiry_basis="explicit",
+        )
+        self.now += timedelta(days=8)
+        self.service.expire_raw_evidence(
+            self.scope, self.command("expiry-generation"), through=self.now,
+        )
+        self.service.forget_context(
+            self.scope, self.command("forget-generation"), item_id="generation-claim",
+            expected_revision=4,
+        )
+        self.service.create_course_binding(
+            self.scope, self.command("binding-generation"), binding_id="binding-generation",
+            term_id="term", section_id="section", binding_scope="selected",
+            review_provenance="review", reviewed_at=self.now, valid_from=self.now,
+            valid_until=None, explicitly_selected=True,
+        )
+        self.service.revoke_course_binding(
+            self.scope, self.command("revoke-generation"),
+            binding_id="binding-generation", expected_revision=1,
+        )
+        self.service.advance_baseline(
+            self.scope, self.command("baseline-generation"), baseline_id="baseline-generation",
+            consumer="college", cursor={"position": 1}, expected_revision=None,
+        )
+        self.assertEqual(self.service.get_assessment_generation(self.scope), 12)
+        before = self.service.get_assessment_generation(self.scope)
+        self.service.retrieve_context(self.scope)
+        self.service.get_baseline(self.scope, "baseline-generation")
+        self.assertEqual(self.service.get_assessment_generation(self.scope), before)
+
+        failing = self.make_service(
+            failure_injector=lambda point: (_ for _ in ()).throw(RuntimeError("injected"))
+            if point == "after_domain_mutation" else None,
+        )
+        with self.assertRaises(RuntimeError):
+            failing.advance_baseline(
+                self.scope, self.command("failed-generation"), baseline_id="failed-generation",
+                consumer="college", cursor={"position": 2}, expected_revision=None,
+            )
+        self.assertEqual(self.service.get_assessment_generation(self.scope), before)
+
     def test_clear_attested_claim_survives_seven_day_raw_expiry(self):
         self.grant()
         self.capture("clear-claim", requires_raw_context=False)

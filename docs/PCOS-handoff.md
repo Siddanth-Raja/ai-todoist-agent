@@ -10887,3 +10887,166 @@ College uses the same honest local-erasure boundary as SID-151: explicit migrati
 Blinn remains setup-only and pending administrator approval. It is not checked, empty, healthy, fresh, or complete. The first continuity slice can use attributable conversational evidence and independently supported TAMU/other evidence with decision-scoped limitations, but no whole-College reassurance is permitted where missing Blinn evidence could materially change the conclusion.
 
 SID-250 remains In Progress for user review. SID-260, SID-261, SID-147, SID-251, SID-252, and SID-262 remain unstarted. No publication or downstream start is authorized or claimed by this checkpoint.
+
+---
+
+# 77. SID-260 least-privilege College reads — working/unpublished checkpoint
+
+**Status: working and unpublished.** On September 23, 2026, SID-260 moved from
+To Do to In Progress only after read-only preflight confirmed local `HEAD`,
+`origin/main`, and live GitHub `main` at the published SID-250 baseline
+`64eada44558efd62e03c5dfde06fc71dd5b6a8f6`; the stale `FETCH_HEAD` remained at
+`d91a70c432a19f266a9c3d04cece7ae2dc5c096c`; the index was empty; all ten
+pre-existing SID-249 files were inventoried and hashed; SID-145, SID-150,
+SID-151, SID-259, and SID-250 were Done; SID-249 remained independently In
+Progress and externally paused; and every downstream College issue remained To
+Do. Nothing in this checkpoint is staged, committed, pushed, exported,
+deployed, published, or closed.
+
+## 77.1 Read and authentication boundaries
+
+`backend/app/college_reads.py` adds `CollegeReadService` over the existing
+SID-151/SID-250 SQLite database. It defines versioned
+`college-state-read/1.0` and `college-update-status/1.0` outputs for exactly
+`get_college_state` and `get_update_status`. The service opens only an existing
+file-backed database with SQLite `mode=ro` and `query_only`, begins one
+consistent read transaction, and never invokes schema setup or any SID-250
+command method. A missing database or College schema returns `uninitialized`
+without creating either; an initialized authorized scope with no state returns
+`missing` rather than inferred success.
+
+`backend/app/college_read_api.py` exposes the two reads as standalone FastAPI
+GET operations using the repository's bearer-key convention. The bearer key is
+bound by server configuration to one actor and workspace plus optional allowed
+course IDs and cross-course permission. Requests cannot supply or override
+actor/workspace identity through query parameters or headers. Foreign and
+nonexistent course, receipt, event, claim, lifecycle-target, coverage, and
+assessment identities return the same non-disclosing result in the trusted
+scope. The paused SID-249 `backend/app/main.py` and `backend/app/config.py`
+bytes remain untouched.
+
+## 77.2 Bounded deterministic state and status schemas
+
+`get_college_state` requires an explicit course or cross-course scope, a
+timezone-aware horizon no longer than 31 days, and a valid IANA timezone. It
+returns the existing canonical version plus a keyed snapshot ID and a unified,
+stable projection of authorized canonical identities, active/tentative/
+conflicted claims and field revisions, open conflicts, latest recorded
+coverage, and matching recorded assessments. Course scope recursively includes
+only canonical descendants of the authorized course. Recorded assessments are
+selected only when their stored scope is authorized and their horizon/timezone
+matches the requested view; their stored lifecycle remains `queued`, `running`,
+`ready`, or `failed`, while ready assessments separately report `expired` or
+`invalidated`. No missing, pending, failed, expired, or invalidated assessment
+is recomputed or presented as current.
+
+Pages contain at most 50 records and 256 KB. Individual records are bounded to
+16 KB after string, collection, nested-value, evidence-reference, and depth
+limits. Signed cursors bind scope, horizon, timezone, offset, and the unchanged
+authorized SQLite snapshot; a changed snapshot rejects instead of shifting a
+page. Raw transcripts, provider payloads, email bodies, document text, and
+conversation text are excluded. Retracted/forgotten claims are excluded, and
+SID-250's scrubbed/tombstoned content is not reconstructed. Malformed coverage
+rows are omitted from typed records and surfaced only as bounded non-content
+diagnostics, so every returned availability, completeness, and freshness value
+remains inside the contract enums.
+
+`get_update_status` accepts exactly one command ID, idempotency key, or receipt
+ID. It returns the authorized durable receipt state (`received`, `applied`,
+`needs_review`, `rejected`, or `retryable_failure`), bounded event/affected/
+review references, immutable receipt transitions, retryability, canonical
+version, and any associated assessment lifecycle/history. A missing result is
+explicit `not_found` at the read snapshot and never proof of current success or
+failure.
+
+Blinn never disappears into an empty or healthy interpretation. Recorded Blinn
+coverage is returned as recorded. If no authorized runtime coverage row exists,
+the response carries an explicit non-recorded expectation:
+`availability=pending`, `reason=administrator_approval`,
+`completeness=unknown`, `freshness=unknown`, and null assessment/observation
+times. It makes no mailbox-check claim.
+
+## 77.3 Side-effect and isolation evidence
+
+The focused SID-260 suite passes **25 tests** with `ResourceWarning` promoted to
+an error. It covers trusted actor/workspace binding; query/header spoofing;
+cross-workspace and missing-ID indistinguishability; restricted-principal
+receipt/target authorization; course and cross-course views; bounded horizon,
+timezone, cursor, identifier, evidence and state content; signed stable
+pagination and changed-snapshot rejection; missing and uninitialized stores;
+receipt lookup by command/key/receipt identity and every durable receipt state;
+assessment queued/running/ready/failed plus expired/invalidated readback; raw
+and forgotten-content suppression; explicit Blinn pending representation;
+restart equality; parallel read consistency; and malformed/oversized rejection.
+
+The repeated-read test compares the entire response, database bytes, table row
+counts, and SQLite connection change counters before and after state/status
+reads. It includes College receipts/assessments/coverage, SID-151 interaction
+baselines, and provider checkpoints. Nothing changes: no schema creation,
+domain initialization, receipt acknowledgment, assessment work, baseline or
+cursor advancement, provider refresh, coverage mutation, cache/tombstone/
+pending-action mutation, or action execution occurs.
+
+All **36 SID-151 tests** and **44 SID-250 tests** pass together with
+`ResourceWarning` promoted to an error (**80 tests**). The complete backend
+suite passes **579 tests** in **7.905 seconds**. It emits three pre-existing
+`ResourceWarning`s from raw `sqlite3.connect(...)` context managers in
+`test_morning_corrections.py:269`, `test_provider_changes.py:107`, and
+`test_reality_reconciliation.py:691`; tracemalloc confirms none originates in a
+SID-151, SID-250, or SID-260 file. These are deterministic local tests only; no
+provider, production database, connected
+ChatGPT tool, Secure MCP Tunnel, deployment, browser, or product-acceptance
+flow was exercised.
+
+## 77.4 Working files and remaining gates
+
+SID-260 working changes are limited to:
+
+- `backend/app/college_reads.py` — read-only snapshot, authorization,
+  projection, receipt, bounds, and signed-pagination service;
+- `backend/app/college_read_api.py` — standalone authenticated FastAPI exposure
+  for the two named reads;
+- `backend/tests/test_college_reads.py` — focused deterministic acceptance and
+  side-effect verification;
+- `backend/README.md` — local server configuration and schema usage;
+- `docs/PCOS-handoff.md` — this working/unpublished checkpoint.
+
+The HTTP surface still requires production runtime configuration, deployment,
+backup/restore operations, and a separately authorized connected MCP/OpenAPI
+registration before ChatGPT can call it. This checkpoint does not add a write
+adapter, capture, provider integration, UI, background monitor, assessment
+command, Today/Morning consumer, or action executor. SID-260 remains In Progress
+for user review. SID-249 remains externally paused and untouched; SID-261,
+SID-147, SID-251, SID-252, SID-262, SID-148, SID-156, and SID-157 remain
+unstarted. No downstream issue starts through this work.
+
+## 77.5 Focused authorization, privacy, truthfulness, and pagination review
+
+The subsequent unstaged review reproduced and fixed only SID-260 defects. Page
+cursors now bind a hash of the authenticated actor, workspace, allowed course
+set, cross-course permission, and normalized query in addition to the database
+snapshot. Cursor payload and signature use separately encoded framing, avoiding
+delimiter collisions inside binary HMAC bytes. Authentication now defaults
+cross-course permission off, and an explicitly configured empty course allowlist
+authorizes no College records or receipts.
+
+Course-restricted receipt authorization now resolves coverage targets through
+their declared scope instead of treating them as unknown. Foreign receipts and
+missing receipts retain identical public output. Identity attributes use a
+small structural allowlist, while raw/body/transcript/content/text/note-like
+keys are removed from other nested values. Forgotten state and lifecycle
+receipt history expose identifiers and transitions only, never scrubbed
+content. A malformed stored Blinn row cannot surface healthy, complete, fresh,
+checked, or an invented `availability=invalid` state. The malformed row is
+omitted from typed coverage, a separate bounded diagnostic identifies the
+invalid stored record, and the Blinn expectation remains
+pending/unknown/unknown for administrator approval with null check times.
+
+Pagination regression coverage now concatenates every bounded page and compares
+it with the single-page ordering, rejects changed snapshots, permission changes,
+actor/workspace changes, and signature tampering, and retains the existing
+large-field/evidence/page bounds. The focused suite passes **25 tests** with
+`ResourceWarning` promoted to an error. Because the fixes are isolated to the
+new SID-260 modules and tests and change no shared SID-151/SID-250 behavior, the
+complete 579-test backend suite was not rerun during this review; its prior
+passing result remains the latest full-suite evidence.

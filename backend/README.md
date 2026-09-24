@@ -182,6 +182,50 @@ Expected shape:
 }
 ```
 
+## SID-260 College read surface
+
+The least-privilege College read surface is intentionally separate from the
+main application entrypoint while the unrelated SID-249 changes there remain
+paused. It exposes exactly two authenticated, side-effect-free operations:
+
+- `GET /college/state` (`get_college_state`)
+- `GET /college/update-status` (`get_update_status`)
+
+Bind the existing bearer credential to a trusted server-side College principal:
+
+```text
+AGENT_API_KEY=choose_a_private_api_key
+COLLEGE_ACTOR_ID=server_owned_actor_id
+COLLEGE_WORKSPACE_ID=server_owned_workspace_id
+COLLEGE_ALLOWED_COURSE_IDS=optional,comma,separated,course_ids
+COLLEGE_ALLOW_CROSS_COURSE=true
+```
+
+Cross-course access defaults off unless `COLLEGE_ALLOW_CROSS_COURSE` is
+explicitly enabled. An explicitly configured empty course allowlist authorizes
+no College records or receipts.
+
+Run the read-only surface from `backend/`:
+
+```bash
+uvicorn app.college_read_api:app --host 127.0.0.1 --port 8001
+```
+
+`get_college_state` requires an explicit `course` or `cross_course` scope,
+timezone-aware bounded horizon, and IANA timezone. Course scope uses repeated
+`course_id` query parameters. Results use `college-state-read/1.0`, return at
+most 50 records per page, and use a signed cursor tied to one unchanged SQLite
+snapshot. Malformed stored coverage is omitted from typed records and reported
+through a bounded non-content diagnostic; returned coverage dimensions remain
+within the contract enums. `get_update_status` accepts exactly one `command_id`,
+`idempotency_key`, or `receipt_id` and uses `college-update-status/1.0`.
+
+Actor/workspace values are never accepted from the request. The service opens
+the existing SQLite database with `mode=ro` and `query_only`, returns
+`uninitialized` without creating a database or schema, and never refreshes a
+provider, produces an assessment, advances a baseline, acknowledges a receipt,
+or executes an action.
+
 ## 8. Test Chat
 
 ```bash

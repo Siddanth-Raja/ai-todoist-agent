@@ -11050,3 +11050,150 @@ large-field/evidence/page bounds. The focused suite passes **25 tests** with
 new SID-260 modules and tests and change no shared SID-151/SID-250 behavior, the
 complete 579-test backend suite was not rerun during this review; its prior
 passing result remains the latest full-suite evidence.
+
+## 77.6 Canonical cursor-encoding correction for the publication candidate
+
+SID-261 regression work exposed a nondeterministic assertion in the unstaged
+SID-260 cursor test. A URL-safe Base64 string with a changed final character can
+be textually different while differing only in unused padding bits. Python's
+decoder accepts that noncanonical spelling and produces the exact same 32-byte
+HMAC signature. The old validator therefore accepted multiple textual cursor
+representations of one signed payload. The decoded payload, authorization
+fingerprint, offset, snapshot and signature identity did not change, but the
+validator did not enforce the encoder's canonical unpadded representation.
+
+The narrow correction re-encodes each decoded payload and signature segment and
+requires an exact match before checking the HMAC and cursor scope. The regression
+constructs a different final signature character with the same decoded bytes,
+proves byte equality, and deterministically requires `invalid_cursor`; it no
+longer depends on whether an arbitrary replacement happens to alter significant
+bits. Exactly these SID-260 paths are added to the publication candidate:
+
+- `backend/app/college_reads.py` — reject noncanonical cursor encodings;
+- `backend/tests/test_college_reads.py` — deterministic equivalent-byte tamper regression.
+
+The isolated cursor test and all **25 SID-260 tests** pass with
+`ResourceWarning` promoted to an error. No schema, read payload, authorization
+scope, provider behavior or write path changes.
+
+---
+
+# 78. SID-261 reviewed College conversational capture — published implementation checkpoint
+
+**Status: published implementation checkpoint.** On September 24, 2026, SID-261 moved from
+To Do to In Progress only after Linear readback confirmed SID-150, SID-151,
+SID-250, and SID-260 Done and local `HEAD` exactly
+`abdcf5a4e21900e60afec2f981c1a58a24607b14`. The index remained untouched.
+The reviewed seven-path publication was later authorized with SID-147 still
+unstarted. Git and the export manifest identify the resulting publication SHA;
+these committed bytes intentionally do not embed their own commit hash.
+
+## 78.1 Preserved SID-249 boundary
+
+Before implementation, the ten pre-existing SID-249 paths were recorded with
+these SHA-256 values; final readback reproduced every value exactly:
+
+| Path | SHA-256 |
+| --- | --- |
+| `backend/.env.example` | `dc8d70775d56dca291b081c72bf6d148c5af886913fae002176cf0828e7359bc` |
+| `backend/app/config.py` | `9554951cc8ff2dea312c29a9fe97f130aee0011fd77d1c0f11d5ccba735dac80` |
+| `backend/app/email_analysis.py` | `cbbed4b3ec1a04654c47f8d21058f905cd19aca1bab2ffb2f2c39c6cf4a5925e` |
+| `backend/app/gmail_client.py` | `17440a6ec9d73a3a258203bfd14ab0629e8bf190cb53a7492a29913e12f0a761` |
+| `backend/app/main.py` | `275b1e150ca26c02b365975cb6652d7fa70a85d579b3b80588fd718c539be3d5` |
+| `backend/app/email_duplicates.py` | `e1ed6cf1ee2f65998dc3dad5cfa443ce11fa866e21ea775d7e43fe0758e904ee` |
+| `backend/app/microsoft_graph_mail.py` | `80f066ac83cd65910ca80ab7709f0ffb19407dc964731df27a568dfa5b4040a7` |
+| `backend/scripts/blinn_email_oauth_setup.py` | `b0450b5dfbe1553d2578a63003b7f5e64972ef0597eedffc4e8dc2c3a42fb3f3` |
+| `backend/scripts/verify_blinn_email_analysis.py` | `0f2642686a92c7e2edb25b7b2242d2f79862cc64fe2e6a0658a9c4616047a3bb` |
+| `backend/tests/test_blinn_microsoft_graph_provider.py` | `5eb9bae9cf60521c3bf1c13b90513ce9bb50c0fd4116ee020b2bd4ec03f40e18` |
+
+`backend/app/main.py` was not used as an integration point. SID-261 instead adds
+a standalone adapter and HTTP entrypoint, so all ten frozen paths remain
+byte-identical and retain their prior staged/unstaged state.
+
+## 78.2 Implemented boundary and behavior
+
+`backend/app/college_capture.py` adds one application adapter shared by the
+ChatGPT and app conversation surfaces. Trusted authentication supplies actor,
+workspace, allowed sections, reviewed binding candidates, and reviewed shorthand
+referents; client payloads cannot select actor/workspace. Exact active SID-151
+capture opt-in is checked before new fact capture. The adapter resolves one
+valid reviewed course binding, reads current SID-250 field revisions, emits
+only `college-event/1.0` commands with `no_provider_action`, and delegates the
+atomic event/claim/revision/conflict/receipt transaction to SID-250. It owns no
+second fact, receipt, action, provider, or conversation store.
+
+The contract walkthroughs record Calc topic coverage, quick-check occurrence,
+and an exam warning as separate dated observations without inventing attendance,
+grade, exam date/scope, importance, deadline, or mastery. The ENGR mixed report
+keeps Topic 4 individual submission, its unresolved work concern, team progress,
+and the missing group chat as independent reviewed subjects and fields. The
+derivatives example records topic coverage and a distinct learning need. Clear
+updates work from either surface. Ambiguous consequential text or multiple
+binding candidates is retained through SID-151 as `needs_review` evidence with
+one focused prompt instead of a guessed canonical claim. The adapter records
+that prompt as asked and exposes receipt-backed answered/deferred disposition
+updates through the same SID-151 question lifecycle.
+
+Natural-language interpretation is deliberately the reviewed initial set: the
+exact Calc topic/check/warning family, Topic 4 individual/team mixed update, and
+derivatives/definition-problems learning report exercised below. This adapter
+does not claim arbitrary class-chat wording. Unmatched or consequentially
+ambiguous language is saved for review rather than guessed. `chatgpt` and `app`
+are supported provenance values for the shared adapter, not evidence that a
+ChatGPT tool, Secure MCP Tunnel, app client, or deployment is connected.
+
+Responses translate durable receipt state into explicit `applied`,
+`saved_for_review`, `pending`, `uncertain`, or rejected outcomes; carry receipt
+and status-lookup identity; and expose correction, undo, and forgetting
+affordances. Same command/key and payload returns the original receipt. Changed
+payload conflicts without mutation. Same-field revision races remain reviewable
+and do not overwrite the winning value. Missing or revoked opt-in fails closed.
+Foreign and missing bindings are indistinguishable, section/referent scope is
+checked, course-restricted lifecycle commands cannot reach another section,
+and raw-evidence removal requires cross-course lifecycle authorization. The
+explicit assessment operation reuses SID-250's lifecycle and, per contract,
+does not require fact-capture opt-in.
+
+`backend/app/college_capture_api.py` exposes only authenticated
+`POST /college/update` with operation ID `record_college_update`. It rejects
+actor/workspace and unexpected fields, maps authorization/not-found/conflict
+errors without disclosing foreign state, and constructs no service until the
+request boundary. This checkpoint does not register a connected MCP tool,
+deploy a server, initialize production storage, access a provider, or change a
+task, Calendar event, email, LMS record, conversation cursor, or pending action.
+
+## 78.3 Deterministic verification
+
+The focused SID-261 suite passes **12 tests** with `ResourceWarning` promoted to
+an error. Named evidence covers both conversation surfaces and the exact Calc
+session report; the ENGR mixed individual/team update; missing and revoked
+opt-in; ambiguous binding with durable asked/answered question disposition;
+same-field revision conflict; exact duplicate delivery and changed-payload
+rejection; cross-workspace binding rejection; applied/review/pending/uncertain
+receipt acknowledgments and status readback; explicit assessment without capture
+opt-in; standalone route and identity-spoof rejection; and unchanged
+non-College/provider table counts during capture.
+
+The affected SID-260 and SID-261 suites pass together: **37 tests** in
+**1.881 seconds**, with `ResourceWarning` promoted to an error. The one required
+post-fix complete backend run passes **597 tests** in **9.016 seconds**.
+`git diff --check` passes. These are local fixtures only, not connected
+ChatGPT/app, provider, production-data, deployment, browser, or
+product-acceptance evidence.
+
+## 78.4 Exact published files and remaining boundary
+
+The reviewed publication contains exactly:
+
+- `backend/app/college_capture.py` — reviewed application adapter and acknowledgments;
+- `backend/app/college_capture_api.py` — separate authenticated write entrypoint;
+- `backend/tests/test_college_capture.py` — deterministic adapter/API acceptance;
+- `backend/README.md` — local configuration and execution boundary;
+- `docs/PCOS-handoff.md` — this published checkpoint;
+- `backend/app/college_reads.py` — SID-260 canonical cursor validation;
+- `backend/tests/test_college_reads.py` — deterministic SID-260 cursor regression.
+
+No SID-249 path is part of the publication. Publication and SID-261 closeout do
+not connect ChatGPT, deploy either API, initialize production storage, start
+SID-147, grant provider authority, or perform a task, Calendar, email, LMS or
+other provider action. Those remain separately reviewed downstream work.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
@@ -362,7 +363,20 @@ class CollegeReadTests(unittest.TestCase):
                 self.request(limit=1, cursor=cursor),
             )
         self.assertEqual(actor_swap.exception.code, "invalid_cursor")
-        tampered = cursor[:-1] + ("A" if cursor[-1] != "A" else "B")
+        encoded_payload, encoded_signature = cursor.split(".")
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        final_index = alphabet.index(encoded_signature[-1])
+        self.assertEqual(final_index % 4, 0)
+        noncanonical_signature = encoded_signature[:-1] + alphabet[final_index + 1]
+        canonical_bytes = base64.urlsafe_b64decode(
+            encoded_signature + "=" * (-len(encoded_signature) % 4)
+        )
+        noncanonical_bytes = base64.urlsafe_b64decode(
+            noncanonical_signature + "=" * (-len(noncanonical_signature) % 4)
+        )
+        self.assertNotEqual(noncanonical_signature, encoded_signature)
+        self.assertEqual(noncanonical_bytes, canonical_bytes)
+        tampered = f"{encoded_payload}.{noncanonical_signature}"
         with self.assertRaises(CollegeReadError) as altered:
             self.reads.get_college_state(
                 calc_auth, self.request(limit=1, cursor=tampered)

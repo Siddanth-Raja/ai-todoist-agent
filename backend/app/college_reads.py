@@ -1188,6 +1188,12 @@ class CollegeReadService:
             signature = base64.urlsafe_b64decode(
                 signature_bytes + b"=" * (-len(signature_bytes) % 4)
             )
+            if (
+                base64.urlsafe_b64encode(payload).decode().rstrip("=") != encoded_payload
+                or base64.urlsafe_b64encode(signature).decode().rstrip("=")
+                != encoded_signature
+            ):
+                raise ValueError
             if not hmac.compare_digest(signature, hmac.new(key, payload, hashlib.sha256).digest()):
                 raise ValueError
             data = json.loads(payload)

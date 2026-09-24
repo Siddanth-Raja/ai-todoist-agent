@@ -226,6 +226,50 @@ the existing SQLite database with `mode=ro` and `query_only`, returns
 provider, produces an assessment, advances a baseline, acknowledges a receipt,
 or executes an action.
 
+## SID-261 College capture surface
+
+The reviewed write adapter is also a separate entrypoint, leaving the paused
+SID-249 `app.main` bytes untouched. It exposes one authenticated operation:
+
+- `POST /college/update` (`record_college_update`)
+
+It requires the existing SID-151 and SID-250 schemas to have been initialized
+at an explicit migration/startup boundary. Bind actor, workspace, allowed
+sections, reviewed conversation bindings, and reviewed shorthand server-side:
+
+```text
+AGENT_API_KEY=choose_a_private_api_key
+COLLEGE_ACTOR_ID=server_owned_actor_id
+COLLEGE_WORKSPACE_ID=server_owned_workspace_id
+COLLEGE_ALLOWED_SECTION_IDS=section-calc,section-engr
+COLLEGE_BINDINGS_BY_CONVERSATION_JSON={"conversation-id":["reviewed-binding-id"]}
+COLLEGE_REVIEWED_REFERENTS_JSON={"Topic 4 individual":"work-item-id","team":"team-work-item-id"}
+```
+
+Run it from `backend/`:
+
+```bash
+uvicorn app.college_capture_api:app --host 127.0.0.1 --port 8002
+```
+
+Capture accepts a stable command ID/key, `chatgpt` or `app` surface, authenticated
+conversation identity, timezone-aware assertion time, IANA timezone, and one of
+the reviewed initial language patterns: the Calc topic/check/warning report, the
+Topic 4 individual/team mixed update, or the derivatives/definition-problems
+learning report. Structured assessment and lifecycle operations are separate.
+This initial adapter does not claim arbitrary class-chat language understanding;
+unmatched or consequentially ambiguous wording is retained for review rather
+than guessed. The surface labels are provenance inputs, not evidence that a
+ChatGPT tool or app client has been connected or deployed. Actor/workspace fields
+are rejected. Exact active
+`college-operational` opt-in and one valid reviewed course binding are required.
+Ambiguous consequential content is retained through SID-151 as reviewable
+evidence; clear facts are applied atomically through SID-250. Responses identify
+`applied`, `saved_for_review`, `pending`, or `uncertain` outcomes and carry the
+durable receipt/status identity. The adapter always emits
+`action_intent=no_provider_action`; it never creates a task or Calendar event,
+sends email, refreshes a provider, or grants standing provider approval.
+
 ## 8. Test Chat
 
 ```bash

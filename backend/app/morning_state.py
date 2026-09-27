@@ -17,6 +17,14 @@ from .calendar_time import (
     normalize_calendar_time,
 )
 from .calendar_tools import CalendarReadResult, list_remaining_today_events
+from .college_briefing import (
+    CollegeBriefItem,
+    CollegeBriefProjection,
+    CollegeBriefRequest,
+    CollegeBriefingService,
+    college_briefing_service,
+    college_context_from_environment,
+)
 from .morning_corrections import morning_correction_service
 from .project_activity_focus import (
     ProjectActivityFocus,
@@ -246,6 +254,14 @@ class MorningStateSynthesis(BaseModel):
     no_urgent_attention: bool
     urgent_attention_count: int
     briefing: MorningBriefPresentation
+    college: CollegeBriefProjection = Field(
+        default_factory=lambda: CollegeBriefProjection(
+            scope="cross_course",
+            scope_label="the cross-course view",
+            assessment_status="not_evaluated",
+            opening="College state was not included in this synthesis.",
+        )
+    )
     changes_since_meaningful_check: MorningSection
     attention_today: MorningSection
     handled_paused_waiting: MorningSection
@@ -280,11 +296,13 @@ class MorningStateService:
         change_service=provider_change_service,
         calendar_reader=list_remaining_today_events,
         correction_service=morning_correction_service,
+        college_service: CollegeBriefingService = college_briefing_service,
     ):
         self.project_service = project_service
         self.change_service = change_service
         self.calendar_reader = calendar_reader
         self.correction_service = correction_service
+        self.college_service = college_service
 
     def build(
         self,
@@ -312,6 +330,13 @@ class MorningStateService:
             consumer_id=consumer_id,
             evaluated_at=evaluated_at,
         )
+        college = self.college_service.build(
+            college_context_from_environment(),
+            CollegeBriefRequest(
+                evaluated_at=evaluated_at,
+                timezone_name=str(settings.local_tz),
+            ),
+        )
         return self.synthesize(
             projects=projects,
             change_window=change_window,
@@ -319,6 +344,7 @@ class MorningStateService:
             calendar_result=calendar_result,
             evaluated_at=evaluated_at,
             section_limit=section_limit,
+            college=college,
         )
 
     def synthesize(
@@ -330,6 +356,7 @@ class MorningStateService:
         calendar_result: CalendarReadResult,
         evaluated_at: datetime,
         section_limit: int = DEFAULT_SECTION_LIMIT,
+        college: CollegeBriefProjection | None = None,
     ) -> MorningStateSynthesis:
         _require_aware(evaluated_at, "evaluated_at")
         project_states = tuple(projects)
@@ -338,6 +365,12 @@ class MorningStateService:
             change_window,
             project_by_id=project_by_id,
             evaluated_at=evaluated_at,
+        )
+        college_projection = college or _unevaluated_college(evaluated_at)
+        changes = (
+            *(_college_statement(item, evaluated_at, change=True)
+              for item in college_projection.session_changes),
+            *changes,
         )
 
         base_reality_items = tuple(
@@ -374,6 +407,11 @@ class MorningStateService:
             )
             for item in attention_items
         )
+        attention = (
+            *(_college_statement(item, evaluated_at)
+              for item in college_projection.decisive_items),
+            *attention,
+        )
         if not attention:
             attention = (
                 _empty_attention_statement(
@@ -398,6 +436,10 @@ class MorningStateService:
             }
         ]
         handled.extend(
+            _college_statement(item, evaluated_at, waiting=True)
+            for item in college_projection.safe_to_wait
+        )
+        handled.extend(
             _pause_statement(project, evaluated_at)
             for project in project_states
             if project.focus.primary_state == ProjectFocusState.INTENTIONALLY_PAUSED
@@ -418,13 +460,31 @@ class MorningStateService:
             evaluated_at=evaluated_at,
         )
 
-        urgent_count = len(urgent_attention_items)
+        college_urgent_count = sum(
+            item.category
+            in {
+                "current_conflicts_blockers",
+                "required_obligations",
+                "preparation_pressure",
+                "learning_needs",
+                "coordination_blockers",
+            }
+            for item in college_projection.decisive_items
+        )
+        urgent_count = len(urgent_attention_items) + college_urgent_count
         complete = (
             reality_complete
             and change_window.checkpoint.coverage_complete
             and calendar_result.error is None
+            and (
+                college is None
+                or (
+                    college_projection.assessment_status == "ready"
+                    and college_projection.complete_for_scope
+                )
+            )
         )
-        if any(
+        if college_urgent_count or any(
             item.classification == RealityClassification.NEEDS_ACTION
             for item in urgent_attention_items
         ):
@@ -476,6 +536,13 @@ class MorningStateService:
                     *change_window.checkpoint.diagnostics,
                     *(item for project in project_states for item in project.provider_diagnostics),
                     *([calendar_result.error] if calendar_result.error else []),
+                    *college_projection.diagnostics,
+                    *(
+                        f"College {item.provider} coverage: {item.availability}/"
+                        f"{item.completeness}/{item.freshness} ({item.reason})."
+                        for item in college_projection.coverage_gaps
+                        if item.material_to_scope
+                    ),
                 ]
             )
         )
@@ -509,6 +576,7 @@ class MorningStateService:
             no_urgent_attention=urgent_count == 0 and complete,
             urgent_attention_count=urgent_count,
             briefing=briefing,
+            college=college_projection,
             changes_since_meaningful_check=sections[0],
             attention_today=sections[1],
             handled_paused_waiting=sections[2],
@@ -669,6 +737,73 @@ class MorningStateService:
 
 
 morning_state_service = MorningStateService()
+
+
+def _unevaluated_college(evaluated_at: datetime) -> CollegeBriefProjection:
+    return CollegeBriefProjection(
+        scope="cross_course",
+        scope_label="the cross-course view",
+        assessment_status="not_evaluated",
+        opening="College state was not included in this direct synthesis call.",
+    )
+
+
+def _college_statement(
+    item: CollegeBriefItem,
+    evaluated_at: datetime,
+    *,
+    change: bool = False,
+    waiting: bool = False,
+) -> MorningStatement:
+    if waiting:
+        section = MorningSectionId.HANDLED_PAUSED_WAITING
+        classification = RealityClassification.UPCOMING_NOT_ACTIONABLE
+    elif change:
+        section = MorningSectionId.CHANGES_SINCE_CHECK
+        classification = RealityClassification.NO_MEANINGFUL_CHANGE
+    else:
+        section = MorningSectionId.ATTENTION_TODAY
+        classification = {
+            "current_conflicts_blockers": RealityClassification.POTENTIAL_MISMATCH,
+            "material_unknowns": RealityClassification.UNKNOWN,
+        }.get(item.category, RealityClassification.NEEDS_ACTION)
+    availability = (
+        MorningAvailability.COMPLETE
+        if item.certainty == "confirmed"
+        else MorningAvailability.PARTIAL
+    )
+    confidence = {
+        "confirmed": MorningConfidence.HIGH,
+        "probable": MorningConfidence.MEDIUM,
+    }.get(item.certainty, MorningConfidence.UNKNOWN)
+    return MorningStatement(
+        statement_id=_stable_id(
+            "college", str(item.source_order), item.subject_id, item.category,
+            *item.evidence_refs,
+        ),
+        section=section,
+        classification=classification,
+        status=f"college:{item.source_order:03d}:{item.category}",
+        summary=item.summary,
+        reason=(
+            "This presentation preserves the recorded SID-250 attention category, "
+            "ordering, certainty, and evidence references read through SID-260."
+        ),
+        life_area_id="college",
+        source_evidence_references=item.evidence_refs or (
+            f"college-subject:{item.subject_id}",
+        ),
+        observed_at=evaluated_at,
+        freshness=MorningFreshness.FRESH,
+        availability=availability,
+        fact_type=MorningFactType.DETERMINISTIC_CONCLUSION,
+        confidence=confidence,
+        uncertainty=(
+            ("The recorded College item remains uncertain or reviewable.",)
+            if item.certainty not in {"confirmed", "probable"}
+            else ()
+        ),
+    )
 
 
 def _project_state(item: ProjectBrainProjectSnapshot) -> MorningProjectState:
@@ -1482,9 +1617,16 @@ def _statement_order_key(item: MorningStatement) -> tuple[Any, ...]:
         RealityClassification.NO_MEANINGFUL_CHANGE: 6,
     }
     due = item.temporal.due_at if item.temporal else None
+    college_order = 10_000
+    if item.status.startswith("college:"):
+        try:
+            college_order = int(item.status.split(":", 2)[1])
+        except (IndexError, ValueError):
+            college_order = 10_000
     return (
         rank[item.classification],
         due.isoformat() if due else "9999",
+        college_order,
         item.canonical_project_id or "",
         item.linked_work_identity.provider if item.linked_work_identity else "",
         item.linked_work_identity.provider_record_id if item.linked_work_identity else "",

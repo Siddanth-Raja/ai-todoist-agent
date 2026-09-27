@@ -26,6 +26,10 @@ from app.college_capture_api import (  # noqa: E402
     _request,
     create_college_capture_app,
 )
+from app.college_briefing import (  # noqa: E402
+    CollegeBriefRequest,
+    CollegeBriefingService,
+)
 from app.college_domain import (  # noqa: E402
     CollegeCommandIdentity,
     CollegeDomainService,
@@ -210,6 +214,70 @@ class CollegeCaptureTests(unittest.TestCase):
         self.assertIn("learning_need", fields)
         self.assertNotIn("submission", fields)
         self.assertNotIn("completion", fields)
+
+    def test_reviewed_capture_receipt_changes_next_shared_brief_without_duplicate_logging(self):
+        request = self._request(
+            "We covered derivatives; I'm lost on definition problems.",
+            command="brief-capture",
+            key="brief-capture-key",
+        )
+        first = self.adapter.record_college_update(self.auth, request)
+        duplicate = self.adapter.record_college_update(self.auth, request)
+        self.assertEqual(first["receipt_id"], duplicate["receipt_id"])
+        self.assertEqual(duplicate["delivery_disposition"], "duplicate")
+
+        assessment = self.adapter.record_college_update(
+            self.auth,
+            CollegeAssessmentRequest(
+                command_id="brief-assessment",
+                idempotency_key="brief-assessment-key",
+                authorized_scope={
+                    "kind": "course",
+                    "subject_ids": ["section-calc"],
+                    "course_ids": ["course-calc"],
+                },
+                horizon={
+                    "start": NOW.isoformat(),
+                    "end": (NOW + timedelta(days=1)).isoformat(),
+                },
+                timezone_name="America/Chicago",
+                valid_through=NOW + timedelta(hours=1),
+            ),
+        )
+        self.assertEqual(assessment["outcome"], "applied")
+
+        service = CollegeBriefingService(
+            read_service_factory=lambda: CollegeReadService(
+                self.db_path, clock=lambda: NOW
+            )
+        )
+        brief = service.build(
+            TrustedCollegeContext(
+                "actor-a",
+                "workspace-a",
+                allowed_course_ids=frozenset({"course-calc"}),
+                allow_cross_course=False,
+            ),
+            CollegeBriefRequest(
+                evaluated_at=NOW,
+                timezone_name="America/Chicago",
+                scope="course",
+                course_ids=("course-calc",),
+                horizon_end=NOW + timedelta(days=1),
+            ),
+        )
+
+        self.assertEqual(brief.assessment_status, "ready")
+        self.assertTrue(
+            any("Learning is still needed" in item.summary for item in brief.decisive_items)
+        )
+        with database_connection() as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM college_receipts WHERE command_id='brief-capture'"
+                ).fetchone()[0],
+                1,
+            )
 
     def test_same_delivery_returns_original_receipt_and_changed_payload_conflicts(self):
         original = self._request(

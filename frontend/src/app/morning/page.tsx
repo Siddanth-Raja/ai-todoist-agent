@@ -820,13 +820,26 @@ export default function MorningPage() {
         />
       </section>
 
-      {synthesis.provider_diagnostics.length ? (
+      {synthesis.provider_diagnostics.length || synthesis.college.coverage_gaps.length ? (
         <details className="rounded-[1.6rem] border border-white/10 bg-white/[0.035]">
           <summary id="morning-limitations" className="flex min-h-12 cursor-pointer items-center justify-between gap-3 px-5 py-4 text-sm font-medium text-stone-300">
             Evidence limitations
             <ChevronDown className="h-4 w-4" aria-hidden="true" />
           </summary>
-          <ul className="list-disc space-y-2 border-t border-white/10 px-9 py-4 text-sm leading-6 text-stone-400">{synthesis.provider_diagnostics.map((item) => <li key={item}>{item}</li>)}</ul>
+          <div className="space-y-4 border-t border-white/10 px-9 py-4 text-sm leading-6 text-stone-400">
+            {synthesis.provider_diagnostics.length ? (
+              <ul className="list-disc space-y-2">{synthesis.provider_diagnostics.map((item) => <li key={item}>{item}</li>)}</ul>
+            ) : null}
+            {synthesis.college.coverage_gaps.map((gap) => (
+              <p key={`${gap.provider}:${gap.account_id ?? "default"}`}>
+                <span className="capitalize text-stone-200">{gap.provider}</span> College coverage is {gap.availability}/{gap.completeness}/{gap.freshness} ({gap.reason.replaceAll("_", " ")}).
+                {gap.provider.toLowerCase() === "blinn" ? " Blinn remains pending; this does not imply that its mailbox was checked." : ""}
+              </p>
+            ))}
+            {synthesis.college.evidence_refs.length ? (
+              <p className="break-words">College evidence references: {synthesis.college.evidence_refs.join(" · ")}</p>
+            ) : null}
+          </div>
         </details>
       ) : null}
 

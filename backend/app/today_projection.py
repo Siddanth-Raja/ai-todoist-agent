@@ -1,8 +1,14 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from .calendar_time import CalendarTimeState, normalize_calendar_time
 from .calendar_tools import list_remaining_today_events
+from .college_briefing import (
+    CollegeBriefRequest,
+    CollegeBriefingService,
+    college_briefing_service,
+    college_context_from_environment,
+)
 from .project_brain import (
     ProjectBrainProjectSnapshot,
     ProjectBrainSnapshot,
@@ -45,11 +51,20 @@ CONTEXT_SIGNAL_NAMES = {
 
 
 class TodayProjectionService:
+    def __init__(
+        self,
+        *,
+        college_service: CollegeBriefingService = college_briefing_service,
+    ) -> None:
+        self.college_service = college_service
+
     def build(
         self,
         *,
         settings: Any,
         current_time: datetime | None = None,
+        college_scope: Literal["course", "cross_course"] = "cross_course",
+        college_course_ids: tuple[str, ...] = (),
     ) -> dict[str, Any]:
         project_snapshot = project_brain_service.snapshot(
             settings=settings,
@@ -109,6 +124,34 @@ class TodayProjectionService:
         current_free_block = _today_free_block_payload(
             calendar_time,
         )
+        college = self.college_service.build(
+            college_context_from_environment(),
+            CollegeBriefRequest(
+                evaluated_at=calendar_time.now,
+                timezone_name=str(settings.local_tz),
+                scope=college_scope,
+                course_ids=college_course_ids,
+            ),
+        )
+        recommendation = _today_recommendation(
+            project_snapshot=project_snapshot,
+            personal_reality=personal_reality,
+            calendar_time=calendar_time,
+            current_action=current_action,
+            must_do=must_do,
+            errors=errors,
+        )
+        recommendation["evidence"].append(
+            {
+                "signal": "college_attention_projection",
+                "value": college.model_dump(mode="json"),
+                "score_delta": 0,
+                "explanation": (
+                    "Recorded SID-250 attention is presented through the side-effect-free "
+                    "SID-260 read boundary; it does not affect task ranking."
+                ),
+            }
+        )
 
         return {
             "now": calendar_time.now.isoformat(),
@@ -131,14 +174,7 @@ class TodayProjectionService:
                 for item in personal_reality.items
                 if _reviewable_now(item)
             ][:12],
-            "recommendation": _today_recommendation(
-                project_snapshot=project_snapshot,
-                personal_reality=personal_reality,
-                calendar_time=calendar_time,
-                current_action=current_action,
-                must_do=must_do,
-                errors=errors,
-            ),
+            "recommendation": recommendation,
             "life_areas": _life_area_projections(project_snapshot),
             "errors": list(errors),
         }

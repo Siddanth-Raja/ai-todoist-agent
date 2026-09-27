@@ -300,6 +300,53 @@ export type LifeArea = {
   degraded: boolean;
 };
 
+export type CollegeBriefItem = {
+  subject_id: string;
+  subject_label: string;
+  category: string;
+  categories: string[];
+  summary: string;
+  certainty: string;
+  due_lower_bound: string | null;
+  evidence_refs: string[];
+  source_order: number;
+};
+
+export type CollegeCoverageGap = {
+  provider: string;
+  account_id: string | null;
+  availability: string;
+  completeness: string;
+  freshness: string;
+  reason: string;
+  material_to_scope: boolean;
+  evidence_ref: string | null;
+};
+
+export type CollegeBriefProjection = {
+  schema_version: "college-brief/1.0";
+  scope: "course" | "cross_course";
+  course_ids: string[];
+  scope_label: string;
+  assessment_status: string;
+  assessed_at: string | null;
+  valid_through: string | null;
+  opening: string;
+  primary: CollegeBriefItem | null;
+  decisive_items: CollegeBriefItem[];
+  session_changes: CollegeBriefItem[];
+  safe_to_wait: CollegeBriefItem[];
+  coverage_gaps: CollegeCoverageGap[];
+  evidence_refs: string[];
+  diagnostics: string[];
+  complete_for_scope: boolean;
+  whole_college_reassurance: boolean;
+  ordinary_read_side_effect_free: true;
+  assessment_requested: false;
+  provider_refresh_performed: false;
+  interaction_cursor_advanced: false;
+};
+
 export type TodayResponse = {
   now: string;
   now_display: string;
@@ -772,6 +819,7 @@ export type MorningStateSynthesis = {
   no_urgent_attention: boolean;
   urgent_attention_count: number;
   briefing: MorningBriefPresentation;
+  college: CollegeBriefProjection;
   changes_since_meaningful_check: MorningSection;
   attention_today: MorningSection;
   handled_paused_waiting: MorningSection;

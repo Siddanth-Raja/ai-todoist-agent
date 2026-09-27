@@ -22,6 +22,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   formatDateTime,
   type ActivityEntry,
+  type CollegeBriefProjection,
   type LifeArea,
   type TodayResponse,
 } from "@/lib/api";
@@ -204,6 +205,16 @@ export default function TodayPage() {
   const mustDo = todayData?.must_do ?? null;
   const mustDoPresentation = mustDo ? todayMustDoPresentation(mustDo) : null;
   const recommendation = todayData?.recommendation ?? null;
+  const collegeEvidence = recommendation?.evidence.find(
+    (item) => item.signal === "college_attention_projection",
+  );
+  const college = (
+    collegeEvidence?.value &&
+    typeof collegeEvidence.value === "object" &&
+    (collegeEvidence.value as { schema_version?: string }).schema_version === "college-brief/1.0"
+      ? collegeEvidence.value as CollegeBriefProjection
+      : null
+  );
   const recommendationBadge = todayRecommendationBadge(recommendation);
   const recommendationPresentation = todayRecommendationPresentation(recommendation);
   const shouldPrepare = recommendation?.type === "prepare";
@@ -431,6 +442,62 @@ export default function TodayPage() {
           )}
         </SoftCard>
       </section>
+
+      {college ? (
+        <section className="min-w-0 space-y-5 xl:col-span-2" aria-labelledby="today-college-heading">
+          <SectionTitle
+            eyebrow="College"
+            title="What matters from school"
+            detail="Recorded College attention from the same canonical assessment used by the Morning Brief."
+          />
+          <SoftCard className="p-5 md:p-7">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="max-w-3xl">
+                <p id="today-college-heading" className="text-lg font-medium leading-7 text-pearl">
+                  {college.opening}
+                </p>
+                <p className="mt-2 text-xs uppercase tracking-[0.16em] text-stone-500">
+                  Assessment {college.assessment_status.replaceAll("_", " ")} · {college.scope_label}
+                </p>
+              </div>
+              <span className={`rounded-full px-3 py-1 text-xs font-medium ${
+                college.complete_for_scope ? "bg-moss/10 text-moss" : "bg-gold/12 text-gold"
+              }`}>
+                {college.complete_for_scope ? "Scope covered" : "Limits apply"}
+              </span>
+            </div>
+
+            {college.decisive_items.length > 1 ? (
+              <ul className="mt-5 grid gap-3 md:grid-cols-2">
+                {college.decisive_items.slice(1).map((item) => (
+                  <li key={`${item.subject_id}:${item.source_order}`} className="rounded-2xl border border-white/10 bg-black/15 p-4 text-sm leading-6 text-stone-300">
+                    {item.summary}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+
+            {college.coverage_gaps.length || college.evidence_refs.length ? (
+              <details className="mt-5 rounded-2xl border border-white/10 bg-black/15">
+                <summary className="min-h-11 cursor-pointer px-4 py-3 text-sm font-medium text-stone-300">
+                  Evidence and coverage limits
+                </summary>
+                <div className="space-y-3 border-t border-white/10 p-4 text-sm leading-6 text-stone-400">
+                  {college.coverage_gaps.map((gap) => (
+                    <p key={`${gap.provider}:${gap.account_id ?? "default"}`}>
+                      <span className="capitalize text-stone-200">{gap.provider}</span>: {gap.availability}/{gap.completeness}/{gap.freshness} ({gap.reason.replaceAll("_", " ")})
+                      {gap.provider.toLowerCase() === "blinn" ? " — Blinn remains pending; no mailbox check is implied." : ""}
+                    </p>
+                  ))}
+                  {college.evidence_refs.length ? (
+                    <p className="break-words">Evidence references: {college.evidence_refs.join(" · ")}</p>
+                  ) : null}
+                </div>
+              </details>
+            ) : null}
+          </SoftCard>
+        </section>
+      ) : null}
 
       {todayData?.reality_attention.length ? (
         <section className="min-w-0 space-y-5 xl:col-span-2">

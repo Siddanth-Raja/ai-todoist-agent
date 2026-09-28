@@ -184,6 +184,31 @@ Expected shape:
 
 ## SID-260 College read surface
 
+### Local College app surface (SID-251)
+
+The app's College capture, context, consent, and status controls use the
+standalone `app.college_surface_api` entrypoint. It composes the existing
+SID-260 read and SID-261 capture routes over the same configured SQLite file,
+and adds bounded SID-151 consent/context review transport. It does not register
+with `app.main`, migrate storage, poll providers, or execute protected actions.
+The browser Settings page uses a separate College service URL (default
+`http://127.0.0.1:8003`) and the existing API key. Configure the server-bound
+`COLLEGE_ACTOR_ID`, `COLLEGE_WORKSPACE_ID`, and College authorization scope as
+described below, then run locally from `backend/`:
+
+```bash
+uvicorn app.college_surface_api:app --host 127.0.0.1 --port 8003
+```
+
+Only `http://localhost:3010` and `http://127.0.0.1:3010` may make browser
+requests to this local surface. Broad context review requires both College
+authenticators to allow cross-course access with no narrower course or section
+allowlist; otherwise it denies rather than showing unrelated unbound context.
+Ordinary surface GETs open SQLite read-only and do not initialize the database.
+Use an explicitly initialized isolated test database for local demonstrations.
+The app does not expose a College message feed or message links because the
+current authorized College read contract has neither.
+
 The least-privilege College read surface is intentionally separate from the
 main application entrypoint while the unrelated SID-249 changes there remain
 paused. It exposes exactly two authenticated, side-effect-free operations:

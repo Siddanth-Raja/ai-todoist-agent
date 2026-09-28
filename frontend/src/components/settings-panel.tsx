@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { AlertCircle, CheckCircle2, Loader2, RefreshCw, Save } from "lucide-react";
-import { DEFAULT_BACKEND_URL, normalizeBackendUrl, readAgentSettings, saveAgentSettings } from "@/lib/settings";
+import { DEFAULT_BACKEND_URL, DEFAULT_COLLEGE_URL, normalizeBackendUrl, readAgentSettings, saveAgentSettings } from "@/lib/settings";
 
 type HealthStatus = "idle" | "checking" | "ok" | "warning" | "error";
 
@@ -36,6 +36,7 @@ const INITIAL_CHECKS: HealthCheck[] = [
 
 export function SettingsPanel() {
   const [backendUrl, setBackendUrl] = useState(DEFAULT_BACKEND_URL);
+  const [collegeUrl, setCollegeUrl] = useState(DEFAULT_COLLEGE_URL);
   const [apiKey, setApiKey] = useState("");
   const [saved, setSaved] = useState(false);
   const [healthChecks, setHealthChecks] = useState<HealthCheck[]>(INITIAL_CHECKS);
@@ -44,12 +45,14 @@ export function SettingsPanel() {
   useEffect(() => {
     const settings = readAgentSettings();
     setBackendUrl(settings.backendUrl);
+    setCollegeUrl(settings.collegeUrl);
     setApiKey(settings.apiKey);
   }, []);
 
   function handleSave() {
-    const settings = saveAgentSettings({ backendUrl, apiKey });
+    const settings = saveAgentSettings({ backendUrl, collegeUrl, apiKey });
     setBackendUrl(settings.backendUrl);
+    setCollegeUrl(settings.collegeUrl);
     setApiKey(settings.apiKey);
     setSaved(true);
     window.setTimeout(() => setSaved(false), 1800);
@@ -178,6 +181,19 @@ export function SettingsPanel() {
               className="mt-2 min-h-14 w-full rounded-lg border border-line bg-white/[0.04] px-4 text-base text-stone-50 outline-none transition placeholder:text-stone-600 focus:border-moss/70 focus:bg-white/[0.06]"
               inputMode="url"
             />
+          </label>
+
+          <label className="block">
+            <span className="text-sm font-medium text-stone-200">College service URL</span>
+            <input
+              value={collegeUrl}
+              onChange={(event) => setCollegeUrl(event.target.value)}
+              placeholder={DEFAULT_COLLEGE_URL}
+              className="mt-2 min-h-14 w-full rounded-lg border border-line bg-white/[0.04] px-4 text-base text-stone-50 outline-none transition placeholder:text-stone-600 focus:border-moss/70 focus:bg-white/[0.06]"
+              inputMode="url"
+              aria-describedby="college-url-help"
+            />
+            <span id="college-url-help" className="mt-2 block text-xs leading-5 text-stone-400">Local College read, capture, and review service. It uses the same saved API key.</span>
           </label>
 
           <label className="block">

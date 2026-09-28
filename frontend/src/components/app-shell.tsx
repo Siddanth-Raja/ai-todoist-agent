@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Brain,
+  Leaf,
+  Menu,
   CalendarDays,
   CheckSquare,
   FolderKanban,
@@ -43,26 +45,50 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const currentItem = getCurrentItem(pathname);
   const isChatRoute = pathname === "/chat";
 
+  if (pathname === "/today" || pathname === "/morning") {
+    const primary = ["/today", "/calendar", "/morning", "/projects", "/chat"];
+    const primaryItems = primary.map((href) => navItems.find((item) => item.href === href)!);
+    const otherItems = navItems.filter((item) => !primary.includes(item.href) && item.href !== "/settings");
+    const navLink = (item: typeof navItems[number]) => <Link key={item.href} href={item.href} aria-current={pathname === item.href ? "page" : undefined}><item.icon size={20} aria-hidden="true" /><span>{item.label}</span></Link>;
+    return <div data-calm="true" className="daily-shell">
+      <a href="#main-content" className="skip-link">Skip to content</a>
+      <aside className="daily-sidebar">
+        <Link href="/today" className="daily-brand"><Leaf size={26} aria-hidden="true" /><span>PCOS</span></Link>
+        <nav aria-label="Main navigation">{primaryItems.map(navLink)}<details className="daily-more"><summary><Menu size={20} aria-hidden="true" />More</summary><div>{otherItems.map(navLink)}</div></details></nav>
+        <Link href="/settings" className="daily-settings"><Settings size={20} aria-hidden="true" />Settings</Link>
+      </aside>
+      <div className="daily-main-column">
+        <div className="daily-mobile-brand"><span><Leaf size={19} aria-hidden="true" />PCOS</span><Link href="/settings" aria-label="Settings"><Settings size={19} aria-hidden="true" /></Link></div>
+        <main id="main-content" tabIndex={-1}>{children}</main>
+      </div>
+      <nav className="daily-mobile-nav" aria-label="Mobile navigation">
+        {["/today", "/calendar", "/projects"].map((href) => navLink(navItems.find((item) => item.href === href)!))}
+        <details className="daily-mobile-more"><summary><Menu size={20} aria-hidden="true" /><span>More</span></summary><div>{navItems.filter((item) => !["/today", "/calendar", "/projects"].includes(item.href)).map(navLink)}</div></details>
+      </nav>
+    </div>;
+  }
+
   return (
-    <div className="h-screen overflow-hidden text-pearl">
+    <div data-calm={pathname === "/morning" || pathname === "/today" ? "true" : undefined} className="h-screen overflow-hidden text-pearl">
+      <a href="#main-content" className="skip-link">Skip to content</a>
       <div className="pointer-events-none fixed inset-0 -z-10 opacity-80">
         <div className="absolute left-[-8rem] top-24 h-72 w-72 rounded-full bg-iris/10 blur-3xl" />
         <div className="absolute right-[-10rem] top-10 h-96 w-96 rounded-full bg-moss/10 blur-3xl" />
       </div>
 
-      <div className="mx-auto flex h-full w-full max-w-[1680px] gap-6 overflow-hidden px-3 pb-24 pt-3 md:px-6 xl:px-8 xl:pb-6">
+      <div className="shell-frame mx-auto flex h-full w-full max-w-[1680px] gap-6 overflow-hidden px-3 pb-24 pt-3 md:px-6 xl:px-8 xl:pb-6">
         <aside className="sticky top-6 hidden h-[calc(100dvh-3rem)] w-72 shrink-0 rounded-[2rem] border border-white/10 bg-white/[0.055] p-3 shadow-soft backdrop-blur-2xl xl:block">
           <div className="px-4 pb-5 pt-4">
             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-pearl text-ink shadow-card">
               <Sparkles className="h-5 w-5" aria-hidden="true" />
             </div>
             <p className="text-xs font-medium uppercase tracking-[0.28em] text-moss">Personal OS</p>
-            <h1 className="mt-2 text-2xl font-semibold tracking-normal text-pearl">Chief of Staff</h1>
+            <h1 className="mt-2 text-2xl font-semibold tracking-normal text-pearl">{pathname === "/morning" || pathname === "/today" ? "PCOS" : "Chief of Staff"}</h1>
             <p className="mt-3 text-sm leading-5 text-stone-400">
               A calm command surface for the next right move.
             </p>
           </div>
-          <nav className="space-y-1.5">
+          <nav aria-label="Main navigation" className="space-y-1.5">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = pathname === item.href;
@@ -71,6 +97,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Link
                   key={item.href}
                   href={item.href}
+                  aria-current={isActive ? "page" : undefined}
                   className={`group flex min-h-14 items-center gap-3 rounded-2xl px-4 transition ${
                     isActive
                       ? "bg-pearl text-ink shadow-card"
@@ -106,12 +133,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </div>
               <div className="hidden items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-2 text-xs text-stone-400 md:flex">
                 <span className="h-2 w-2 rounded-full bg-moss shadow-[0_0_18px_rgba(167,232,196,0.7)]" />
-                Live day
+                {pathname === "/morning" || pathname === "/today" ? "Daily view" : "Live day"}
               </div>
             </div>
           </header>
 
           <main
+            id="main-content" tabIndex={-1}
             className={`min-h-0 min-w-0 flex-1 px-1 pt-1 md:px-0 ${
               isChatRoute ? "overflow-hidden" : "overflow-y-auto overflow-x-hidden"
             }`}
@@ -121,7 +149,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-30 px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] xl:hidden">
+      <nav aria-label="Mobile navigation" className="fixed inset-x-0 bottom-0 z-30 px-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)] xl:hidden">
         <div className="mx-auto flex w-full gap-1 overflow-x-auto scroll-px-2 rounded-[1.6rem] border border-white/10 bg-black/55 p-2 shadow-soft backdrop-blur-2xl">
           {navItems.map((item) => {
             const Icon = item.icon;

@@ -128,14 +128,14 @@ test("Life Area layout is one responsive rule for representative counts without 
   assert.doesNotMatch(LIFE_AREA_GRID_CLASS, /grid-cols-5/);
 });
 
-test("Must do remains before and distinct from Recommended work", () => {
-  const mustDoIndex = todaySource.indexOf('eyebrow="Must do"');
+test("Recommendation leads while Must do remains a distinct obligation list", () => {
+  const mustDoIndex = todaySource.indexOf('aria-label="Must do"');
   const recommendationIndex = todaySource.indexOf(
-    "data-recommendation-prominence",
+    'className="today-lead',
   );
   assert.ok(mustDoIndex >= 0);
-  assert.ok(recommendationIndex > mustDoIndex);
-  assert.match(todaySource, /border-coral\/20/);
+  assert.ok(recommendationIndex >= 0 && recommendationIndex < mustDoIndex);
+  assert.match(todaySource, /daily-obligations/);
 });
 
 test("Calendar sparse modes are compact while populated modes retain full content", () => {

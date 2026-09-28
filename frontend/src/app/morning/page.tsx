@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { CollegeReview } from "@/components/college-review";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowUpRight,
@@ -433,6 +434,7 @@ export default function MorningPage() {
   const query = useRetainedApiQuery<MorningStateSynthesis>("/morning-state");
   const synthesis = query.data;
   const [pending, setPending] = useState(false);
+  const [collegeStale, setCollegeStale] = useState(false);
   const [announcement, setAnnouncement] = useState<string | null>(null);
   const [history, setHistory] = useState<Record<string, MorningCorrection[]>>({});
   const [historyLoading, setHistoryLoading] = useState<string | null>(null);
@@ -444,6 +446,16 @@ export default function MorningPage() {
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const previewTrigger = useRef<HTMLButtonElement | null>(null);
+
+  async function refreshAfterCollegeChange() {
+    try {
+      await query.refresh();
+      setCollegeStale(false);
+    } catch {
+      setCollegeStale(true);
+      setAnnouncement("College changed, but the Morning Brief could not refresh. The previous judgment is hidden until refresh succeeds.");
+    }
+  }
 
   const closeDialog = () => {
     setDialogOpen(false);
@@ -577,6 +589,15 @@ export default function MorningPage() {
     );
   }
 
+  if (collegeStale) {
+    return <div className="mx-auto w-full max-w-4xl space-y-4 px-4 pb-12">
+      <h1 className="text-2xl font-semibold text-pearl">Morning Brief needs refresh</h1>
+      <p className="text-sm leading-6 text-stone-300">College state changed. The prior brief is hidden until a fresh read succeeds.</p>
+      <button type="button" onClick={() => void refreshAfterCollegeChange()} className="min-h-11 rounded-xl border border-white/15 px-4 text-stone-200">Retry brief refresh</button>
+      <CollegeReview brief={synthesis.college} briefStale onChange={refreshAfterCollegeChange} />
+    </div>;
+  }
+
   const primaryStatement = synthesis.attention_today.statements.find(
     (item) => item.statement_id === synthesis.briefing.primary_statement_id,
   );
@@ -596,14 +617,14 @@ export default function MorningPage() {
   );
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-8 px-3 pb-12 sm:px-4 md:px-6">
-      <section className="overflow-hidden rounded-[2.2rem] border border-white/12 bg-gradient-to-br from-moss/[0.13] via-white/[0.055] to-iris/[0.09] p-5 shadow-soft sm:p-7 md:p-9">
+    <div className="morning-view mx-auto w-full max-w-6xl space-y-8 px-3 pb-12 sm:px-4 md:px-6">
+      <section className="morning-lead overflow-hidden rounded-[2.2rem] border border-white/12 bg-gradient-to-br from-moss/[0.13] via-white/[0.055] to-iris/[0.09] p-5 shadow-soft sm:p-7 md:p-9">
         <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
           <div className="max-w-3xl">
             <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-pearl text-ink shadow-card"><SunMedium className="h-5 w-5" aria-hidden="true" /></div>
             <p className="mt-6 text-xs font-medium uppercase tracking-[0.28em] text-moss">Today&apos;s brief</p>
             <h1 className="mt-2 text-3xl font-semibold tracking-tight text-pearl sm:text-4xl md:text-5xl">{synthesis.briefing.headline}</h1>
-            <p className="mt-4 max-w-2xl text-base leading-7 text-stone-300">{synthesis.briefing.summary}</p>
+            {synthesis.briefing.summary !== primaryStatement?.summary ? <p className="mt-4 max-w-2xl text-base leading-7 text-stone-300">{synthesis.briefing.summary}</p> : null}
           </div>
           <div className="flex flex-wrap gap-2 md:max-w-xs md:justify-end">
             <span className="rounded-full border border-white/10 bg-black/20 px-3 py-2 text-xs text-stone-300">Evaluated {formatDateTime(synthesis.evaluated_at)}</span>
@@ -645,6 +666,9 @@ export default function MorningPage() {
         {announcement ? <p role="status" aria-live="polite" className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3 text-sm text-stone-200">{announcement}</p> : null}
       </section>
 
+      <CollegeReview brief={synthesis.college} onChange={refreshAfterCollegeChange} />
+
+      <details className="day-details"><summary className="min-h-12 cursor-pointer py-4">More of your day</summary><div className="space-y-8 py-4">
       <section aria-labelledby="morning-section-0" className="space-y-4">
         <SectionHeading
           section={synthesis.changes_since_meaningful_check}
@@ -820,6 +844,8 @@ export default function MorningPage() {
         />
       </section>
 
+      </div></details>
+
       {synthesis.provider_diagnostics.length || synthesis.college.coverage_gaps.length ? (
         <details className="rounded-[1.6rem] border border-white/10 bg-white/[0.035]">
           <summary id="morning-limitations" className="flex min-h-12 cursor-pointer items-center justify-between gap-3 px-5 py-4 text-sm font-medium text-stone-300">
@@ -844,7 +870,7 @@ export default function MorningPage() {
       ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 py-4 text-sm text-stone-500">
-        <p className="inline-flex items-center gap-2"><Sparkles className="h-4 w-4" aria-hidden="true" /> Grounded in current connected reality.</p>
+        <p className="inline-flex items-center gap-2"><Sparkles className="h-4 w-4" aria-hidden="true" /> Based on the available evidence.</p>
         <Link href="/today" className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/10 px-4 text-stone-200 hover:bg-white/[0.06]">Open Today <ArrowUpRight className="h-4 w-4" aria-hidden="true" /></Link>
       </div>
 

@@ -959,6 +959,41 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
   return payload as T;
 }
 
+export class CollegeRequestError extends Error {
+  constructor(message: string, public readonly status: number, public readonly code: string | null) {
+    super(message);
+    this.name = "CollegeRequestError";
+  }
+}
+
+export async function collegeApiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const settings = readAgentSettings();
+  if (!settings.apiKey) {
+    throw new Error("Add your API key in Settings to use College review.");
+  }
+  const response = await fetch(`${settings.collegeUrl}${path}`, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${settings.apiKey}`,
+      ...(typeof options.body !== "undefined" ? { "Content-Type": "application/json" } : {}),
+      ...options.headers,
+    },
+  });
+  const body = await response.text();
+  const payload = body ? JSON.parse(body) : null;
+  if (!response.ok) {
+    const detail = payload?.detail;
+    throw new CollegeRequestError(
+      typeof detail === "string" ? detail :
+      typeof detail?.message === "string" ? detail.message :
+      `College service returned ${response.status}`,
+      response.status,
+      typeof detail?.code === "string" ? detail.code : null,
+    );
+  }
+  return payload as T;
+}
+
 export function formatDateTime(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
     month: "short",

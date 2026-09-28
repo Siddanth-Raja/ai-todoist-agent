@@ -1,6 +1,14 @@
 # Personal Chief of Staff (PCOS)
 
-> **Current state — SID-259 contract approved for documentation-only publication; external-Blinn-blocker exception retained. Git and the Obsidian export manifest determine publication state.**
+> **Current working state — SID-251 appearance approved; final publication candidate remains unstaged and unpublished (September 28, 2026).**
+>
+> - **Local committed baseline:** `8f9ad0dc28d0ea4df76edcb54d4de375ef309a86` (SID-147 daily College projections). This checkpoint does not assert a fresh remote or deployed-state readback.
+> - **Approved:** the user accepted the current SID-251 appearance as sufficient for this release and stopped further visual redesign. This is appearance approval and publication-candidate preparation, not permission to publish or evidence of connected-product acceptance.
+> - **Working candidate:** section 79 records the complete 15-path SID-251 scope, safeguards, final-byte verification, and remaining limitations. The standalone app surface and Today/Morning capture/review UI are local, uncommitted work.
+> - **Preserved:** all ten SID-249 paths listed in section 78.1 remain byte-identical and unstaged. Blinn remains pending administrator approval with unknown completeness/freshness; no mailbox check is claimed.
+> - **Gate:** no staging, commit, push, Obsidian export, deployment, issue closure, or downstream start is authorized by this checkpoint. Earlier sections retain historical status language; use this block and section 79 for the current working candidate.
+
+> **Historical SID-259 checkpoint — SID-259 contract approved for documentation-only publication; external-Blinn-blocker exception retained. Git and the Obsidian export manifest determine publication state.**
 >
 > - **Prior published baseline:** `7ab17579c26df71591618487282c6050624d32ef` was the architecture/roadmap documentation publication before this exception. The exception changes documentation only, not implementation code.
 > - **Active unfinished work:** SID-249 remains In Progress, uncommitted and unshipped; its existing Blinn implementation bytes and authentication/live-verification gates are preserved. Administrator approval is pending, so provider work is externally paused. SID-259’s schema and ownership rules are approved for documentation-only publication; its approved contract is [the provider-neutral College contract](PCOS-college-contract.md).
@@ -8,7 +16,7 @@
 > - **Approved direction:** [PCOS product architecture](PCOS-product-architecture.md) and section 73 record the published architecture and external-pause exception. Section 74 records the SID-259 approval and publication gate.
 > - **Unimplemented:** the PCOS College bridge, conversational capture lifecycle and cross-conversation/app continuity have not shipped. Architecture approval does not establish functionality or satisfy implementation/acceptance gates.
 >
-> Sections 1–73 retain their historical publication wording. Use this block and section 74 for the current state; do not reinterpret older status or mirror-sync statements as current instructions.
+> Sections 1–73 retain their historical publication wording. This historical block describes the section 74 checkpoint; do not reinterpret older status or mirror-sync statements as current instructions.
 
 ## Canonical Engineering and Product Handoff
 
@@ -11197,3 +11205,151 @@ No SID-249 path is part of the publication. Publication and SID-261 closeout do
 not connect ChatGPT, deploy either API, initialize production storage, start
 SID-147, grant provider authority, or perform a task, Calendar, email, LMS or
 other provider action. Those remain separately reviewed downstream work.
+
+
+---
+
+# 79. SID-251 final publication candidate — working and unpublished
+
+**September 28, 2026: appearance approved; implementation frozen for publication review.**
+The user approved the current appearance as sufficient for this release and
+requested candidate reconciliation only. Local HEAD remains
+`8f9ad0dc28d0ea4df76edcb54d4de375ef309a86`; the index is empty. No publication,
+remote reconciliation, deployment, issue closeout, or downstream work is part
+of this checkpoint. This section supersedes stale current-state implications
+in the historical opening block without changing its recorded history.
+
+## 79.1 Complete SID-251 candidate scope
+
+The candidate contains exactly these **15 paths**, including this handoff.
+This list covers all SID-251 working changes against HEAD, not merely the five
+files touched during the last visual revision.
+
+| Path | Candidate responsibility |
+| --- | --- |
+| `backend/README.md` | Standalone local College service setup, scope and limits |
+| `backend/app/college_surface_api.py` | Compose existing read/capture routes; bounded authenticated consent, binding, context and status transport |
+| `backend/tests/test_college_surface_api.py` | Read-only, authorization, consent, capture, lifecycle and receipt regression coverage |
+| `frontend/src/app/globals.css` | Approved responsive white-glass daily surfaces, controls and navigation |
+| `frontend/src/app/morning/page.tsx` | Shared College review integration and hide stale judgment after mutation/failed refresh |
+| `frontend/src/app/today/page.tsx` | Authoritative recommendation-led composition, timeline/attention/context, projects/activity, capture/recovery launcher |
+| `frontend/src/components/app-shell.tsx` | Compact daily navigation and accessible mobile destinations |
+| `frontend/src/components/college-review.tsx` | Consent-aware capture, receipts, corrections/removal, conflicts, disclosures and recovery controls |
+| `frontend/src/components/settings-panel.tsx` | Separate College service connection setting |
+| `frontend/src/lib/api.ts` | College service request boundary and typed errors |
+| `frontend/src/lib/settings.ts` | College URL persistence alongside existing connection settings |
+| `frontend/src/lib/college-review.ts` | Bounded projections/read coordination and connection-scoped durable retry journal |
+| `frontend/tests/college-review.test.mjs` | Paging, disclosure, invalidation, journal identity/reload and fail-closed regression tests |
+| `frontend/tests/surface-hierarchy-presentation.test.mjs` | Approved recommendation-first hierarchy expectation |
+| `docs/PCOS-handoff.md` | This working/unpublished scope and verification record |
+
+The ten unrelated SID-249 paths and their SHA-256 values are listed in section
+78.1. They are excluded from this candidate and were reverified unchanged and
+unstaged during final reconciliation. No provider/domain contract module is
+modified by SID-251. Fixtures, screenshots, comparison pages and verification
+logs remain outside application source, under temporary review directories;
+they are not publication paths.
+
+## 79.2 Implemented behavior and preserved boundaries
+
+The standalone `app.college_surface_api` composes the published SID-260 reads
+and SID-261 capture handlers over the configured shared SQLite store, adding
+bounded SID-151 consent/context review transport. It does not integrate through
+the frozen `app.main` or `config.py`, add another memory/domain store, poll
+providers, or create a general message feed. Ordinary reads do not initialize
+storage. Actor/workspace and authorization scope are server-bound; broad context
+review requires the existing unrestricted cross-course authorization boundary.
+Local browser origins remain limited to the two loopback port-3010 origins.
+
+Today and Morning use existing authoritative projections. Today renders the
+recommendation unchanged, keeps provider obligations distinct from the College
+assessment, and does not invent ranking or whole-day reassurance from a
+course-only conclusion. Calendar commitments, upcoming College context,
+project state and activity retain their existing sources. Unsupported chart,
+search, microphone, weekly selector, message-count and completion-ring widgets
+are omitted. Additional navigation destinations remain reachable through More.
+The approved appearance is frozen; no further redesign is part of preparation.
+
+Capture remains limited to the reviewed initial language families: Calc
+session/topic/check/warning, ENGR Topic 4 individual/team reports, and
+derivatives/definition-problems learning needs. Unmatched or consequentially
+ambiguous text remains for review. Consent, durable receipt outcomes,
+correction/removal, conflict visibility, and provider-action safeguards remain
+intact. No arbitrary conversational understanding or outside action is implied.
+Blinn remains pending administrator approval, with unknown coverage/freshness
+and no fabricated mailbox timestamps.
+
+Unresolved requests retain exact identity and payload through reload in a
+connection-scoped session-storage journal. Status lookup precedes exact retry;
+corrupt/unavailable storage fails closed. Retry text expires after seven days;
+closing the tab or clearing browser storage can remove recovery information.
+The Today launcher prioritizes pending recovery instead of scrolling past its
+controls. A failed parent refresh after a College mutation hides the prior
+judgment until a successful read. Secondary disclosures preserve technical
+references, source limits, consent/privacy and provider-action boundaries.
+
+## 79.3 Final-byte verification reconciliation
+
+On final preparation, all 14 implementation/test/documentation files other than
+this newly updated handoff matched the recorded review hashes or preserved
+baselines. All backend candidate bytes matched the earlier focused-test
+baseline. All ten SID-249 hashes matched section 78.1. HEAD and index remained
+unchanged. Only this handoff was edited during final preparation.
+
+Existing applicable evidence:
+
+- **82 frontend tests passed**, including College journal/reload identity,
+  read invalidation, bounded paging and recommendation hierarchy assertions.
+  The final subsequent source change was CSS-only; its production build and
+  responsive browser checks passed.
+- **43 focused backend tests passed** across College surface, capture and reads,
+  with `ResourceWarning` treated as an error. Backend bytes have not changed
+  since that verification. The broad backend suite was not repeated for visual
+  or documentation-only changes.
+- **Final production build passed**, including Next.js type validation and 14
+  generated pages. The final source bytes match that reviewed build baseline.
+- **Standalone TypeScript check passed during final preparation** using the
+  installed `frontend/node_modules/.bin/tsc --noEmit --incremental false`.
+  This resolves an overwritten standalone log from an earlier failed root-level
+  `npx` invocation; no dependency installation or source change was needed.
+- Browser review covered **1440×900, 390×844, 768px and 320px**; populated,
+  empty-parent, queued/expired-assessment, conflict and reload-recovery states;
+  keyboard focus/skip link/disclosures; scrolling above fixed capture/navigation;
+  and visible control sizing. Representative text contrast checks exceeded
+  4.5:1. This is focused accessibility evidence, not full certification.
+- Synthetic interrupted delivery survived reload; retry was unavailable before
+  lookup, then the retry settled. Logged request bodies matched exactly,
+  including command/key identity, timestamps and text.
+- `git diff --check` passed after the handoff update; inventory reconciliation
+  found only the 15 candidate paths plus the ten preserved SID-249 paths.
+
+Detailed local evidence lives in `/tmp/sid251-fidelity/` (review report,
+final hashes, build and frontend logs, comparison and state screenshots),
+`/tmp/sid251-white-glass/backend-tests.log` (43-test backend result), and
+`/tmp/sid251-fidelity/publication-typescript.log` (fresh standalone compiler
+result). Temporary artifacts are supporting local evidence, not a published
+handoff export or a durable deployment artifact.
+
+## 79.4 Remaining limitations and publication gate
+
+The local review proxy at `http://127.0.0.1:3011/today` uses labeled synthetic
+parent projections and a real standalone College service against an isolated
+synthetic database. Empty/queued/expired parent scenarios do not recompute or
+erase that database's conflict records. These checks establish local UI and
+service behavior, not live-provider, connected ChatGPT, production-data,
+end-to-end assessment, deployment, or connected-product acceptance. Appearance
+approval does not remove those distinctions.
+
+There is no College message feed or message-specific status/link surface in the
+authorized read contract. Protected outside actions continue through existing
+exact-preview/explicit-confirmation flows; no SID-148 executor or downstream
+capability is added. The standalone service requires appropriate runtime
+configuration and separately authorized deployment/registration. Mobile source
+information and accessible controls require more scrolling than the illustrative
+reference. Other product routes retain their existing styling.
+
+This is a **publication-ready local candidate awaiting explicit authorization**,
+not a published release. Stage only the exact 15-path candidate if later
+approved; preserve the ten SID-249 files and all other unrelated work. Commit,
+push, remote SHA reconciliation, committed-byte handoff export, deployment and
+issue closure remain separate unperformed gates. No downstream issue is started.

@@ -11384,3 +11384,96 @@ Oracle capacity may be unavailable; idle instances may be reclaimed. The single-
 Hosting/fallback and proposed Mac destination are accepted. Publication approval includes the stated backup policy and disclosed residual historical/offline-copy retention; key enrollment, destination writability and actual restore are later verification gates. No fixed recovery time/point. Same-Mac copies are not independent if the Mac becomes active fallback. Proposal section 10 gives the explicit Oracle go/no-go experiment: free eligibility, ARM64/resource fit, Mac-asleep private access, durable restart/auth and OCI-to-Mac encryption/rotation/restore/quarantine tests; ChatGPT continuity has its own verdict. This is not another request to approve the already-approved privacy/dependency rules. No provisioning, payment entry, data exposure, implementation, deployment, commit, push, export, publication, closure or SID-157 start occurred. Life Manager, iMessage, proactive monitoring and redesign remain future scope.
 
 **Publication record:** the user authorized only these three documentation paths, normal fast-forward commit/push, verified export of exact committed handoff bytes to the existing Obsidian destination with source/commit/hash/time/state manifest, then publication evidence and SID-156 closure. Git history and the manifest identify the final SHA; Linear records post-publication verification and status readback. The preceding no-publication statements describe planning history, not a restriction on this approval. Oracle synthetic go/no-go, Mac backup encryption/restore and ChatGPT connectivity are explicitly future gates. No account creation, payment entry, VM provisioning, deployment, personal-data migration or SID-157 start is authorized.
+
+
+---
+
+## 81. SID-157 — local implementation publication candidate
+
+**September 30, 2026; local publication candidate prepared; In Progress, unstaged and unpublished; not deployed or accepted.**
+The user authorized the provider-disabled runtime preparation and this local
+frontend integration continuation, including updates to this working handoff.
+HEAD, tracked origin/main and current live remote refs/heads/main match
+`aa3939a2aed2b884e5871ac178c9abb3f6e6482a`, checked by read-only git ls-remote
+on September 30 during candidate preparation. No refs were fetched or changed;
+remote equality must be rechecked before any later authorized publication.
+The SID-156 proposal/addendum retain committed bytes; all ten SID-249 paths retain
+section 78.1/start-of-work bytes. This section is not an Obsidian export or release.
+
+The [implementation review](PCOS-SID-157-implementation-review.md) records the
+complete candidate paths, current evidence and limits. One synthetic SQLite owner
+provides durable authenticated College capture/read/status, restart recovery, safe
+logs, local encrypted rotation/isolated restore and atomic privacy suppression with
+separate pending backup sanitation. Missing suppression authority/history means
+quarantine and explicit empty recovery with capture disabled. No old canary,
+provider credential, personal data, provider app, second truth store or replica is used.
+
+The opt-in existing frontend now uses same-origin HttpOnly owner sessions and
+tab-local CSRF; authoritative UUID/owner/workspace/auth generation gates child
+mounting and retry recovery. Incompatible/revoked state is cleared, old in-flight
+results cannot revive retained reads, and storage failure fails closed. Existing
+consent, supported capture, privacy controls and status-before-byte-identical retry
+remain. GET Today reuses the retained pure College brief; Activity and Morning
+return explicit provider-disabled 503 responses. No parent/provider mutations are
+enabled. Default local developer-key behavior is preserved. Explicit assessment
+assembles bounded supported retained context/facts/coverage, binds content-free
+fingerprints to original identity and refuses stale unfinished inputs/client hints.
+Calendar baseline/window remain unknown; reads never generate assessments.
+
+**Local evidence:** 636 backend tests (24 runtime), 86 frontend tests, clean locked
+default and synthetic production builds with Node v22.22.2/Next v15.5.19 and all
+14 pages passed. Clean isolated `npm ci` resolved the earlier dependency filesystem
+timeout without changing packages/lockfile. Real Chromium verified login → supported
+capture → receipt/status → reload/recovery → logout/rejected access. Aborted delivery
+retained exact payload; status preceded byte-identical retry, which applied and
+matched its saved receipt. Incompatible journals cleared; logout cleared retained
+state and both unauthenticated/revoked-cookie requests returned 401. Synthetic
+forgetting applied while backup sanitation stayed pending. Explicit retained
+assessment rejected client baseline hints and preserved duplicate receipt identity.
+Temporary supporting artifacts are under `/private/tmp/sid157-integration-9a54e1d4/`;
+test listeners were loopback only and are stopped. Final preservation/index/diff
+checks are recorded in the review. This is not a full accessibility/product approval.
+
+**External gates remain unrun:** Oracle Always Free account/eligible resources,
+capacity/reclamation and complete $0 manifest; native ARM64/resource fit; private
+phone/second-computer access while Mac sleeps; actual persistent mount/VM reboot,
+migration/fencing/rollback; OCI private conditional encrypted backup/sanitation;
+independent Mac writability/encryption/Keychain/offline recovery/pull/restore;
+Tailscale HTTPS/device revocation; actual ChatGPT MCP/OAuth/client/entitlement and
+isolated connected continuity/product acceptance. See the concrete
+[Oracle go/no-go matrix](../deployment/sid157/README.md). Availability retains
+Mac-independent intent conditionally on free Oracle gates, without uptime/SLA or
+fixed RPO/RTO promises. Mac fallback sleeps/offline with its Mac. **$0 new recurring
+infrastructure charges and no PAYG upgrade are mandatory.**
+
+SID-157 is not complete; its acceptance criteria and dependency graph are unchanged.
+Earlier detailed/minimal Linear attempts were rejected and not posted. The owner
+then approved only this exact note, posted as comment
+`ad3bec2c-762d-44c6-bf8b-ddd23a3c83aa` at `2026-09-30T13:25:17.533Z` and read back:
+
+> Local continuation reached the unstaged review checkpoint. Review and handoff updated; external acceptance remains unverified. Issue remains In Progress.
+
+The comment was re-read during candidate preparation; no new issue mutation was
+made. This comment authorization does not authorize publication or deployment.
+**Publication reconciliation:** exact scope is 32 paths (15 modified tracked,
+17 new untracked): 12 backend, 12 frontend, six deployment-preparation and two
+review/handoff documents, listed in the review. All 30 non-documentation candidate
+hashes match the saved final-byte verification manifest. Backend 636 and frontend
+86 tests and both clean production builds cover identical current source bytes;
+these suites/builds were not repeated for docs alone. Fresh standalone TypeScript
+passed, and the browser flow was repeated against the final malformed-request
+handling bytes, including 400 rejection with readiness still 200, exact retry and
+logout/revoked-access rejection. Approved architecture docs and frontend dependencies
+remain committed-byte-identical; all ten frozen hashes match and remain unstaged.
+Only this handoff's appended section and the review were reconciled. Whitespace,
+complete dirty inventory, source/build-copy equality and empty index checks pass.
+The final `publication-reconciliation.json`, TypeScript and renewed browser logs
+are internal temporary local evidence in the directory above. Test services and
+browser are stopped. This is the complete **local implementation publication
+candidate for review**, not release approval or completed issue acceptance.
+
+No accounts, payment entry, resource provisioning, public exposure, personal-data
+migration, deployment, commit, push, export, closure or downstream start occurred.
+General background scheduling/notifications and proactive monitoring remain deferred.
+Blinn is still pending administrator approval; Calendar/provider authorization and
+protected outside-action gates remain separate. Stop at this unstaged review checkpoint.

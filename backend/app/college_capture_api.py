@@ -20,7 +20,6 @@ from .college_capture import (
     TrustedCollegeCaptureContext,
 )
 from .college_domain import CollegeDomainService
-from .config import get_settings
 from .conversation_context import SharedConversationContextService
 
 
@@ -30,6 +29,11 @@ ALLOWED_OPERATIONS = {
     "forget_claim", "remove_raw_evidence",
     "set_question_disposition",
 }
+
+
+def get_settings():
+    from .config import get_settings as local_settings
+    return local_settings()
 
 
 class CollegeCaptureAuthenticator:
@@ -262,7 +266,7 @@ def create_college_capture_app(
     return application
 
 
-app = create_college_capture_app()
+app = None if os.getenv("PCOS_SYNTHETIC_RUNTIME") == "1" else create_college_capture_app()
 
 
 __all__ = [

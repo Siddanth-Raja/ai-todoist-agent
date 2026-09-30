@@ -31,6 +31,14 @@ function messageFor(error: unknown): string {
 export class RetainedQueryStore {
   private scopes = new WeakMap<object, Map<string, QueryEntry<unknown>>>();
 
+  clear() {
+    // Invalidate pending completions before releasing retained data.
+    this.scopes = new WeakMap();
+    for (const entry of this.activeEntries) { entry.sequence += 1; entry.data = null; }
+    this.activeEntries.clear();
+  }
+  private activeEntries = new Set<QueryEntry<unknown>>();
+
   private entry<T>(scope: object, key: string): QueryEntry<T> {
     let queries = this.scopes.get(scope);
     if (!queries) {
@@ -47,6 +55,7 @@ export class RetainedQueryStore {
         listeners: new Set(),
       };
       queries.set(key, entry as QueryEntry<unknown>);
+      this.activeEntries.add(entry as QueryEntry<unknown>);
     }
     return entry;
   }

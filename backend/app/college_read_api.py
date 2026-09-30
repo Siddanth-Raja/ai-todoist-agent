@@ -21,7 +21,6 @@ from .college_reads import (
     CollegeStatusReadRequest,
     TrustedCollegeContext,
 )
-from .config import get_settings
 
 
 FORBIDDEN_IDENTITY_FIELDS = {"actor_id", "workspace_id", "actor", "workspace"}
@@ -29,6 +28,13 @@ STATE_QUERY_FIELDS = {
     "scope", "course_id", "horizon_start", "horizon_end", "timezone", "limit", "cursor",
 }
 STATUS_QUERY_FIELDS = {"command_id", "idempotency_key", "receipt_id"}
+
+
+def get_settings():
+    # Keep the local adapter seam while avoiding provider config in synthetic
+    # composition, whose authenticator is explicitly injected.
+    from .config import get_settings as local_settings
+    return local_settings()
 
 
 class CollegeReadAuthenticator:
@@ -182,7 +188,7 @@ def create_college_read_app(
     return application
 
 
-app = create_college_read_app()
+app = None if os.getenv("PCOS_SYNTHETIC_RUNTIME") == "1" else create_college_read_app()
 
 
 __all__ = ["CollegeReadAuthenticator", "app", "create_college_read_app"]

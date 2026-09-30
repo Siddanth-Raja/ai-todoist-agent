@@ -15,6 +15,7 @@ from contextlib import closing
 import hmac
 import json
 import sqlite3
+import os
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -291,35 +292,16 @@ def create_college_surface_app(
         command_id: Annotated[str, Query(min_length=1, max_length=128)],
         scope: ContextScope = Depends(trusted_scope),
     ) -> dict[str, Any]:
-        # A saved-for-review capture has a SID-151 receipt; applied captures
-        # have SID-250 receipts. Resolve both without pretending a timeout won.
-        with closing(read_connection()) as connection:
-            row = connection.execute(
-                """SELECT receipt_id, state, command_kind, target_ids_json FROM context_command_receipts
-                   WHERE actor_id=? AND workspace_id=? AND command_id=?""",
-                (scope.actor_id, scope.workspace_id, command_id),
-            ).fetchone()
-            if row and row["command_kind"] in {"capture_context", "correct_context", "undo_context_correction", "remove_raw_evidence", "forget_context", "grant_capture_consent", "revoke_capture_consent"}:
-                unrestricted_context()
-                targets = json.loads(row["target_ids_json"] or "[]")
-                table = "context_capture_consents" if row["command_kind"].endswith("capture_consent") else "shared_context_items"
-                id_column = "consent_id" if table == "context_capture_consents" else "item_id"
-                if targets and connection.execute(
-                    f"SELECT 1 FROM {table} WHERE actor_id=? AND workspace_id=? AND {id_column}=? AND scope=?",
-                    (scope.actor_id, scope.workspace_id, str(targets[0]), CAPTURE_SCOPE),
-                ).fetchone():
-                    return {
-                        "status": "found", "source": "context",
-                        "outcome_hint": "saved_for_review" if row["command_kind"] == "capture_context" else "context_command",
-                        "receipt": {"state": row["state"], "receipt_id": row["receipt_id"]},
-                    }
+        # Both HTTP surfaces share the read-only, scope-checked receipt resolver.
         read_context = reader_auth.authenticate(f"Bearer {reader_auth.api_key}")
-        college_result = reader.get_update_status(
-            read_context, CollegeStatusReadRequest(command_id=command_id),
-        )
-        return {"status": college_result["status"], "source": "college", "receipt": college_result["receipt"]}
+        result = reader.get_update_status(read_context, CollegeStatusReadRequest(command_id=command_id))
+        if result.get("source") == "context":
+            unrestricted_context()
+        return {"status": result["status"], "source": result.get("source", "college"),
+                "receipt": result["receipt"],
+                **({"outcome_hint": result["outcome_hint"]} if "outcome_hint" in result else {})}
 
     return application
 
 
-app = create_college_surface_app()
+app = None if os.getenv("PCOS_SYNTHETIC_RUNTIME") == "1" else create_college_surface_app()

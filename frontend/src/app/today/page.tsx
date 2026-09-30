@@ -9,6 +9,8 @@ import { useRetainedApiQuery } from "@/lib/use-retained-api-query";
 import { RealityEvidenceCard, RealityEvidenceDisclosure } from "@/components/reality-evidence";
 import { CollegeReview } from "@/components/college-review";
 
+import { syntheticRuntime } from "@/lib/runtime-session";
+
 const projectHrefByLifeArea: Record<string, string> = { "A&M": "/projects/am", XO: "/projects/xo", Nebulo: "/projects/nebulo", Freelance: "/projects/freelance", Personal: "/projects/personal" };
 function getGreeting(hour: number) { return hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening"; }
 function formatActionType(value: string) { return value.replaceAll("_", " "); }
@@ -102,7 +104,7 @@ export default function TodayPage() {
     <div className="today-view daily-dashboard">
       <section className="today-lead daily-lead">
         <p className="daily-date" suppressHydrationWarning>{todayData?.now_display ?? now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</p>
-        <p className="daily-greeting" suppressHydrationWarning>{greeting}, Siddanth.</p>
+        <p className="daily-greeting" suppressHydrationWarning>{greeting}, {syntheticRuntime ? "synthetic owner" : "Siddanth"}.</p>
         <h1>{recommendation?.title ?? (isTodayUnavailable ? "Today is unavailable" : "Reading your day…")}</h1>
         <p className="daily-recommendation">{recommendation?.detail ?? (isTodayUnavailable ? "Connect your backend in Settings to see your day." : "Checking your calendar and work.")}</p>
         {recommendation?.reality ? <RealityEvidenceDisclosure item={recommendation.reality} /> : null}
@@ -123,7 +125,7 @@ export default function TodayPage() {
           <time dateTime={event.start}>{event.start_display}</time><span className="timeline-dot" aria-hidden="true" />
           <div className="timeline-event"><div><h3>{event.title}</h3><p>{event.location || event.event_category.replaceAll("_", " ")}</p></div><span className="daily-duration">{event.duration_minutes}m</span>
           {event.html_link ? <a href={event.html_link} target="_blank" rel="noreferrer" aria-label={`Open ${event.title} in Calendar`}><ExternalLink size={14} aria-hidden="true" /></a> : null}</div>
-        </li>)}</ol> : <p className="daily-empty">{isTodayLoading ? "Reading Calendar…" : isTodayUnavailable ? "Calendar unavailable. No clear schedule is implied." : "No remaining commitments are recorded."}</p>}
+        </li>)}</ol> : <p className="daily-empty">{isTodayLoading ? "Reading Calendar…" : isTodayUnavailable || syntheticRuntime ? "Calendar unavailable. No clear schedule is implied." : "No remaining commitments are recorded."}</p>}
         {currentBlock ? <p className="daily-free"><Clock3 size={14} aria-hidden="true" />{currentBlock.duration_minutes} min open now{currentBlock.low_usefulness ? " · short usable window" : ""}</p> : null}
       </section>
 

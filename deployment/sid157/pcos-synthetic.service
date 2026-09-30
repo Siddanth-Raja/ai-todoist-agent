@@ -1,0 +1,37 @@
+# Preparation only. Installing/enabling this unit requires deployment approval.
+[Unit]
+Description=PCOS provider-disabled synthetic SQLite owner
+After=network-online.target
+RequiresMountsFor=/var/lib/pcos
+ConditionArchitecture=arm64
+ConditionPathIsMountPoint=/var/lib/pcos
+
+[Service]
+Type=simple
+User=pcos-synthetic
+Group=pcos-synthetic
+WorkingDirectory=/opt/pcos
+Environment=PYTHON_DOTENV_DISABLED=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/pcos/runtime-venv/bin/python backend/scripts/sid157_runtime.py run --config /etc/pcos/synthetic.json --vault /var/lib/pcos-backup-test/synthetic --signing-key-file /etc/pcos/synthetic-manifest-key --recipient-file /etc/pcos/synthetic-age-recipient
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/pcos /var/lib/pcos-backup-test
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+CapabilityBoundingSet=
+LockPersonality=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+StandardOutput=journal
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

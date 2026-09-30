@@ -9,6 +9,10 @@ import {
   type RetainedQuerySnapshot,
 } from "@/lib/retained-query-store";
 
+import { onRuntimeSessionChange } from "./runtime-session";
+
+onRuntimeSessionChange(() => { connectionScopes.clear(); retainedQueryStore.clear(); });
+
 const connectionScopes = new Map<string, Map<string, object>>();
 const FOCUS_REVALIDATE_AFTER_MS = 60_000;
 

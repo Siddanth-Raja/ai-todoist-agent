@@ -1,0 +1,13 @@
+# Build check only; do not run a second owner/container or publish an image.
+# Resolve/review immutable base-image digest before any deployment.
+FROM --platform=linux/arm64 python:3.14-slim-bookworm
+WORKDIR /opt/pcos
+COPY deployment/sid157/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+# Explicit import graph: no frozen SID-249/provider modules or .env in artifact.
+COPY backend/app/__init__.py backend/app/activity_domain.py backend/app/storage.py backend/app/conversation_context.py backend/app/college_domain.py backend/app/college_reads.py backend/app/college_capture.py backend/app/college_read_api.py backend/app/college_capture_api.py backend/app/college_surface_api.py backend/app/runtime_store.py backend/app/runtime_auth.py backend/app/runtime_api.py backend/app/runtime_integration.py backend/app/college_briefing.py backend/app/runtime_backup.py /opt/pcos/backend/app/
+COPY backend/scripts/sid157_runtime.py /opt/pcos/backend/scripts/sid157_runtime.py
+ENV PYTHON_DOTENV_DISABLED=1 PCOS_SYNTHETIC_RUNTIME=1
+RUN python -m compileall -q backend/app
+USER 65532:65532
+ENTRYPOINT ["python", "backend/scripts/sid157_runtime.py"]

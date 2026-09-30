@@ -10,12 +10,24 @@ import threading
 import uuid
 from typing import Any
 
+# Installed runtime supplies an exclusive, non-initializing connection boundary.
+# Local development retains its existing bootstrap behavior.
+_RUNTIME_CONNECTION_FACTORY = None
+
+
+def configure_runtime_connections(factory) -> None:
+    global _RUNTIME_CONNECTION_FACTORY
+    _RUNTIME_CONNECTION_FACTORY = factory
+
 from .activity_domain import (
     MeaningfulActivityEvent,
     activity_contract_projection,
     activity_event_payload,
 )
-from .config import BACKEND_DIR
+if os.getenv("PCOS_SYNTHETIC_RUNTIME") == "1":
+    BACKEND_DIR = Path(__file__).resolve().parents[1]
+else:
+    from .config import BACKEND_DIR
 
 
 DEFAULT_HABITS = (
@@ -328,6 +340,8 @@ def _database_path() -> str:
 
 
 def _connect() -> sqlite3.Connection:
+    if _RUNTIME_CONNECTION_FACTORY is not None:
+        return _RUNTIME_CONNECTION_FACTORY()
     path = _database_path()
     if path not in {":memory:", ""}:
         Path(path).expanduser().parent.mkdir(parents=True, exist_ok=True)
@@ -347,7 +361,8 @@ def _connect() -> sqlite3.Connection:
 
 def database_connection() -> sqlite3.Connection:
     """Open the shared application database after idempotent schema setup."""
-    ensure_database()
+    if _RUNTIME_CONNECTION_FACTORY is None:
+        ensure_database()
     return _connect()
 
 

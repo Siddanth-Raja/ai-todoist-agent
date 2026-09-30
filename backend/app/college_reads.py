@@ -315,6 +315,9 @@ class CollegeReadService:
                 connection, auth, lookup_kind=lookup_kind, lookup_value=lookup_value
             )
             if row is None or not self._receipt_authorized(connection, auth, row):
+                context_receipt = self._context_status(connection, auth, lookup_kind, lookup_value)
+                if context_receipt is not None:
+                    return context_receipt
                 return self._empty_status(
                     "not_found", snapshot_id=snapshot_id,
                     canonical_version=canonical_version,
@@ -982,6 +985,36 @@ class CollegeReadService:
             "assessed_at": None,
             "observed_through": None,
         }
+
+    @staticmethod
+    def _context_status(connection, auth, lookup_kind, lookup_value):
+        # Additive transport envelope for SID-151 receipts; no invented
+        # canonical version. Restricted course readers cannot inspect broad
+        # context, and every target must belong to the same authorized scope.
+        if not auth.allow_cross_course or auth.allowed_course_ids is not None:
+            return None
+        if lookup_kind not in {"command_id", "idempotency_key", "receipt_id"}:
+            return None
+        if not connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='context_command_receipts'").fetchone():
+            return None
+        row = connection.execute(
+            f"SELECT * FROM context_command_receipts WHERE actor_id=? AND workspace_id=? AND {lookup_kind}=?",
+            (auth.actor_id, auth.workspace_id, lookup_value),
+        ).fetchone()
+        kinds = {"capture_context", "correct_context", "undo_context_correction",
+                 "remove_raw_evidence", "forget_context", "grant_capture_consent", "revoke_capture_consent"}
+        if row is None or row["command_kind"] not in kinds:
+            return None
+        targets = _loads(row["target_ids_json"], [])
+        table, column = ("context_capture_consents", "consent_id") if row["command_kind"].endswith("capture_consent") else ("shared_context_items", "item_id")
+        if not targets or any(not connection.execute(
+            f"SELECT 1 FROM {table} WHERE actor_id=? AND workspace_id=? AND {column}=? AND scope='college-operational'",
+            (auth.actor_id, auth.workspace_id, target),
+        ).fetchone() for target in targets):
+            return None
+        return {"schema_version": "college-context-status/1.0", "status": "found", "source": "context",
+                "outcome_hint": "saved_for_review" if row["command_kind"] == "capture_context" else "context_command",
+                "receipt": {"state": row["state"], "receipt_id": row["receipt_id"]}}
 
     @staticmethod
     def _receipt_lookup(

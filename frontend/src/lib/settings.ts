@@ -1,3 +1,4 @@
+import { runtimeScope, syntheticRuntime } from "./runtime-session";
 export const STORAGE_KEYS = {
   backendUrl: "pcos.backendUrl",
   collegeUrl: "pcos.collegeUrl",
@@ -18,6 +19,7 @@ export function normalizeBackendUrl(value: string): string {
 }
 
 export function readAgentSettings(): AgentSettings {
+  if (syntheticRuntime) return { backendUrl:"/runtime-api", collegeUrl:"/runtime-api", apiKey:runtimeScope() };
   if (typeof window === "undefined") {
     return { backendUrl: DEFAULT_BACKEND_URL, collegeUrl: DEFAULT_COLLEGE_URL, apiKey: "" };
   }

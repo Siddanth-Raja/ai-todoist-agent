@@ -1,3 +1,4 @@
+import { runtimeFetch, syntheticRuntime } from "./runtime-session";
 import { readAgentSettings } from "@/lib/settings";
 
 export type MemoryEntry = {
@@ -939,7 +940,7 @@ export async function apiRequest<T>(path: string, options: RequestInit = {}): Pr
   }
 
   const hasBody = typeof options.body !== "undefined";
-  const response = await fetch(`${settings.backendUrl}${path}`, {
+  const response = syntheticRuntime ? await runtimeFetch(path, options) : await fetch(`${settings.backendUrl}${path}`, {
     ...options,
     headers: {
       Authorization: `Bearer ${settings.apiKey}`,
@@ -971,7 +972,7 @@ export async function collegeApiRequest<T>(path: string, options: RequestInit = 
   if (!settings.apiKey) {
     throw new Error("Add your API key in Settings to use College review.");
   }
-  const response = await fetch(`${settings.collegeUrl}${path}`, {
+  const response = syntheticRuntime ? await runtimeFetch(path, options) : await fetch(`${settings.collegeUrl}${path}`, {
     ...options,
     headers: {
       Authorization: `Bearer ${settings.apiKey}`,
@@ -988,7 +989,7 @@ export async function collegeApiRequest<T>(path: string, options: RequestInit = 
       typeof detail?.message === "string" ? detail.message :
       `College service returned ${response.status}`,
       response.status,
-      typeof detail?.code === "string" ? detail.code : null,
+      typeof detail?.code === "string" ? detail.code : typeof payload?.code === "string" ? payload.code : null,
     );
   }
   return payload as T;

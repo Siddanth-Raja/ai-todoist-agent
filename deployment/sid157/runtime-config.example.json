@@ -1,0 +1,8 @@
+{
+  "root": "/var/lib/pcos/sid157-synthetic",
+  "environment_id": "REPLACE_WITH_NEW_UUID",
+  "actor_id": "synthetic-NEW-owner",
+  "workspace_id": "synthetic-NEW-workspace",
+  "origin": "https://REPLACE_WITH_PRIVATE_NAME.ts.net",
+  "require_mount": true
+}

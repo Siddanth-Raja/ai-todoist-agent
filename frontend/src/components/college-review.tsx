@@ -26,6 +26,8 @@ import {
   type CollegeStatePage,
 } from "@/lib/college-review";
 
+import { onRuntimeSessionChange, syntheticRuntime } from "@/lib/runtime-session";
+
 const MAX_RECORDS = 50;
 const MAX_PAGES = 4;
 
@@ -38,6 +40,8 @@ function identity() {
 }
 
 const transientView = new Map<string, { announcement: string; selectedBinding: string }>();
+
+onRuntimeSessionChange(() => transientView.clear());
 
 function outboxScope() {
   const settings = readAgentSettings();
@@ -101,6 +105,11 @@ export function CollegeReview({ brief, briefStale = false, showContext = true, o
     let active = true;
     const settings = readAgentSettings();
     void collegeDeliveryKey(settings.collegeUrl, settings.apiKey).then((key) => {
+      if (syntheticRuntime) {
+        for (const retained of Object.keys(sessionStorage)) {
+          if (retained.startsWith("pcos.college.delivery.") && retained !== key) sessionStorage.removeItem(retained);
+        }
+      }
       const pending = readCollegeDelivery(sessionStorage, key);
       if (!active) return;
       deliveryKey.current = key;

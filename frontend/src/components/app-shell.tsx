@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
+import { syntheticRuntime } from "@/lib/runtime-session";
+
 const navItems: Array<{
   href: string;
   label: string;
@@ -44,6 +46,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const currentItem = getCurrentItem(pathname);
   const isChatRoute = pathname === "/chat";
+
+  if (syntheticRuntime) return <div data-calm="true" className="p-4"><nav aria-label="Synthetic navigation"><Link href="/today">Today · College</Link></nav><main id="main-content">{pathname === "/today" ? children : <p>Only Today and College are available in the synthetic environment.</p>}</main></div>;
 
   if (pathname === "/today" || pathname === "/morning") {
     const primary = ["/today", "/calendar", "/morning", "/projects", "/chat"];
